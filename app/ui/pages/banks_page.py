@@ -1,5 +1,4 @@
-﻿from dataclasses import dataclass
-from typing import Any
+﻿from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
@@ -17,46 +16,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sqlalchemy import select
-
 from app.db.session import session_scope
-from app.models.bank import Bank, BankAccount
 from app.services.bank_transaction_service import (
     BankTransactionServiceError,
+    cancel_bank_transaction,
     create_bank_transaction,
-    get_bank_account_balance_summary,
 )
 from app.services.bank_transfer_service import (
     BankTransferServiceError,
+    cancel_bank_transfer,
     create_bank_transfer,
 )
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
+from app.ui.pages.banks.bank_cancel_dialog import BankCancelDialog
 from app.ui.pages.banks.bank_transaction_dialog import BankTransactionDialog
 from app.ui.pages.banks.bank_transfer_dialog import BankTransferDialog
-from app.ui.ui_helpers import clear_layout, decimal_or_zero, tr_money, tr_number
-
-
-@dataclass
-class BankAccountRow:
-    bank_id: int
-    bank_account_id: int
-    bank_name: str
-    account_name: str
-    currency_code: str
-    opening_balance: Any
-    incoming_total: Any
-    outgoing_total: Any
-    current_balance: Any
-    is_active: bool
-
-
-@dataclass
-class BanksPageData:
-    bank_accounts: list[BankAccountRow]
-    total_try_balance: Any
-    active_account_count: int
-    error_message: str | None = None
+from app.ui.pages.banks.banks_data import (
+    _format_currency_amount,
+    load_banks_page_data,
+)
+from app.ui.ui_helpers import clear_layout, tr_money, tr_number
 
 
 def _role_text(role: Any) -> str:
@@ -64,72 +44,6 @@ def _role_text(role: Any) -> str:
         return str(role.value)
 
     return str(role or "").strip().upper()
-
-
-def _format_currency_amount(value: Any, currency_code: str) -> str:
-    if currency_code == "TRY":
-        return tr_money(value)
-
-    return f"{value} {currency_code}"
-
-
-def load_banks_page_data() -> BanksPageData:
-    try:
-        with session_scope() as session:
-            statement = (
-                select(BankAccount, Bank)
-                .join(Bank, BankAccount.bank_id == Bank.id)
-                .order_by(Bank.name, BankAccount.account_name)
-            )
-
-            rows = session.execute(statement).all()
-
-            bank_accounts: list[BankAccountRow] = []
-            total_try_balance = decimal_or_zero("0.00")
-            active_account_count = 0
-
-            for bank_account, bank in rows:
-                summary = get_bank_account_balance_summary(
-                    session,
-                    bank_account_id=bank_account.id,
-                )
-
-                current_balance = decimal_or_zero(summary["current_balance"])
-
-                if bank_account.is_active:
-                    active_account_count += 1
-
-                if summary["currency_code"] == "TRY" and bank_account.is_active:
-                    total_try_balance += current_balance
-
-                bank_accounts.append(
-                    BankAccountRow(
-                        bank_id=bank.id,
-                        bank_account_id=bank_account.id,
-                        bank_name=bank.name,
-                        account_name=bank_account.account_name,
-                        currency_code=summary["currency_code"],
-                        opening_balance=summary["opening_balance"],
-                        incoming_total=summary["incoming_total"],
-                        outgoing_total=summary["outgoing_total"],
-                        current_balance=summary["current_balance"],
-                        is_active=bank_account.is_active,
-                    )
-                )
-
-            return BanksPageData(
-                bank_accounts=bank_accounts,
-                total_try_balance=total_try_balance,
-                active_account_count=active_account_count,
-            )
-
-    except Exception as exc:
-        return BanksPageData(
-            bank_accounts=[],
-            total_try_balance=decimal_or_zero("0.00"),
-            active_account_count=0,
-            error_message=str(exc),
-        )
 
 
 class BanksPage(QWidget):
@@ -334,8 +248,8 @@ class BanksPage(QWidget):
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Banka hareketi ve transfer işlemleri bu alandan bağlanacak. "
-            "Bu işlemler mevcut servislerde yetki kontrolüyle korunuyor."
+            "Banka hareketi, banka transferi ve iptal işlemleri bu alandan yapılır. "
+            "Tüm işlemler servis katmanındaki yetki ve audit kontrollerinden geçer."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -350,6 +264,7 @@ class BanksPage(QWidget):
 
         cancel_button = QPushButton("İptal İşlemleri")
         cancel_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        cancel_button.clicked.connect(self._open_cancel_bank_operation_dialog)
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -525,6 +440,88 @@ class BanksPage(QWidget):
                 self,
                 "Beklenmeyen hata",
                 f"Banka transferi oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_cancel_bank_operation_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = BankCancelDialog(parent=self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        operation_type = payload["operation_type"]
+        entity_id = payload["entity_id"]
+        cancel_reason = payload["cancel_reason"]
+
+        try:
+            with session_scope() as session:
+                if operation_type == "BANK_TRANSACTION":
+                    cancelled_transaction = cancel_bank_transaction(
+                        session,
+                        bank_transaction_id=entity_id,
+                        cancel_reason=cancel_reason,
+                        cancelled_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    cancelled_id = cancelled_transaction.id
+                    success_title = "Banka hareketi iptal edildi"
+                    success_message = (
+                        f"Banka hareketi başarıyla iptal edildi. Hareket ID: {cancelled_id}"
+                    )
+
+                elif operation_type == "BANK_TRANSFER":
+                    cancelled_transfer = cancel_bank_transfer(
+                        session,
+                        transfer_id=entity_id,
+                        cancelled_by_user_id=getattr(self.current_user, "id", None),
+                        cancel_reason=cancel_reason,
+                        acting_user=self.current_user,
+                    )
+
+                    cancelled_id = cancelled_transfer.id
+                    success_title = "Banka transferi iptal edildi"
+                    success_message = (
+                        f"Banka transferi başarıyla iptal edildi. Transfer ID: {cancelled_id}"
+                    )
+
+                else:
+                    raise ValueError("Geçersiz iptal işlem türü.")
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                success_title,
+                success_message,
+            )
+
+        except BankTransactionServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka hareketi iptal edilemedi",
+                str(exc),
+            )
+        except BankTransferServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka transferi iptal edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"İptal işlemi yapılırken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _build_admin_management_card(self) -> QWidget:
