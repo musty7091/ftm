@@ -1,0 +1,1 @@
+﻿# FTM POS Mutabakat sayfası

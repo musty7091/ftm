@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/
+*.backup
+*.bak
+*.dump
+
+# Exports
+exports/
+*.xlsx
+*.pdf
+*.csv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Alembic cache
+alembic/versions/__pycache__/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+Add-Content .gitignore @'
+
+# Local instance / generated data
+instance/
+
+# Restore test outputs
+restore_tests/
+daily_backups/
+
+# Secret / certificate files
+*.key
+*.pem
+'@

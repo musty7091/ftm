@@ -1,0 +1,745 @@
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any, Optional
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.bank import BankAccount
+from app.models.business_partner import BusinessPartner
+from app.models.check import IssuedCheck, ReceivedCheck
+from app.models.enums import (
+    BankTransactionStatus,
+    BusinessPartnerType,
+    CurrencyCode,
+    FinancialSourceType,
+    IssuedCheckStatus,
+    ReceivedCheckStatus,
+    TransactionDirection,
+)
+from app.services.audit_service import write_audit_log
+from app.services.bank_transaction_service import (
+    BankTransactionServiceError,
+    create_bank_transaction,
+    get_bank_account_balance_summary,
+)
+from app.services.permission_audit_service import require_permission_with_audit
+from app.services.permission_service import Permission, PermissionServiceError
+from app.utils.decimal_utils import money
+
+
+class CheckServiceError(ValueError):
+    pass
+
+
+def _clean_required_text(value: str, field_name: str) -> str:
+    cleaned_value = (value or "").strip()
+
+    if not cleaned_value:
+        raise CheckServiceError(f"{field_name} boş olamaz.")
+
+    return cleaned_value
+
+
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    cleaned_value = (value or "").strip()
+
+    if not cleaned_value:
+        return None
+
+    return cleaned_value
+
+
+def _validate_positive_money(value: object, field_name: str) -> Decimal:
+    cleaned_amount = money(value, field_name=field_name)
+
+    if cleaned_amount <= Decimal("0.00"):
+        raise CheckServiceError(f"{field_name} sıfırdan büyük olmalıdır.")
+
+    return cleaned_amount
+
+
+def _validate_due_date(*, start_date: date, due_date: date, start_field_name: str) -> None:
+    if due_date < start_date:
+        raise CheckServiceError(f"Vade tarihi, {start_field_name} tarihinden önce olamaz.")
+
+
+def _require_permission_if_user_given(
+    acting_user: Optional[Any],
+    permission: Permission,
+    attempted_action: str,
+    entity_type: str,
+    details: Optional[dict[str, Any]] = None,
+) -> Optional[int]:
+    if acting_user is None:
+        return None
+
+    try:
+        return require_permission_with_audit(
+            acting_user=acting_user,
+            permission=permission,
+            attempted_action=attempted_action,
+            entity_type=entity_type,
+            entity_id=None,
+            details=details,
+        )
+    except PermissionServiceError as exc:
+        raise CheckServiceError(str(exc)) from exc
+
+
+def _issued_check_to_dict(check: IssuedCheck) -> dict[str, Any]:
+    return {
+        "id": check.id,
+        "supplier_id": check.supplier_id,
+        "bank_account_id": check.bank_account_id,
+        "check_number": check.check_number,
+        "issue_date": check.issue_date.isoformat(),
+        "due_date": check.due_date.isoformat(),
+        "amount": str(check.amount),
+        "currency_code": check.currency_code.value,
+        "status": check.status.value,
+        "paid_transaction_id": check.paid_transaction_id,
+        "reference_no": check.reference_no,
+        "description": check.description,
+        "created_by_user_id": check.created_by_user_id,
+        "cancelled_by_user_id": check.cancelled_by_user_id,
+        "cancelled_at": check.cancelled_at.isoformat() if check.cancelled_at else None,
+        "cancel_reason": check.cancel_reason,
+    }
+
+
+def _received_check_to_dict(check: ReceivedCheck) -> dict[str, Any]:
+    return {
+        "id": check.id,
+        "customer_id": check.customer_id,
+        "collection_bank_account_id": check.collection_bank_account_id,
+        "drawer_bank_name": check.drawer_bank_name,
+        "drawer_branch_name": check.drawer_branch_name,
+        "check_number": check.check_number,
+        "received_date": check.received_date.isoformat(),
+        "due_date": check.due_date.isoformat(),
+        "amount": str(check.amount),
+        "currency_code": check.currency_code.value,
+        "status": check.status.value,
+        "collected_transaction_id": check.collected_transaction_id,
+        "reference_no": check.reference_no,
+        "description": check.description,
+        "created_by_user_id": check.created_by_user_id,
+        "cancelled_by_user_id": check.cancelled_by_user_id,
+        "cancelled_at": check.cancelled_at.isoformat() if check.cancelled_at else None,
+        "cancel_reason": check.cancel_reason,
+    }
+
+
+def get_issued_check_by_number(
+    session: Session,
+    *,
+    bank_account_id: int,
+    check_number: str,
+) -> Optional[IssuedCheck]:
+    cleaned_check_number = _clean_required_text(check_number, "Çek numarası")
+
+    statement = select(IssuedCheck).where(
+        IssuedCheck.bank_account_id == bank_account_id,
+        IssuedCheck.check_number == cleaned_check_number,
+    )
+
+    return session.execute(statement).scalar_one_or_none()
+
+
+def get_received_check_by_number(
+    session: Session,
+    *,
+    drawer_bank_name: str,
+    check_number: str,
+) -> Optional[ReceivedCheck]:
+    cleaned_drawer_bank_name = _clean_required_text(drawer_bank_name, "Çeki veren banka")
+    cleaned_check_number = _clean_required_text(check_number, "Çek numarası")
+
+    statement = select(ReceivedCheck).where(
+        ReceivedCheck.drawer_bank_name == cleaned_drawer_bank_name,
+        ReceivedCheck.check_number == cleaned_check_number,
+    )
+
+    return session.execute(statement).scalar_one_or_none()
+
+
+def create_issued_check(
+    session: Session,
+    *,
+    supplier_id: int,
+    bank_account_id: int,
+    check_number: str,
+    issue_date: date,
+    due_date: date,
+    amount: object,
+    status: IssuedCheckStatus,
+    reference_no: Optional[str],
+    description: Optional[str],
+    created_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> IssuedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.ISSUED_CHECK_CREATE,
+        attempted_action="ISSUED_CHECK_CREATE",
+        entity_type="IssuedCheck",
+        details={
+            "supplier_id": supplier_id,
+            "bank_account_id": bank_account_id,
+            "check_number": check_number,
+            "issue_date": issue_date.isoformat(),
+            "due_date": due_date.isoformat(),
+            "amount": str(amount),
+            "status": status.value if hasattr(status, "value") else str(status),
+        },
+    )
+
+    effective_created_by_user_id = permission_user_id if permission_user_id is not None else created_by_user_id
+
+    if status not in {IssuedCheckStatus.PREPARED, IssuedCheckStatus.GIVEN}:
+        raise CheckServiceError("Yazılan çek ilk oluşturulurken sadece PREPARED veya GIVEN olabilir.")
+
+    supplier = session.get(BusinessPartner, supplier_id)
+
+    if supplier is None:
+        raise CheckServiceError(f"Tedarikçi cari kartı bulunamadı. Cari ID: {supplier_id}")
+
+    if supplier.partner_type not in {BusinessPartnerType.SUPPLIER, BusinessPartnerType.BOTH}:
+        raise CheckServiceError("Seçilen cari kart tedarikçi türünde değil.")
+
+    if not supplier.is_active:
+        raise CheckServiceError("Pasif cari karta çek yazılamaz.")
+
+    bank_account = session.get(BankAccount, bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Banka hesabı bulunamadı. Hesap ID: {bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabından çek yazılamaz.")
+
+    cleaned_check_number = _clean_required_text(check_number, "Çek numarası")
+    cleaned_amount = _validate_positive_money(amount, "Çek tutarı")
+    cleaned_reference_no = _clean_optional_text(reference_no)
+    cleaned_description = _clean_optional_text(description)
+
+    _validate_due_date(
+        start_date=issue_date,
+        due_date=due_date,
+        start_field_name="düzenleme",
+    )
+
+    existing_check = get_issued_check_by_number(
+        session,
+        bank_account_id=bank_account.id,
+        check_number=cleaned_check_number,
+    )
+
+    if existing_check is not None:
+        raise CheckServiceError(
+            f"Bu banka hesabında aynı çek numarası zaten kayıtlı: {cleaned_check_number}"
+        )
+
+    check = IssuedCheck(
+        supplier_id=supplier.id,
+        bank_account_id=bank_account.id,
+        check_number=cleaned_check_number,
+        issue_date=issue_date,
+        due_date=due_date,
+        amount=cleaned_amount,
+        currency_code=bank_account.currency_code,
+        status=status,
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        created_by_user_id=effective_created_by_user_id,
+    )
+
+    session.add(check)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_created_by_user_id,
+        action="ISSUED_CHECK_CREATED",
+        entity_type="IssuedCheck",
+        entity_id=check.id,
+        description=f"Yazılan çek oluşturuldu: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=None,
+        new_values=_issued_check_to_dict(check),
+    )
+
+    return check
+
+
+def create_received_check(
+    session: Session,
+    *,
+    customer_id: int,
+    collection_bank_account_id: Optional[int],
+    drawer_bank_name: str,
+    drawer_branch_name: Optional[str],
+    check_number: str,
+    received_date: date,
+    due_date: date,
+    amount: object,
+    currency_code: CurrencyCode,
+    status: ReceivedCheckStatus,
+    reference_no: Optional[str],
+    description: Optional[str],
+    created_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CREATE,
+        attempted_action="RECEIVED_CHECK_CREATE",
+        entity_type="ReceivedCheck",
+        details={
+            "customer_id": customer_id,
+            "collection_bank_account_id": collection_bank_account_id,
+            "drawer_bank_name": drawer_bank_name,
+            "drawer_branch_name": drawer_branch_name,
+            "check_number": check_number,
+            "received_date": received_date.isoformat(),
+            "due_date": due_date.isoformat(),
+            "amount": str(amount),
+            "currency_code": currency_code.value if hasattr(currency_code, "value") else str(currency_code),
+            "status": status.value if hasattr(status, "value") else str(status),
+        },
+    )
+
+    effective_created_by_user_id = permission_user_id if permission_user_id is not None else created_by_user_id
+
+    if status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+    }:
+        raise CheckServiceError(
+            "Alınan çek ilk oluşturulurken sadece PORTFOLIO, GIVEN_TO_BANK veya IN_COLLECTION olabilir."
+        )
+
+    customer = session.get(BusinessPartner, customer_id)
+
+    if customer is None:
+        raise CheckServiceError(f"Müşteri cari kartı bulunamadı. Cari ID: {customer_id}")
+
+    if customer.partner_type not in {BusinessPartnerType.CUSTOMER, BusinessPartnerType.BOTH}:
+        raise CheckServiceError("Seçilen cari kart müşteri türünde değil.")
+
+    if not customer.is_active:
+        raise CheckServiceError("Pasif cari karttan çek alınamaz.")
+
+    collection_bank_account = None
+
+    if collection_bank_account_id is not None:
+        collection_bank_account = session.get(BankAccount, collection_bank_account_id)
+
+        if collection_bank_account is None:
+            raise CheckServiceError(
+                f"Tahsilat banka hesabı bulunamadı. Hesap ID: {collection_bank_account_id}"
+            )
+
+        if not collection_bank_account.is_active:
+            raise CheckServiceError("Pasif banka hesabı tahsilat hesabı olarak seçilemez.")
+
+        if collection_bank_account.currency_code != currency_code:
+            raise CheckServiceError(
+                f"Çek para birimi ile tahsilat hesabı para birimi aynı olmalıdır. "
+                f"Çek: {currency_code.value}, Hesap: {collection_bank_account.currency_code.value}"
+            )
+
+    cleaned_drawer_bank_name = _clean_required_text(drawer_bank_name, "Çeki veren banka")
+    cleaned_drawer_branch_name = _clean_optional_text(drawer_branch_name)
+    cleaned_check_number = _clean_required_text(check_number, "Çek numarası")
+    cleaned_amount = _validate_positive_money(amount, "Çek tutarı")
+    cleaned_reference_no = _clean_optional_text(reference_no)
+    cleaned_description = _clean_optional_text(description)
+
+    _validate_due_date(
+        start_date=received_date,
+        due_date=due_date,
+        start_field_name="alış",
+    )
+
+    existing_check = get_received_check_by_number(
+        session,
+        drawer_bank_name=cleaned_drawer_bank_name,
+        check_number=cleaned_check_number,
+    )
+
+    if existing_check is not None:
+        raise CheckServiceError(
+            f"Aynı banka ve çek numarasıyla alınan çek zaten kayıtlı: "
+            f"{cleaned_drawer_bank_name} / {cleaned_check_number}"
+        )
+
+    check = ReceivedCheck(
+        customer_id=customer.id,
+        collection_bank_account_id=collection_bank_account.id if collection_bank_account else None,
+        drawer_bank_name=cleaned_drawer_bank_name,
+        drawer_branch_name=cleaned_drawer_branch_name,
+        check_number=cleaned_check_number,
+        received_date=received_date,
+        due_date=due_date,
+        amount=cleaned_amount,
+        currency_code=currency_code,
+        status=status,
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        created_by_user_id=effective_created_by_user_id,
+    )
+
+    session.add(check)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_created_by_user_id,
+        action="RECEIVED_CHECK_CREATED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek oluşturuldu: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=None,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
+def pay_issued_check(
+    session: Session,
+    *,
+    issued_check_id: int,
+    payment_date: date,
+    reference_no: Optional[str],
+    description: Optional[str],
+    paid_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> IssuedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.ISSUED_CHECK_PAY,
+        attempted_action="ISSUED_CHECK_PAY",
+        entity_type="IssuedCheck",
+        details={
+            "issued_check_id": issued_check_id,
+            "payment_date": payment_date.isoformat(),
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_paid_by_user_id = permission_user_id if permission_user_id is not None else paid_by_user_id
+
+    check = session.get(IssuedCheck, issued_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Yazılan çek bulunamadı. Çek ID: {issued_check_id}")
+
+    if check.status == IssuedCheckStatus.PAID:
+        raise CheckServiceError("Bu çek zaten ödenmiş.")
+
+    if check.status == IssuedCheckStatus.CANCELLED:
+        raise CheckServiceError("İptal edilmiş çek ödenemez.")
+
+    if check.paid_transaction_id is not None:
+        raise CheckServiceError("Bu çekin ödeme hareketi zaten var.")
+
+    bank_account = session.get(BankAccount, check.bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Çekin bağlı olduğu banka hesabı bulunamadı. Hesap ID: {check.bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabından çek ödenemez.")
+
+    balance_summary = get_bank_account_balance_summary(
+        session,
+        bank_account_id=bank_account.id,
+    )
+
+    current_balance = balance_summary["current_balance"]
+
+    if current_balance < check.amount:
+        raise CheckServiceError(
+            f"Çekin ödenmesi için hesap bakiyesi yetersiz. "
+            f"Mevcut bakiye: {current_balance} {bank_account.currency_code.value}, "
+            f"Çek tutarı: {check.amount} {bank_account.currency_code.value}"
+        )
+
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_optional_text(description)
+
+    old_values = _issued_check_to_dict(check)
+
+    try:
+        payment_transaction = create_bank_transaction(
+            session,
+            bank_account_id=bank_account.id,
+            transaction_date=payment_date,
+            value_date=payment_date,
+            direction=TransactionDirection.OUT,
+            status=BankTransactionStatus.REALIZED,
+            amount=check.amount,
+            currency_code=check.currency_code,
+            source_type=FinancialSourceType.ISSUED_CHECK,
+            source_id=check.id,
+            reference_no=cleaned_reference_no,
+            description=(
+                f"Yazılan çek ödemesi: {check.check_number}"
+                if not cleaned_description
+                else f"Yazılan çek ödemesi: {check.check_number} - {cleaned_description}"
+            ),
+            created_by_user_id=effective_paid_by_user_id,
+        )
+    except BankTransactionServiceError as exc:
+        raise CheckServiceError(f"Çek ödeme banka hareketi oluşturulamadı: {exc}") from exc
+
+    check.status = IssuedCheckStatus.PAID
+    check.paid_transaction_id = payment_transaction.id
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_paid_by_user_id,
+        action="ISSUED_CHECK_PAID",
+        entity_type="IssuedCheck",
+        entity_id=check.id,
+        description=f"Yazılan çek ödendi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
+        new_values=_issued_check_to_dict(check),
+    )
+
+    return check
+
+
+def collect_received_check(
+    session: Session,
+    *,
+    received_check_id: int,
+    collection_bank_account_id: Optional[int],
+    collection_date: date,
+    reference_no: Optional[str],
+    description: Optional[str],
+    collected_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_COLLECT,
+        attempted_action="RECEIVED_CHECK_COLLECT",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "collection_bank_account_id": collection_bank_account_id,
+            "collection_date": collection_date.isoformat(),
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_collected_by_user_id = permission_user_id if permission_user_id is not None else collected_by_user_id
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status == ReceivedCheckStatus.COLLECTED:
+        raise CheckServiceError("Bu çek zaten tahsil edilmiş.")
+
+    if check.status == ReceivedCheckStatus.CANCELLED:
+        raise CheckServiceError("İptal edilmiş çek tahsil edilemez.")
+
+    if check.status == ReceivedCheckStatus.BOUNCED:
+        raise CheckServiceError("Karşılıksız durumdaki çek tahsil edilemez.")
+
+    if check.status == ReceivedCheckStatus.RETURNED:
+        raise CheckServiceError("İade edilmiş çek tahsil edilemez.")
+
+    if check.status == ReceivedCheckStatus.ENDORSED:
+        raise CheckServiceError("Ciro edilmiş çek tahsil edilemez.")
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Bu çekin tahsilat hareketi zaten var.")
+
+    final_collection_bank_account_id = collection_bank_account_id or check.collection_bank_account_id
+
+    if final_collection_bank_account_id is None:
+        raise CheckServiceError("Tahsilat için banka hesabı seçilmelidir.")
+
+    bank_account = session.get(BankAccount, final_collection_bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Tahsilat banka hesabı bulunamadı. Hesap ID: {final_collection_bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabına çek tahsil edilemez.")
+
+    if bank_account.currency_code != check.currency_code:
+        raise CheckServiceError(
+            f"Çek para birimi ile banka hesabı para birimi aynı olmalıdır. "
+            f"Çek: {check.currency_code.value}, Hesap: {bank_account.currency_code.value}"
+        )
+
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_optional_text(description)
+
+    old_values = _received_check_to_dict(check)
+
+    try:
+        collection_transaction = create_bank_transaction(
+            session,
+            bank_account_id=bank_account.id,
+            transaction_date=collection_date,
+            value_date=collection_date,
+            direction=TransactionDirection.IN,
+            status=BankTransactionStatus.REALIZED,
+            amount=check.amount,
+            currency_code=check.currency_code,
+            source_type=FinancialSourceType.RECEIVED_CHECK,
+            source_id=check.id,
+            reference_no=cleaned_reference_no,
+            description=(
+                f"Alınan çek tahsilatı: {check.check_number}"
+                if not cleaned_description
+                else f"Alınan çek tahsilatı: {check.check_number} - {cleaned_description}"
+            ),
+            created_by_user_id=effective_collected_by_user_id,
+        )
+    except BankTransactionServiceError as exc:
+        raise CheckServiceError(f"Çek tahsilat banka hareketi oluşturulamadı: {exc}") from exc
+
+    check.status = ReceivedCheckStatus.COLLECTED
+    check.collection_bank_account_id = bank_account.id
+    check.collected_transaction_id = collection_transaction.id
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_collected_by_user_id,
+        action="RECEIVED_CHECK_COLLECTED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek tahsil edildi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
+def cancel_issued_check(
+    session: Session,
+    *,
+    issued_check_id: int,
+    cancel_reason: str,
+    cancelled_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> IssuedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.ISSUED_CHECK_CANCEL,
+        attempted_action="ISSUED_CHECK_CANCEL",
+        entity_type="IssuedCheck",
+        details={
+            "issued_check_id": issued_check_id,
+            "cancel_reason": cancel_reason,
+        },
+    )
+
+    effective_cancelled_by_user_id = permission_user_id if permission_user_id is not None else cancelled_by_user_id
+
+    check = session.get(IssuedCheck, issued_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Yazılan çek bulunamadı. Çek ID: {issued_check_id}")
+
+    if check.status == IssuedCheckStatus.CANCELLED:
+        raise CheckServiceError("Bu çek zaten iptal edilmiş.")
+
+    if check.status == IssuedCheckStatus.PAID or check.paid_transaction_id is not None:
+        raise CheckServiceError("Ödenmiş çek bu işlemle iptal edilemez.")
+
+    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+
+    old_values = _issued_check_to_dict(check)
+
+    check.status = IssuedCheckStatus.CANCELLED
+    check.cancelled_by_user_id = effective_cancelled_by_user_id
+    check.cancelled_at = datetime.now(timezone.utc)
+    check.cancel_reason = cleaned_cancel_reason
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_cancelled_by_user_id,
+        action="ISSUED_CHECK_CANCELLED",
+        entity_type="IssuedCheck",
+        entity_id=check.id,
+        description=f"Yazılan çek iptal edildi: {check.check_number}",
+        old_values=old_values,
+        new_values=_issued_check_to_dict(check),
+    )
+
+    return check
+
+
+def cancel_received_check(
+    session: Session,
+    *,
+    received_check_id: int,
+    cancel_reason: str,
+    cancelled_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CANCEL,
+        attempted_action="RECEIVED_CHECK_CANCEL",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "cancel_reason": cancel_reason,
+        },
+    )
+
+    effective_cancelled_by_user_id = permission_user_id if permission_user_id is not None else cancelled_by_user_id
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status == ReceivedCheckStatus.CANCELLED:
+        raise CheckServiceError("Bu çek zaten iptal edilmiş.")
+
+    if check.status == ReceivedCheckStatus.COLLECTED or check.collected_transaction_id is not None:
+        raise CheckServiceError("Tahsil edilmiş çek bu işlemle iptal edilemez.")
+
+    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+
+    old_values = _received_check_to_dict(check)
+
+    check.status = ReceivedCheckStatus.CANCELLED
+    check.cancelled_by_user_id = effective_cancelled_by_user_id
+    check.cancelled_at = datetime.now(timezone.utc)
+    check.cancel_reason = cleaned_cancel_reason
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_cancelled_by_user_id,
+        action="RECEIVED_CHECK_CANCELLED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek iptal edildi: {check.check_number}",
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check

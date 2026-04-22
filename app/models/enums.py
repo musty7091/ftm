@@ -1,0 +1,84 @@
+from enum import StrEnum
+
+
+class UserRole(StrEnum):
+    ADMIN = "ADMIN"
+    FINANCE = "FINANCE"
+    DATA_ENTRY = "DATA_ENTRY"
+    VIEWER = "VIEWER"
+
+
+class BankAccountType(StrEnum):
+    CHECKING = "CHECKING"
+    CHECK = "CHECK"
+    POS = "POS"
+    CASH_DEPOSIT = "CASH_DEPOSIT"
+    SAVINGS = "SAVINGS"
+    OTHER = "OTHER"
+
+
+class CurrencyCode(StrEnum):
+    TRY = "TRY"
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+
+
+class TransactionDirection(StrEnum):
+    IN = "IN"
+    OUT = "OUT"
+
+
+class BankTransactionStatus(StrEnum):
+    PLANNED = "PLANNED"
+    REALIZED = "REALIZED"
+    CANCELLED = "CANCELLED"
+
+
+class BankTransferStatus(StrEnum):
+    PLANNED = "PLANNED"
+    REALIZED = "REALIZED"
+    CANCELLED = "CANCELLED"
+
+
+class FinancialSourceType(StrEnum):
+    OPENING_BALANCE = "OPENING_BALANCE"
+    CASH_DEPOSIT = "CASH_DEPOSIT"
+    BANK_TRANSFER = "BANK_TRANSFER"
+    ISSUED_CHECK = "ISSUED_CHECK"
+    RECEIVED_CHECK = "RECEIVED_CHECK"
+    POS_SETTLEMENT = "POS_SETTLEMENT"
+    MANUAL_ADJUSTMENT = "MANUAL_ADJUSTMENT"
+    OTHER = "OTHER"
+
+
+class BusinessPartnerType(StrEnum):
+    CUSTOMER = "CUSTOMER"
+    SUPPLIER = "SUPPLIER"
+    BOTH = "BOTH"
+
+
+class IssuedCheckStatus(StrEnum):
+    PREPARED = "PREPARED"
+    GIVEN = "GIVEN"
+    PAID = "PAID"
+    CANCELLED = "CANCELLED"
+    RISK = "RISK"
+
+
+class ReceivedCheckStatus(StrEnum):
+    PORTFOLIO = "PORTFOLIO"
+    GIVEN_TO_BANK = "GIVEN_TO_BANK"
+    IN_COLLECTION = "IN_COLLECTION"
+    COLLECTED = "COLLECTED"
+    BOUNCED = "BOUNCED"
+    RETURNED = "RETURNED"
+    ENDORSED = "ENDORSED"
+    CANCELLED = "CANCELLED"
+
+
+class PosSettlementStatus(StrEnum):
+    PLANNED = "PLANNED"
+    REALIZED = "REALIZED"
+    CANCELLED = "CANCELLED"
+    MISMATCH = "MISMATCH"

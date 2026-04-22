@@ -1,0 +1,24 @@
+name: ftm
+
+services:
+  ftm_postgres:
+    image: postgres:17-alpine
+    container_name: ftm_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ftm_db
+      POSTGRES_USER: ftm_user
+      POSTGRES_PASSWORD: ftm_password
+      TZ: Europe/Istanbul
+    ports:
+      - "5433:5432"
+    volumes:
+      - ftm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ftm_user -d ftm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ftm_postgres_data:
