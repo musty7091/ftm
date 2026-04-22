@@ -50,7 +50,10 @@ from app.ui.pages.banks.banks_data import (
     _format_currency_amount,
     load_banks_page_data,
 )
-from app.ui.ui_helpers import clear_layout, tr_money, tr_number
+from app.ui.ui_helpers import clear_layout, tr_number
+
+
+CURRENCY_DISPLAY_ORDER = ["TRY", "USD", "EUR", "GBP"]
 
 
 def _role_text(role: Any) -> str:
@@ -58,6 +61,15 @@ def _role_text(role: Any) -> str:
         return str(role.value)
 
     return str(role or "").strip().upper()
+
+
+def _currency_sort_key(currency_code: str) -> tuple[int, str]:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code in CURRENCY_DISPLAY_ORDER:
+        return (CURRENCY_DISPLAY_ORDER.index(normalized_currency_code), normalized_currency_code)
+
+    return (999, normalized_currency_code)
 
 
 class BanksPage(QWidget):
@@ -109,17 +121,33 @@ class BanksPage(QWidget):
 
         return card
 
+    def _build_active_currency_totals_text(self) -> str:
+        if not self.data.active_currency_totals:
+            return "Kayıt yok"
+
+        lines: list[str] = []
+
+        for currency_code in sorted(
+            self.data.active_currency_totals.keys(),
+            key=_currency_sort_key,
+        ):
+            lines.append(
+                f"{currency_code}: {_format_currency_amount(self.data.active_currency_totals[currency_code], currency_code)}"
+            )
+
+        return "\n".join(lines)
+
     def _build_summary_cards(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(16)
-
-        total_accounts = len(self.data.bank_accounts)
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 1)
 
         grid.addWidget(
             SummaryCard(
-                "AKTİF TRY BAKİYE",
-                tr_money(self.data.total_try_balance),
-                "Aktif TRY banka hesaplarının toplam güncel bakiyesi",
+                "AKTİF BANKA BAKİYELERİ",
+                self._build_active_currency_totals_text(),
+                "Aktif banka hesaplarının para birimi bazlı güncel toplamı",
                 "highlight",
             ),
             0,
@@ -127,28 +155,98 @@ class BanksPage(QWidget):
         )
 
         grid.addWidget(
-            SummaryCard(
-                "AKTİF HESAP",
+            self._build_account_status_card(),
+            0,
+            1,
+        )
+
+        return grid
+
+    def _build_account_status_card(self) -> QWidget:
+        total_accounts = len(self.data.bank_accounts)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setMinimumHeight(145)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(8)
+
+        title = QLabel("HESAP DURUMU")
+        title.setObjectName("CardTitle")
+
+        metrics_layout = QGridLayout()
+        metrics_layout.setSpacing(12)
+        metrics_layout.setColumnStretch(0, 1)
+        metrics_layout.setColumnStretch(1, 1)
+        metrics_layout.setColumnStretch(2, 1)
+
+        metrics_layout.addWidget(
+            self._build_compact_metric(
+                "AKTİF",
                 tr_number(self.data.active_account_count),
-                "Aktif banka hesabı sayısı",
-                "success",
+                "Hesap",
+            ),
+            0,
+            0,
+        )
+
+        metrics_layout.addWidget(
+            self._build_compact_metric(
+                "PASİF",
+                tr_number(self.data.passive_account_count),
+                "Hesap",
             ),
             0,
             1,
         )
 
-        grid.addWidget(
-            SummaryCard(
-                "TOPLAM HESAP",
+        metrics_layout.addWidget(
+            self._build_compact_metric(
+                "TOPLAM",
                 tr_number(total_accounts),
-                "Aktif ve pasif tüm banka hesapları",
-                "normal",
+                "Hesap",
             ),
             0,
             2,
         )
 
-        return grid
+        hint = QLabel("Aktif, pasif ve toplam banka hesabı özeti.")
+        hint.setObjectName("CardHint")
+        hint.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addStretch(1)
+        layout.addLayout(metrics_layout)
+        layout.addWidget(hint)
+
+        return card
+
+    def _build_compact_metric(self, title_text: str, value_text: str, hint_text: str) -> QWidget:
+        box = QWidget()
+
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        title = QLabel(title_text)
+        title.setObjectName("CardTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        value = QLabel(value_text)
+        value.setObjectName("CardValue")
+        value.setAlignment(Qt.AlignCenter)
+
+        hint = QLabel(hint_text)
+        hint.setObjectName("CardHint")
+        hint.setAlignment(Qt.AlignCenter)
+
+        layout.addWidget(title)
+        layout.addWidget(value)
+        layout.addWidget(hint)
+
+        return box
 
     def _build_accounts_table_card(self) -> QWidget:
         card = QFrame()
@@ -162,7 +260,8 @@ class BanksPage(QWidget):
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Banka hesaplarının açılış, giriş, çıkış ve güncel bakiye görünümü."
+            "Banka hesaplarının açılış, giriş, çıkış ve güncel bakiye görünümü. "
+            "Her hesap kendi para birimiyle gösterilir."
         )
         subtitle.setObjectName("MutedText")
 
@@ -187,6 +286,7 @@ class BanksPage(QWidget):
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setMinimumHeight(230)
 
         self._fill_accounts_table(table)
 

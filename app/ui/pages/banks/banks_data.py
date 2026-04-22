@@ -28,14 +28,27 @@ class BanksPageData:
     bank_accounts: list[BankAccountRow]
     total_try_balance: Any
     active_account_count: int
+    passive_account_count: int
+    active_currency_totals: dict[str, Any]
     error_message: str | None = None
 
 
+def _format_decimal_tr(value: Any) -> str:
+    amount = decimal_or_zero(value)
+
+    formatted = f"{amount:,.2f}"
+    formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return formatted
+
+
 def _format_currency_amount(value: Any, currency_code: str) -> str:
-    if currency_code == "TRY":
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code == "TRY":
         return tr_money(value)
 
-    return f"{value} {currency_code}"
+    return f"{_format_decimal_tr(value)} {normalized_currency_code}"
 
 
 def load_banks_page_data() -> BanksPageData:
@@ -52,6 +65,8 @@ def load_banks_page_data() -> BanksPageData:
             bank_accounts: list[BankAccountRow] = []
             total_try_balance = decimal_or_zero("0.00")
             active_account_count = 0
+            passive_account_count = 0
+            active_currency_totals: dict[str, Any] = {}
 
             for bank_account, bank in rows:
                 summary = get_bank_account_balance_summary(
@@ -60,12 +75,19 @@ def load_banks_page_data() -> BanksPageData:
                 )
 
                 current_balance = decimal_or_zero(summary["current_balance"])
+                currency_code = str(summary["currency_code"] or "").strip().upper()
 
                 if bank_account.is_active:
                     active_account_count += 1
 
-                if summary["currency_code"] == "TRY" and bank_account.is_active:
-                    total_try_balance += current_balance
+                    active_currency_totals[currency_code] = decimal_or_zero(
+                        active_currency_totals.get(currency_code, "0.00")
+                    ) + current_balance
+
+                    if currency_code == "TRY":
+                        total_try_balance += current_balance
+                else:
+                    passive_account_count += 1
 
                 bank_accounts.append(
                     BankAccountRow(
@@ -73,7 +95,7 @@ def load_banks_page_data() -> BanksPageData:
                         bank_account_id=bank_account.id,
                         bank_name=bank.name,
                         account_name=bank_account.account_name,
-                        currency_code=summary["currency_code"],
+                        currency_code=currency_code,
                         opening_balance=summary["opening_balance"],
                         incoming_total=summary["incoming_total"],
                         outgoing_total=summary["outgoing_total"],
@@ -86,6 +108,8 @@ def load_banks_page_data() -> BanksPageData:
                 bank_accounts=bank_accounts,
                 total_try_balance=total_try_balance,
                 active_account_count=active_account_count,
+                passive_account_count=passive_account_count,
+                active_currency_totals=active_currency_totals,
             )
 
     except Exception as exc:
@@ -93,5 +117,7 @@ def load_banks_page_data() -> BanksPageData:
             bank_accounts=[],
             total_try_balance=decimal_or_zero("0.00"),
             active_account_count=0,
+            passive_account_count=0,
+            active_currency_totals={},
             error_message=str(exc),
         )

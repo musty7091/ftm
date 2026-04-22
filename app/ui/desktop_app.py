@@ -1,6 +1,7 @@
 import sys
 from typing import Any, Optional
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -52,8 +54,9 @@ class FtmDesktopWindow(QMainWindow):
         self.setWindowTitle(
             f"FTM Finans Kontrol Paneli - {self.current_username} ({self.current_role})"
         )
+
         self.resize(1450, 900)
-        self.setMinimumSize(1200, 760)
+        self.setMinimumSize(1180, 720)
 
         self.allowed_pages = get_allowed_pages_for_role(self.current_role)
         self.current_page = (
@@ -66,6 +69,7 @@ class FtmDesktopWindow(QMainWindow):
         self.dashboard_data = load_dashboard_data()
 
         root = QWidget()
+        root.setObjectName("AppRoot")
         self.setCentralWidget(root)
 
         main_layout = QHBoxLayout(root)
@@ -75,12 +79,69 @@ class FtmDesktopWindow(QMainWindow):
         sidebar = self._build_sidebar()
 
         self.content = QWidget()
+        self.content.setObjectName("ContentViewport")
+        self.content.setMinimumWidth(880)
+
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(16)
 
+        self.content_scroll_area = QScrollArea()
+        self.content_scroll_area.setObjectName("ContentScrollArea")
+        self.content_scroll_area.setWidgetResizable(True)
+        self.content_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.content_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content_scroll_area.setWidget(self.content)
+
+        self.content_scroll_area.setStyleSheet(
+            """
+            QScrollArea#ContentScrollArea {
+                background-color: #0f172a;
+                border: none;
+            }
+
+            QScrollArea#ContentScrollArea > QWidget {
+                background-color: #0f172a;
+            }
+
+            QWidget#ContentViewport {
+                background-color: #0f172a;
+            }
+
+            QScrollBar:vertical {
+                background-color: #0f172a;
+                width: 10px;
+                margin: 0px;
+                border: none;
+            }
+
+            QScrollBar::handle:vertical {
+                background-color: #334155;
+                min-height: 30px;
+                border-radius: 5px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background-color: #475569;
+            }
+
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+                border: none;
+            }
+
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            """
+        )
+
         main_layout.addWidget(sidebar)
-        main_layout.addWidget(self.content, 1)
+        main_layout.addWidget(self.content_scroll_area, 1)
 
         self.render_current_page()
 
@@ -173,6 +234,9 @@ class FtmDesktopWindow(QMainWindow):
     def render_current_page(self) -> None:
         clear_layout(self.content_layout)
 
+        if self.current_page == "Genel Bakış":
+            self.dashboard_data = load_dashboard_data()
+
         self.content_layout.addWidget(self._build_top_bar())
 
         if self.current_page == "Erişim Yok":
@@ -183,6 +247,7 @@ class FtmDesktopWindow(QMainWindow):
                 ),
                 1,
             )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
             return
 
         if self.current_page == "Genel Bakış":
@@ -192,6 +257,7 @@ class FtmDesktopWindow(QMainWindow):
                 ),
                 1,
             )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
             return
 
         if self.current_page == "Bankalar":
@@ -201,6 +267,7 @@ class FtmDesktopWindow(QMainWindow):
                 ),
                 1,
             )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
             return
 
         self.content_layout.addWidget(
@@ -209,6 +276,8 @@ class FtmDesktopWindow(QMainWindow):
             ),
             1,
         )
+
+        self.content_scroll_area.verticalScrollBar().setValue(0)
 
     def _build_top_bar(self) -> QWidget:
         top_bar = QFrame()
