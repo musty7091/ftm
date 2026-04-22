@@ -1,25 +1,18 @@
 ﻿from dataclasses import dataclass
-from datetime import date
 from typing import Any
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -28,16 +21,20 @@ from sqlalchemy import select
 
 from app.db.session import session_scope
 from app.models.bank import Bank, BankAccount
-from app.models.enums import BankTransactionStatus, FinancialSourceType, TransactionDirection
 from app.services.bank_transaction_service import (
     BankTransactionServiceError,
     create_bank_transaction,
     get_bank_account_balance_summary,
 )
+from app.services.bank_transfer_service import (
+    BankTransferServiceError,
+    create_bank_transfer,
+)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
+from app.ui.pages.banks.bank_transaction_dialog import BankTransactionDialog
+from app.ui.pages.banks.bank_transfer_dialog import BankTransferDialog
 from app.ui.ui_helpers import clear_layout, decimal_or_zero, tr_money, tr_number
-from app.utils.decimal_utils import money
 
 
 @dataclass
@@ -74,10 +71,6 @@ def _format_currency_amount(value: Any, currency_code: str) -> str:
         return tr_money(value)
 
     return f"{value} {currency_code}"
-
-
-def _qdate_to_date(qdate: QDate) -> date:
-    return date(qdate.year(), qdate.month(), qdate.day())
 
 
 def load_banks_page_data() -> BanksPageData:
@@ -137,322 +130,6 @@ def load_banks_page_data() -> BanksPageData:
             active_account_count=0,
             error_message=str(exc),
         )
-
-
-class BankTransactionDialog(QDialog):
-    def __init__(
-        self,
-        *,
-        parent: QWidget | None,
-        bank_accounts: list[BankAccountRow],
-    ) -> None:
-        super().__init__(parent)
-
-        self.bank_accounts = bank_accounts
-        self.account_lookup = {
-            bank_account.bank_account_id: bank_account
-            for bank_account in self.bank_accounts
-        }
-        self.payload: dict[str, Any] | None = None
-
-        self.setWindowTitle("Banka Hareketi Oluştur")
-        self.resize(600, 560)
-        self._apply_dialog_styles()
-
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 22, 24, 22)
-        main_layout.setSpacing(16)
-
-        title = QLabel("Banka Hareketi Oluştur")
-        title.setObjectName("SectionTitle")
-
-        subtitle = QLabel(
-            "Seçilen banka hesabına giriş veya çıkış hareketi ekler. "
-            "Kayıt mevcut yetki ve audit sistemi üzerinden oluşturulur."
-        )
-        subtitle.setObjectName("MutedText")
-        subtitle.setWordWrap(True)
-
-        form_layout = QFormLayout()
-        form_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        form_layout.setFormAlignment(Qt.AlignTop)
-        form_layout.setHorizontalSpacing(18)
-        form_layout.setVerticalSpacing(14)
-
-        self.account_combo = QComboBox()
-        self.account_combo.setMinimumHeight(38)
-        self._fill_account_combo()
-        form_layout.addRow("Banka hesabı", self.account_combo)
-
-        self.direction_combo = QComboBox()
-        self.direction_combo.setMinimumHeight(38)
-        self.direction_combo.addItem("Giriş / Tahsilat", TransactionDirection.IN.value)
-        self.direction_combo.addItem("Çıkış / Ödeme", TransactionDirection.OUT.value)
-        form_layout.addRow("Hareket yönü", self.direction_combo)
-
-        self.status_combo = QComboBox()
-        self.status_combo.setMinimumHeight(38)
-        self.status_combo.addItem("Gerçekleşti", BankTransactionStatus.REALIZED.value)
-        self.status_combo.addItem("Planlandı", BankTransactionStatus.PLANNED.value)
-        form_layout.addRow("Durum", self.status_combo)
-
-        self.transaction_date_edit = QDateEdit()
-        self.transaction_date_edit.setMinimumHeight(38)
-        self.transaction_date_edit.setCalendarPopup(True)
-        self.transaction_date_edit.setDisplayFormat("dd.MM.yyyy")
-        self.transaction_date_edit.setDate(QDate.currentDate())
-        form_layout.addRow("İşlem tarihi", self.transaction_date_edit)
-
-        self.amount_input = QLineEdit()
-        self.amount_input.setMinimumHeight(42)
-        self.amount_input.setPlaceholderText("Örn: 12500,50")
-        form_layout.addRow("Tutar", self.amount_input)
-
-        self.reference_no_input = QLineEdit()
-        self.reference_no_input.setMinimumHeight(42)
-        self.reference_no_input.setPlaceholderText("Dekont / fiş / açıklama no")
-        form_layout.addRow("Referans no", self.reference_no_input)
-
-        self.description_input = QTextEdit()
-        self.description_input.setPlaceholderText("İsteğe bağlı açıklama")
-        self.description_input.setFixedHeight(105)
-        form_layout.addRow("Açıklama", self.description_input)
-
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
-
-        self.save_button = QPushButton("Kaydet")
-        self.cancel_button = QPushButton("Vazgeç")
-
-        self.save_button.setMinimumHeight(40)
-        self.cancel_button.setMinimumHeight(40)
-
-        self.save_button.clicked.connect(self.accept)
-        self.cancel_button.clicked.connect(self.reject)
-
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.cancel_button)
-        button_layout.addWidget(self.save_button)
-
-        main_layout.addWidget(title)
-        main_layout.addWidget(subtitle)
-        main_layout.addSpacing(4)
-        main_layout.addLayout(form_layout)
-        main_layout.addStretch(1)
-        main_layout.addLayout(button_layout)
-
-    def _apply_dialog_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QDialog {
-                background-color: #0f172a;
-                color: #e5e7eb;
-            }
-
-            QLabel {
-                color: #e5e7eb;
-                font-size: 13px;
-            }
-
-            QLabel#SectionTitle {
-                color: #f8fafc;
-                font-size: 20px;
-                font-weight: 700;
-            }
-
-            QLabel#MutedText {
-                color: #94a3b8;
-                font-size: 13px;
-            }
-
-            QLineEdit,
-            QTextEdit,
-            QComboBox,
-            QDateEdit {
-                background-color: #111827;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 10px;
-                padding: 8px 12px;
-                selection-background-color: #2563eb;
-                selection-color: #ffffff;
-                font-size: 13px;
-            }
-
-            QLineEdit:focus,
-            QTextEdit:focus,
-            QComboBox:focus,
-            QDateEdit:focus {
-                border: 1px solid #38bdf8;
-                background-color: #0b1220;
-            }
-
-            QLineEdit::placeholder,
-            QTextEdit::placeholder {
-                color: #64748b;
-            }
-
-            QComboBox::drop-down,
-            QDateEdit::drop-down {
-                border: none;
-                width: 30px;
-            }
-
-            QComboBox QAbstractItemView {
-                background-color: #111827;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                selection-background-color: #2563eb;
-                selection-color: #ffffff;
-                outline: 0;
-                padding: 6px;
-            }
-
-            QComboBox QAbstractItemView::item {
-                min-height: 30px;
-                padding: 6px 10px;
-                color: #f8fafc;
-                background-color: #111827;
-            }
-
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #2563eb;
-                color: #ffffff;
-            }
-
-            QCalendarWidget QWidget {
-                background-color: #111827;
-                color: #f8fafc;
-            }
-
-            QCalendarWidget QToolButton {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 6px;
-            }
-
-            QCalendarWidget QMenu {
-                background-color: #111827;
-                color: #f8fafc;
-            }
-
-            QCalendarWidget QSpinBox {
-                background-color: #111827;
-                color: #f8fafc;
-                border: 1px solid #334155;
-            }
-
-            QCalendarWidget QAbstractItemView {
-                background-color: #0f172a;
-                color: #f8fafc;
-                selection-background-color: #2563eb;
-                selection-color: #ffffff;
-            }
-
-            QPushButton {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 12px;
-                padding: 8px 16px;
-                font-weight: 600;
-            }
-
-            QPushButton:hover {
-                background-color: #334155;
-                border-color: #475569;
-            }
-
-            QPushButton:pressed {
-                background-color: #0f172a;
-            }
-
-            QPushButton:disabled {
-                background-color: #1f2937;
-                color: #64748b;
-                border-color: #334155;
-            }
-            """
-        )
-
-    def _fill_account_combo(self) -> None:
-        self.account_combo.clear()
-
-        for bank_account in self.bank_accounts:
-            balance_text = _format_currency_amount(
-                bank_account.current_balance,
-                bank_account.currency_code,
-            )
-
-            text = (
-                f"{bank_account.bank_name} / "
-                f"{bank_account.account_name} / "
-                f"{bank_account.currency_code} / "
-                f"Güncel: {balance_text}"
-            )
-
-            self.account_combo.addItem(text, bank_account.bank_account_id)
-
-    def _selected_bank_account(self) -> BankAccountRow:
-        bank_account_id = self.account_combo.currentData()
-
-        try:
-            normalized_bank_account_id = int(bank_account_id)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Geçerli bir banka hesabı seçilmelidir.") from exc
-
-        bank_account = self.account_lookup.get(normalized_bank_account_id)
-
-        if bank_account is None:
-            raise ValueError("Seçilen banka hesabı bulunamadı.")
-
-        return bank_account
-
-    def _build_payload(self) -> dict[str, Any]:
-        bank_account = self._selected_bank_account()
-
-        amount_text = self.amount_input.text().strip()
-        cleaned_amount = money(amount_text, field_name="Banka hareket tutarı")
-
-        if cleaned_amount <= decimal_or_zero("0.00"):
-            raise ValueError("Banka hareket tutarı sıfırdan büyük olmalıdır.")
-
-        direction_value = str(self.direction_combo.currentData()).strip().upper()
-        status_value = str(self.status_combo.currentData()).strip().upper()
-
-        reference_no = self.reference_no_input.text().strip()
-        description = self.description_input.toPlainText().strip()
-
-        return {
-            "bank_account_id": bank_account.bank_account_id,
-            "transaction_date": _qdate_to_date(self.transaction_date_edit.date()),
-            "value_date": None,
-            "direction": direction_value,
-            "status": status_value,
-            "amount": cleaned_amount,
-            "currency_code": bank_account.currency_code,
-            "source_type": FinancialSourceType.MANUAL_ADJUSTMENT.value,
-            "source_id": None,
-            "reference_no": reference_no or None,
-            "description": description or None,
-        }
-
-    def accept(self) -> None:
-        try:
-            self.payload = self._build_payload()
-        except Exception as exc:
-            QMessageBox.warning(self, "Eksik veya hatalı bilgi", str(exc))
-            return
-
-        super().accept()
-
-    def get_payload(self) -> dict[str, Any]:
-        if self.payload is None:
-            self.payload = self._build_payload()
-
-        return self.payload
 
 
 class BanksPage(QWidget):
@@ -669,6 +346,7 @@ class BanksPage(QWidget):
 
         transfer_button = QPushButton("Banka Transferi Oluştur")
         transfer_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        transfer_button.clicked.connect(self._open_create_bank_transfer_dialog)
 
         cancel_button = QPushButton("İptal İşlemleri")
         cancel_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
@@ -755,6 +433,98 @@ class BanksPage(QWidget):
                 self,
                 "Beklenmeyen hata",
                 f"Banka hareketi oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_create_bank_transfer_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        active_bank_accounts = [
+            bank_account
+            for bank_account in self.data.bank_accounts
+            if bank_account.is_active
+        ]
+
+        if len(active_bank_accounts) < 2:
+            QMessageBox.information(
+                self,
+                "Yetersiz banka hesabı",
+                "Transfer oluşturmak için en az iki aktif banka hesabı gerekir.",
+            )
+            return
+
+        currency_account_counts: dict[str, int] = {}
+
+        for bank_account in active_bank_accounts:
+            currency_account_counts[bank_account.currency_code] = (
+                currency_account_counts.get(bank_account.currency_code, 0) + 1
+            )
+
+        has_transferable_currency = any(
+            account_count >= 2
+            for account_count in currency_account_counts.values()
+        )
+
+        if not has_transferable_currency:
+            QMessageBox.information(
+                self,
+                "Uygun hesap yok",
+                "Transfer için aynı para biriminde en az iki aktif banka hesabı gerekir.",
+            )
+            return
+
+        dialog = BankTransferDialog(
+            parent=self,
+            bank_accounts=active_bank_accounts,
+        )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                bank_transfer = create_bank_transfer(
+                    session,
+                    from_bank_account_id=payload["from_bank_account_id"],
+                    to_bank_account_id=payload["to_bank_account_id"],
+                    transfer_date=payload["transfer_date"],
+                    value_date=payload["value_date"],
+                    amount=payload["amount"],
+                    status=payload["status"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_transfer_id = bank_transfer.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Banka transferi oluşturuldu",
+                f"Banka transferi başarıyla oluşturuldu. Transfer ID: {created_transfer_id}",
+            )
+
+        except BankTransferServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka transferi oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Banka transferi oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _build_admin_management_card(self) -> QWidget:
