@@ -26,6 +26,7 @@ from app.ui.navigation import (
 from app.ui.pages.banks_page import BanksPage
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.placeholder_page import AccessDeniedPage, PlaceholderPage
+from app.ui.pages.pos_page import PosPage
 from app.ui.styles import APP_STYLE
 from app.ui.ui_helpers import clear_layout
 
@@ -263,6 +264,16 @@ class FtmDesktopWindow(QMainWindow):
         if self.current_page == "Bankalar":
             self.content_layout.addWidget(
                 BanksPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if self.current_page == "POS Mutabakat":
+            self.content_layout.addWidget(
+                PosPage(
                     current_user=self.current_user,
                 ),
                 1,
