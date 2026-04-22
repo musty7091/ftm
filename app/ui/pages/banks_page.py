@@ -17,6 +17,15 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.session import session_scope
+from app.services.bank_definition_service import (
+    BankDefinitionServiceError,
+    create_bank,
+    create_bank_account,
+    deactivate_bank_account,
+    reactivate_bank_account,
+    update_bank,
+    update_bank_account,
+)
 from app.services.bank_transaction_service import (
     BankTransactionServiceError,
     cancel_bank_transaction,
@@ -29,7 +38,12 @@ from app.services.bank_transfer_service import (
 )
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
+from app.ui.pages.banks.bank_account_deactivate_dialog import BankAccountDeactivateDialog
+from app.ui.pages.banks.bank_account_dialog import BankAccountDialog
+from app.ui.pages.banks.bank_admin_data import load_admin_banks
 from app.ui.pages.banks.bank_cancel_dialog import BankCancelDialog
+from app.ui.pages.banks.bank_definition_dialog import BankDefinitionDialog
+from app.ui.pages.banks.bank_manage_dialog import BankManageDialog
 from app.ui.pages.banks.bank_transaction_dialog import BankTransactionDialog
 from app.ui.pages.banks.bank_transfer_dialog import BankTransferDialog
 from app.ui.pages.banks.banks_data import (
@@ -274,6 +288,80 @@ class BanksPage(QWidget):
         layout.addWidget(cancel_button)
 
         return card
+
+    def _build_admin_management_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("CardHighlight")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        title = QLabel("Banka Tanım Yönetimi")
+        title.setObjectName("SectionTitle")
+
+        description = QLabel(
+            "Bu alan sadece ADMIN rolünde görünür. Banka ve banka hesabı tanımları "
+            "sistemin temel ayarları olduğu için sınırlı erişimle korunur."
+        )
+        description.setObjectName("MutedText")
+        description.setWordWrap(True)
+
+        add_bank_button = QPushButton("Banka Ekle")
+        add_bank_button.clicked.connect(self._open_create_bank_dialog)
+
+        add_account_button = QPushButton("Banka Hesabı Ekle")
+        add_account_button.clicked.connect(self._open_create_bank_account_dialog)
+
+        edit_bank_button = QPushButton("Banka / Hesap Düzenle")
+        edit_bank_button.clicked.connect(self._open_manage_bank_dialog)
+
+        deactivate_account_button = QPushButton("Hesap Pasifleştir / Aktifleştir")
+        deactivate_account_button.clicked.connect(self._open_deactivate_bank_account_dialog)
+
+        layout.addWidget(title)
+        layout.addWidget(description)
+        layout.addSpacing(6)
+        layout.addWidget(add_bank_button)
+        layout.addWidget(add_account_button)
+        layout.addWidget(edit_bank_button)
+        layout.addWidget(deactivate_account_button)
+
+        return card
+
+    def _build_limited_access_card(self) -> QWidget:
+        if self.current_role == "VIEWER":
+            return InfoCard(
+                "Görüntüleme Modu",
+                "Bu kullanıcı banka hesaplarını ve bakiyeleri görüntüleyebilir. "
+                "İşlem oluşturma ve tanım yönetimi yetkisi yoktur.",
+                "VIEWER rolü sadece izler; yanlışlıkla para hareketi başlatamaz.",
+            )
+
+        if self.current_role == "FINANCE":
+            return InfoCard(
+                "Finans Operasyon Modu",
+                "Bu kullanıcı banka hareketi ve transfer operasyonları yapabilir. "
+                "Ancak banka tanımı veya hesap düzenleme işlemleri ADMIN yetkisindedir.",
+                "Operasyon ayrı, sistem tanımı ayrı tutulur.",
+            )
+
+        return InfoCard(
+            "Sınırlı Erişim",
+            "Bu rol için banka tanım yönetimi kapalıdır.",
+            "Yetki sınırları arayüzde de korunur.",
+        )
+
+    def _ensure_admin_role(self) -> bool:
+        if self.current_role != "ADMIN":
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN yetkisi gerekir.",
+            )
+            return False
+
+        return True
 
     def _open_create_bank_transaction_dialog(self) -> None:
         if self.current_role not in {"ADMIN", "FINANCE"}:
@@ -524,58 +612,271 @@ class BanksPage(QWidget):
                 f"İptal işlemi yapılırken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
-    def _build_admin_management_card(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("CardHighlight")
+    def _open_create_bank_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
 
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
-
-        title = QLabel("Banka Tanım Yönetimi")
-        title.setObjectName("SectionTitle")
-
-        description = QLabel(
-            "Bu alan sadece ADMIN rolünde görünür. Banka ve banka hesabı tanımları "
-            "sistemin temel ayarları olduğu için sınırlı erişimle korunur."
+        dialog = BankDefinitionDialog(
+            parent=self,
+            mode="create",
         )
-        description.setObjectName("MutedText")
-        description.setWordWrap(True)
 
-        add_bank_button = QPushButton("Banka Ekle")
-        add_account_button = QPushButton("Banka Hesabı Ekle")
-        edit_bank_button = QPushButton("Banka / Hesap Düzenle")
-        deactivate_account_button = QPushButton("Hesap Pasifleştir")
+        if dialog.exec() != QDialog.Accepted:
+            return
 
-        layout.addWidget(title)
-        layout.addWidget(description)
-        layout.addSpacing(6)
-        layout.addWidget(add_bank_button)
-        layout.addWidget(add_account_button)
-        layout.addWidget(edit_bank_button)
-        layout.addWidget(deactivate_account_button)
+        payload = dialog.get_payload()
 
-        return card
+        try:
+            with session_scope() as session:
+                bank = create_bank(
+                    session,
+                    name=payload["name"],
+                    short_name=payload["short_name"],
+                    notes=payload["notes"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
 
-    def _build_limited_access_card(self) -> QWidget:
-        if self.current_role == "VIEWER":
-            return InfoCard(
-                "Görüntüleme Modu",
-                "Bu kullanıcı banka hesaplarını ve bakiyeleri görüntüleyebilir. "
-                "İşlem oluşturma ve tanım yönetimi yetkisi yoktur.",
-                "VIEWER rolü sadece izler; yanlışlıkla para hareketi başlatamaz.",
+                created_bank_id = bank.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Banka oluşturuldu",
+                f"Banka başarıyla oluşturuldu. Banka ID: {created_bank_id}",
             )
 
-        if self.current_role == "FINANCE":
-            return InfoCard(
-                "Finans Operasyon Modu",
-                "Bu kullanıcı banka hareketi ve transfer operasyonları yapabilir. "
-                "Ancak banka tanımı veya hesap düzenleme işlemleri ADMIN yetkisindedir.",
-                "Operasyon ayrı, sistem tanımı ayrı tutulur.",
+        except BankDefinitionServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Banka oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
-        return InfoCard(
-            "Sınırlı Erişim",
-            "Bu rol için banka tanım yönetimi kapalıdır.",
-            "Yetki sınırları arayüzde de korunur.",
+    def _open_create_bank_account_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        active_banks = load_admin_banks(include_passive=False)
+
+        if not active_banks:
+            QMessageBox.information(
+                self,
+                "Aktif banka yok",
+                "Banka hesabı oluşturmak için önce en az bir aktif banka tanımı gerekir.",
+            )
+            return
+
+        dialog = BankAccountDialog(
+            parent=self,
+            mode="create",
+            banks=active_banks,
         )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                bank_account = create_bank_account(
+                    session,
+                    bank_id=payload["bank_id"],
+                    account_name=payload["account_name"],
+                    account_type=payload["account_type"],
+                    currency_code=payload["currency_code"],
+                    iban=payload["iban"],
+                    branch_name=payload["branch_name"],
+                    branch_code=payload["branch_code"],
+                    account_no=payload["account_no"],
+                    opening_balance=payload["opening_balance"],
+                    opening_date=payload["opening_date"],
+                    notes=payload["notes"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_bank_account_id = bank_account.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Banka hesabı oluşturuldu",
+                f"Banka hesabı başarıyla oluşturuldu. Hesap ID: {created_bank_account_id}",
+            )
+
+        except BankDefinitionServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka hesabı oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Banka hesabı oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_manage_bank_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        dialog = BankManageDialog(parent=self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+        edit_type = payload["edit_type"]
+        data = payload["data"]
+
+        try:
+            with session_scope() as session:
+                if edit_type == "BANK":
+                    bank = update_bank(
+                        session,
+                        bank_id=data["bank_id"],
+                        name=data["name"],
+                        short_name=data["short_name"],
+                        notes=data["notes"],
+                        is_active=data["is_active"],
+                        updated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    updated_id = bank.id
+                    success_title = "Banka güncellendi"
+                    success_message = (
+                        f"Banka başarıyla güncellendi. Banka ID: {updated_id}"
+                    )
+
+                elif edit_type == "BANK_ACCOUNT":
+                    bank_account = update_bank_account(
+                        session,
+                        bank_account_id=data["bank_account_id"],
+                        bank_id=data["bank_id"],
+                        account_name=data["account_name"],
+                        account_type=data["account_type"],
+                        currency_code=data["currency_code"],
+                        iban=data["iban"],
+                        branch_name=data["branch_name"],
+                        branch_code=data["branch_code"],
+                        account_no=data["account_no"],
+                        opening_balance=data["opening_balance"],
+                        opening_date=data["opening_date"],
+                        notes=data["notes"],
+                        is_active=data["is_active"],
+                        updated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    updated_id = bank_account.id
+                    success_title = "Banka hesabı güncellendi"
+                    success_message = (
+                        f"Banka hesabı başarıyla güncellendi. Hesap ID: {updated_id}"
+                    )
+
+                else:
+                    raise ValueError("Geçersiz düzenleme işlem türü.")
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                success_title,
+                success_message,
+            )
+
+        except BankDefinitionServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Tanım güncellenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Tanım güncellenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_deactivate_bank_account_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        dialog = BankAccountDeactivateDialog(parent=self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        operation_type = payload["operation_type"]
+        bank_account_id = payload["bank_account_id"]
+        reason = payload["reason"]
+
+        try:
+            with session_scope() as session:
+                if operation_type == "DEACTIVATE":
+                    bank_account = deactivate_bank_account(
+                        session,
+                        bank_account_id=bank_account_id,
+                        deactivate_reason=reason,
+                        deactivated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    changed_bank_account_id = bank_account.id
+                    success_title = "Banka hesabı pasifleştirildi"
+                    success_message = (
+                        f"Banka hesabı başarıyla pasifleştirildi. Hesap ID: {changed_bank_account_id}"
+                    )
+
+                elif operation_type == "REACTIVATE":
+                    bank_account = reactivate_bank_account(
+                        session,
+                        bank_account_id=bank_account_id,
+                        reactivate_reason=reason,
+                        reactivated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    changed_bank_account_id = bank_account.id
+                    success_title = "Banka hesabı aktifleştirildi"
+                    success_message = (
+                        f"Banka hesabı başarıyla aktifleştirildi. Hesap ID: {changed_bank_account_id}"
+                    )
+
+                else:
+                    raise ValueError("Geçersiz hesap durum işlemi.")
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                success_title,
+                success_message,
+            )
+
+        except BankDefinitionServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Banka hesabı durumu değiştirilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Banka hesabı durumu değiştirilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
