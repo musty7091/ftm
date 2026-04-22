@@ -1,5 +1,6 @@
 ﻿# FTM Genel Bakış sayfası
 from decimal import Decimal
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
@@ -20,6 +21,36 @@ from app.ui.dashboard_data import DashboardData
 from app.ui.ui_helpers import decimal_or_zero, tr_money, tr_number
 
 
+CURRENCY_DISPLAY_ORDER = ["TRY", "USD", "EUR", "GBP"]
+
+
+def _format_decimal_tr(value: Any) -> str:
+    amount = decimal_or_zero(value)
+
+    formatted = f"{amount:,.2f}"
+    formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return formatted
+
+
+def _format_currency_amount(value: Any, currency_code: str) -> str:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code == "TRY":
+        return tr_money(value)
+
+    return f"{_format_decimal_tr(value)} {normalized_currency_code}"
+
+
+def _currency_sort_key(currency_code: str) -> tuple[int, str]:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code in CURRENCY_DISPLAY_ORDER:
+        return (CURRENCY_DISPLAY_ORDER.index(normalized_currency_code), normalized_currency_code)
+
+    return (999, normalized_currency_code)
+
+
 class DashboardPage(QWidget):
     def __init__(self, dashboard_data: DashboardData) -> None:
         super().__init__()
@@ -34,6 +65,37 @@ class DashboardPage(QWidget):
         layout.addWidget(self._build_bank_table_card(), 1)
         layout.addLayout(self._build_bottom_cards())
 
+    def _calculate_bank_currency_totals(self) -> dict[str, Decimal]:
+        currency_totals: dict[str, Decimal] = {}
+
+        for account in self.dashboard_data.bank_accounts:
+            currency_code = str(account["currency_code"] or "").strip().upper()
+
+            if not currency_code:
+                continue
+
+            currency_totals[currency_code] = currency_totals.get(
+                currency_code,
+                Decimal("0.00"),
+            ) + decimal_or_zero(account["current_balance"])
+
+        return currency_totals
+
+    def _build_currency_totals_text(self) -> str:
+        currency_totals = self._calculate_bank_currency_totals()
+
+        if not currency_totals:
+            return "Kayıt yok"
+
+        lines: list[str] = []
+
+        for currency_code in sorted(currency_totals.keys(), key=_currency_sort_key):
+            lines.append(
+                f"{currency_code}: {_format_currency_amount(currency_totals[currency_code], currency_code)}"
+            )
+
+        return "\n".join(lines)
+
     def _build_summary_cards(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(16)
@@ -44,11 +106,7 @@ class DashboardPage(QWidget):
             f"FAIL: {self.dashboard_data.health_fail_count}"
         )
 
-        total_try_balance = Decimal("0.00")
-
-        for account in self.dashboard_data.bank_accounts:
-            if account["currency_code"] == "TRY":
-                total_try_balance += decimal_or_zero(account["current_balance"])
+        bank_currency_totals_text = self._build_currency_totals_text()
 
         cards = [
             SummaryCard(
@@ -58,9 +116,9 @@ class DashboardPage(QWidget):
                 "success" if self.dashboard_data.health_status == "OK" else "risk",
             ),
             SummaryCard(
-                "TRY BANKA BAKİYESİ",
-                tr_money(total_try_balance),
-                "Aktif TRY banka hesaplarının güncel toplamı",
+                "BANKA BAKİYELERİ",
+                bank_currency_totals_text,
+                "Aktif banka hesaplarının para birimi bazlı güncel toplamı",
                 "highlight",
             ),
             SummaryCard(
@@ -115,7 +173,10 @@ class DashboardPage(QWidget):
         title = QLabel("Banka Hesapları")
         title.setObjectName("SectionTitle")
 
-        subtitle = QLabel("Açılış bakiyesi, giriş, çıkış ve güncel bakiye özeti.")
+        subtitle = QLabel(
+            "Açılış bakiyesi, giriş, çıkış ve güncel bakiye özeti. "
+            "Her hesap kendi para birimiyle gösterilir."
+        )
         subtitle.setObjectName("MutedText")
 
         bank_table = QTableWidget()
@@ -149,14 +210,16 @@ class DashboardPage(QWidget):
         bank_table.setRowCount(len(self.dashboard_data.bank_accounts))
 
         for row_index, account in enumerate(self.dashboard_data.bank_accounts):
+            currency_code = str(account["currency_code"] or "").strip().upper()
+
             values = [
                 account["bank_name"],
                 account["account_name"],
-                account["currency_code"],
-                tr_money(account["opening_balance"]) if account["currency_code"] == "TRY" else str(account["opening_balance"]),
-                tr_money(account["incoming_total"]) if account["currency_code"] == "TRY" else str(account["incoming_total"]),
-                tr_money(account["outgoing_total"]) if account["currency_code"] == "TRY" else str(account["outgoing_total"]),
-                tr_money(account["current_balance"]) if account["currency_code"] == "TRY" else str(account["current_balance"]),
+                currency_code,
+                _format_currency_amount(account["opening_balance"], currency_code),
+                _format_currency_amount(account["incoming_total"], currency_code),
+                _format_currency_amount(account["outgoing_total"], currency_code),
+                _format_currency_amount(account["current_balance"], currency_code),
             ]
 
             for column_index, value in enumerate(values):
