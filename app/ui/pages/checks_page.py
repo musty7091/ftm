@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -55,9 +56,7 @@ class ChecksPage(QWidget):
             return
 
         self.main_layout.addLayout(self._build_summary_cards())
-        self.main_layout.addWidget(self._build_issued_checks_card(), 1)
-        self.main_layout.addWidget(self._build_received_checks_card(), 1)
-        self.main_layout.addLayout(self._build_action_area())
+        self.main_layout.addWidget(self._build_checks_tabs(), 1)
 
     def _reload_page_data(self) -> None:
         self.data = load_checks_page_data()
@@ -210,7 +209,214 @@ class ChecksPage(QWidget):
 
         return box
 
-    def _build_issued_checks_card(self) -> QWidget:
+    def _build_checks_tabs(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("ChecksTabs")
+        tabs.setDocumentMode(False)
+
+        tabs.setStyleSheet(
+            """
+            QTabWidget#ChecksTabs::pane {
+                border: 1px solid #1e293b;
+                background-color: #0b1220;
+                border-radius: 12px;
+                top: -1px;
+            }
+
+            QTabBar::tab {
+                background-color: #172033;
+                color: #94a3b8;
+                border: 1px solid #24324a;
+                border-bottom: none;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                padding: 10px 18px;
+                margin-right: 6px;
+                min-width: 120px;
+                font-weight: 600;
+            }
+
+            QTabBar::tab:selected {
+                background-color: #2563eb;
+                color: #ffffff;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background-color: #1e293b;
+                color: #e5e7eb;
+            }
+            """
+        )
+
+        tabs.addTab(self._build_overview_tab(), "Genel Görünüm")
+        tabs.addTab(self._build_issued_checks_tab(), "Yazılan Çekler")
+        tabs.addTab(self._build_received_checks_tab(), "Alınan Çekler")
+
+        layout.addWidget(tabs)
+
+        return card
+
+    def _build_overview_tab(self) -> QWidget:
+        page = QWidget()
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(16)
+
+        layout.addLayout(self._build_overview_status_cards())
+        layout.addLayout(self._build_overview_action_area())
+        layout.addStretch()
+
+        return page
+
+    def _build_overview_status_cards(self) -> QGridLayout:
+        grid = QGridLayout()
+        grid.setSpacing(16)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        grid.setColumnStretch(3, 1)
+
+        grid.addWidget(
+            self._build_small_status_card(
+                "AÇIK YAZILAN ÇEK",
+                tr_number(self.data.pending_issued_count),
+                "Kayıt",
+            ),
+            0,
+            0,
+        )
+
+        grid.addWidget(
+            self._build_small_status_card(
+                "AÇIK ALINAN ÇEK",
+                tr_number(self.data.pending_received_count),
+                "Kayıt",
+            ),
+            0,
+            1,
+        )
+
+        grid.addWidget(
+            self._build_small_status_card(
+                "YAKLAŞAN VADE",
+                tr_number(self.data.issued_due_soon_count + self.data.received_due_soon_count),
+                "Toplam",
+            ),
+            0,
+            2,
+        )
+
+        grid.addWidget(
+            self._build_small_status_card(
+                "PROBLEMLİ ÇEK",
+                tr_number(self.data.issued_problem_count + self.data.received_problem_count),
+                "Kayıt",
+            ),
+            0,
+            3,
+        )
+
+        return grid
+
+    def _build_small_status_card(self, title_text: str, value_text: str, hint_text: str) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setMinimumHeight(115)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(6)
+
+        title = QLabel(title_text)
+        title.setObjectName("CardTitle")
+
+        value = QLabel(value_text)
+        value.setObjectName("CardValue")
+
+        hint = QLabel(hint_text)
+        hint.setObjectName("CardHint")
+
+        layout.addWidget(title)
+        layout.addStretch()
+        layout.addWidget(value)
+        layout.addWidget(hint)
+
+        return card
+
+    def _build_overview_action_area(self) -> QGridLayout:
+        grid = QGridLayout()
+        grid.setSpacing(16)
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 2)
+
+        grid.addWidget(self._build_operation_card(), 0, 0)
+
+        if self.current_role == "ADMIN":
+            grid.addWidget(self._build_admin_hint_card(), 0, 1)
+        else:
+            grid.addWidget(self._build_role_hint_card(), 0, 1)
+
+        return grid
+
+    def _build_issued_checks_tab(self) -> QWidget:
+        page = QWidget()
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(14)
+
+        layout.addWidget(
+            self._build_issued_checks_card(
+                rows=self.data.issued_checks,
+                title="Yazılan Çekler",
+                subtitle="Tedarikçilere yazılan çeklerin vade, durum ve banka hesabı görünümü.",
+            ),
+            1,
+        )
+
+        return page
+
+    def _build_received_checks_tab(self) -> QWidget:
+        page = QWidget()
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(14)
+
+        layout.addWidget(
+            self._build_received_checks_card(
+                rows=self.data.received_checks,
+                title="Alınan Çekler",
+                subtitle="Müşterilerden alınan çeklerin çek bankası, tahsil hesabı, vade ve durum görünümü.",
+            ),
+            1,
+        )
+
+        return page
+
+    def _configure_table_for_compact_view(self, table: QTableWidget) -> None:
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.verticalHeader().setDefaultSectionSize(34)
+        table.verticalHeader().setMinimumSectionSize(30)
+        table.horizontalHeader().setMinimumSectionSize(70)
+        table.horizontalHeader().setStretchLastSection(False)
+
+    def _build_issued_checks_card(
+        self,
+        *,
+        rows: list[Any],
+        title: str,
+        subtitle: str,
+    ) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
 
@@ -218,14 +424,12 @@ class ChecksPage(QWidget):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        title = QLabel("Yazılan Çekler")
-        title.setObjectName("SectionTitle")
+        title_label = QLabel(title)
+        title_label.setObjectName("SectionTitle")
 
-        subtitle = QLabel(
-            "Tedarikçilere yazılan çeklerin vade, durum ve banka hesabı görünümü."
-        )
-        subtitle.setObjectName("MutedText")
-        subtitle.setWordWrap(True)
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("MutedText")
+        subtitle_label.setWordWrap(True)
 
         table = QTableWidget()
         table.setColumnCount(9)
@@ -246,21 +450,37 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMinimumHeight(240)
+        table.setMinimumHeight(420)
 
-        self._fill_issued_checks_table(table)
+        self._configure_table_for_compact_view(table)
+        self._fill_issued_checks_table(table, rows)
+        self._configure_issued_table_columns(table)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        layout.addWidget(title_label)
+        layout.addWidget(subtitle_label)
         layout.addWidget(table, 1)
 
         return card
 
-    def _fill_issued_checks_table(self, table: QTableWidget) -> None:
-        table.setRowCount(len(self.data.issued_checks))
+    def _configure_issued_table_columns(self, table: QTableWidget) -> None:
+        header = table.horizontalHeader()
 
-        for row_index, issued_check in enumerate(self.data.issued_checks):
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+
+        table.setColumnWidth(2, 260)
+
+    def _fill_issued_checks_table(self, table: QTableWidget, rows: list[Any]) -> None:
+        table.setRowCount(len(rows))
+
+        for row_index, issued_check in enumerate(rows):
             values = [
                 str(issued_check.issued_check_id),
                 issued_check.supplier_name,
@@ -288,11 +508,18 @@ class ChecksPage(QWidget):
                 else:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+                item.setToolTip(str(value))
                 table.setItem(row_index, column_index, item)
 
         table.resizeRowsToContents()
 
-    def _build_received_checks_card(self) -> QWidget:
+    def _build_received_checks_card(
+        self,
+        *,
+        rows: list[Any],
+        title: str,
+        subtitle: str,
+    ) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
 
@@ -300,14 +527,12 @@ class ChecksPage(QWidget):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        title = QLabel("Alınan Çekler")
-        title.setObjectName("SectionTitle")
+        title_label = QLabel(title)
+        title_label.setObjectName("SectionTitle")
 
-        subtitle = QLabel(
-            "Müşterilerden alınan çeklerin çek bankası, tahsil hesabı, vade ve durum görünümü."
-        )
-        subtitle.setObjectName("MutedText")
-        subtitle.setWordWrap(True)
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("MutedText")
+        subtitle_label.setWordWrap(True)
 
         table = QTableWidget()
         table.setColumnCount(10)
@@ -329,21 +554,38 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMinimumHeight(240)
+        table.setMinimumHeight(420)
 
-        self._fill_received_checks_table(table)
+        self._configure_table_for_compact_view(table)
+        self._fill_received_checks_table(table, rows)
+        self._configure_received_table_columns(table)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        layout.addWidget(title_label)
+        layout.addWidget(subtitle_label)
         layout.addWidget(table, 1)
 
         return card
 
-    def _fill_received_checks_table(self, table: QTableWidget) -> None:
-        table.setRowCount(len(self.data.received_checks))
+    def _configure_received_table_columns(self, table: QTableWidget) -> None:
+        header = table.horizontalHeader()
 
-        for row_index, received_check in enumerate(self.data.received_checks):
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
+
+        table.setColumnWidth(3, 280)
+
+    def _fill_received_checks_table(self, table: QTableWidget, rows: list[Any]) -> None:
+        table.setRowCount(len(rows))
+
+        for row_index, received_check in enumerate(rows):
             collection_text = (
                 f"{received_check.collection_bank_name} / {received_check.collection_bank_account_name}"
                 if received_check.collection_bank_name and received_check.collection_bank_account_name
@@ -378,22 +620,10 @@ class ChecksPage(QWidget):
                 else:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+                item.setToolTip(str(value))
                 table.setItem(row_index, column_index, item)
 
         table.resizeRowsToContents()
-
-    def _build_action_area(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setSpacing(16)
-
-        grid.addWidget(self._build_operation_card(), 0, 0)
-
-        if self.current_role == "ADMIN":
-            grid.addWidget(self._build_admin_hint_card(), 0, 1)
-        else:
-            grid.addWidget(self._build_role_hint_card(), 0, 1)
-
-        return grid
 
     def _build_operation_card(self) -> QWidget:
         card = QFrame()
@@ -407,7 +637,8 @@ class ChecksPage(QWidget):
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Yazılan ve alınan çek işlemleri bir sonraki adımda gerçek formlara bağlanacak."
+            "Yazılan ve alınan çek operasyonları bu alandan yürütülecek. "
+            "Ana ekranda liste kalabalığı yok; operasyon odakta."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -426,19 +657,20 @@ class ChecksPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(6)
+        layout.addSpacing(8)
         layout.addWidget(create_issued_button)
         layout.addWidget(pay_issued_button)
         layout.addWidget(create_received_button)
         layout.addWidget(collect_received_button)
+        layout.addStretch()
 
         return card
 
     def _build_admin_hint_card(self) -> QWidget:
         return InfoCard(
             "Yönetim Hazırlığı",
-            "Çek ekranı artık gerçek veriyle çalışıyor. Sonraki adımda yazılan/alınan çek formları ve tahsil/ödeme işlemleri bağlanacak.",
-            "Temel atıldı; sıra kas gücünde.",
+            "Bu giriş sekmesi artık sadece özet ve operasyon alanına odaklanır. Çek listeleri ayrı sekmelere taşındı.",
+            "Kalabalık çıktı, kontrol kaldı.",
         )
 
     def _build_role_hint_card(self) -> QWidget:
