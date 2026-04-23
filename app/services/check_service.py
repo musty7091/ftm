@@ -7,13 +7,14 @@ from sqlalchemy.orm import Session
 
 from app.models.bank import BankAccount
 from app.models.business_partner import BusinessPartner
-from app.models.check import IssuedCheck, ReceivedCheck
+from app.models.check import IssuedCheck, ReceivedCheck, ReceivedCheckMovement
 from app.models.enums import (
     BankTransactionStatus,
     BusinessPartnerType,
     CurrencyCode,
     FinancialSourceType,
     IssuedCheckStatus,
+    ReceivedCheckMovementType,
     ReceivedCheckStatus,
     TransactionDirection,
 )
@@ -129,6 +130,92 @@ def _received_check_to_dict(check: ReceivedCheck) -> dict[str, Any]:
         "cancelled_at": check.cancelled_at.isoformat() if check.cancelled_at else None,
         "cancel_reason": check.cancel_reason,
     }
+
+
+def _received_check_movement_to_dict(movement: ReceivedCheckMovement) -> dict[str, Any]:
+    return {
+        "id": movement.id,
+        "received_check_id": movement.received_check_id,
+        "movement_type": movement.movement_type.value,
+        "movement_date": movement.movement_date.isoformat(),
+        "from_status": movement.from_status.value if movement.from_status else None,
+        "to_status": movement.to_status.value,
+        "bank_account_id": movement.bank_account_id,
+        "counterparty_text": movement.counterparty_text,
+        "purpose_text": movement.purpose_text,
+        "reference_no": movement.reference_no,
+        "description": movement.description,
+        "gross_amount": str(movement.gross_amount),
+        "currency_code": movement.currency_code.value,
+        "discount_rate": str(movement.discount_rate) if movement.discount_rate is not None else None,
+        "discount_expense_amount": (
+            str(movement.discount_expense_amount)
+            if movement.discount_expense_amount is not None
+            else None
+        ),
+        "net_bank_amount": str(movement.net_bank_amount) if movement.net_bank_amount is not None else None,
+        "created_by_user_id": movement.created_by_user_id,
+        "created_at": movement.created_at.isoformat() if movement.created_at else None,
+    }
+
+
+def _create_received_check_movement(
+    session: Session,
+    *,
+    received_check: ReceivedCheck,
+    movement_type: ReceivedCheckMovementType,
+    movement_date: date,
+    from_status: Optional[ReceivedCheckStatus],
+    to_status: ReceivedCheckStatus,
+    bank_account_id: Optional[int],
+    counterparty_text: Optional[str],
+    purpose_text: Optional[str],
+    reference_no: Optional[str],
+    description: Optional[str],
+    gross_amount: Decimal,
+    currency_code: CurrencyCode,
+    discount_rate: Optional[Decimal] = None,
+    discount_expense_amount: Optional[Decimal] = None,
+    net_bank_amount: Optional[Decimal] = None,
+    created_by_user_id: Optional[int] = None,
+) -> ReceivedCheckMovement:
+    movement = ReceivedCheckMovement(
+        received_check_id=received_check.id,
+        movement_type=movement_type,
+        movement_date=movement_date,
+        from_status=from_status,
+        to_status=to_status,
+        bank_account_id=bank_account_id,
+        counterparty_text=_clean_optional_text(counterparty_text),
+        purpose_text=_clean_optional_text(purpose_text),
+        reference_no=_clean_optional_text(reference_no),
+        description=_clean_optional_text(description),
+        gross_amount=gross_amount,
+        currency_code=currency_code,
+        discount_rate=discount_rate,
+        discount_expense_amount=discount_expense_amount,
+        net_bank_amount=net_bank_amount,
+        created_by_user_id=created_by_user_id,
+    )
+
+    session.add(movement)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="RECEIVED_CHECK_MOVEMENT_CREATED",
+        entity_type="ReceivedCheckMovement",
+        entity_id=movement.id,
+        description=(
+            f"Alınan çek hareketi oluşturuldu: "
+            f"{movement.movement_type.value} / Çek ID: {received_check.id}"
+        ),
+        old_values=None,
+        new_values=_received_check_movement_to_dict(movement),
+    )
+
+    return movement
 
 
 def get_issued_check_by_number(
@@ -394,6 +481,23 @@ def create_received_check(
     session.add(check)
     session.flush()
 
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.REGISTERED,
+        movement_date=received_date,
+        from_status=None,
+        to_status=status,
+        bank_account_id=collection_bank_account.id if collection_bank_account else None,
+        counterparty_text=customer.name,
+        purpose_text="Alınan çek kaydı oluşturuldu.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_created_by_user_id,
+    )
+
     write_audit_log(
         session,
         user_id=effective_created_by_user_id,
@@ -402,6 +506,99 @@ def create_received_check(
         entity_id=check.id,
         description=f"Alınan çek oluşturuldu: {check.check_number} / {check.amount} {check.currency_code.value}",
         old_values=None,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
+def send_received_check_to_bank(
+    session: Session,
+    *,
+    received_check_id: int,
+    collection_bank_account_id: int,
+    sent_date: date,
+    reference_no: Optional[str],
+    description: Optional[str],
+    moved_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_SEND_TO_BANK,
+        attempted_action="RECEIVED_CHECK_SEND_TO_BANK",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "collection_bank_account_id": collection_bank_account_id,
+            "sent_date": sent_date.isoformat(),
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_moved_by_user_id = permission_user_id if permission_user_id is not None else moved_by_user_id
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status != ReceivedCheckStatus.PORTFOLIO:
+        raise CheckServiceError("Bankaya tahsile gönderme işlemi sadece PORTFOLIO durumundaki çeklerde yapılabilir.")
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Tahsil hareketi oluşmuş çek tekrar bankaya tahsile gönderilemez.")
+
+    bank_account = session.get(BankAccount, collection_bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Tahsilat banka hesabı bulunamadı. Hesap ID: {collection_bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabına çek gönderilemez.")
+
+    if bank_account.currency_code != check.currency_code:
+        raise CheckServiceError(
+            f"Çek para birimi ile banka hesabı para birimi aynı olmalıdır. "
+            f"Çek: {check.currency_code.value}, Hesap: {bank_account.currency_code.value}"
+        )
+
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_optional_text(description)
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    check.status = ReceivedCheckStatus.GIVEN_TO_BANK
+    check.collection_bank_account_id = bank_account.id
+
+    session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.SENT_TO_BANK_COLLECTION,
+        movement_date=sent_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.GIVEN_TO_BANK,
+        bank_account_id=bank_account.id,
+        counterparty_text=f"{bank_account.bank.name} / {bank_account.account_name}" if bank_account.bank else bank_account.account_name,
+        purpose_text="Alınan çek bankaya tahsile verildi.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_moved_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_moved_by_user_id,
+        action="RECEIVED_CHECK_SENT_TO_BANK",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek bankaya tahsile verildi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
         new_values=_received_check_to_dict(check),
     )
 
@@ -561,6 +758,9 @@ def collect_received_check(
     if check.status == ReceivedCheckStatus.ENDORSED:
         raise CheckServiceError("Ciro edilmiş çek tahsil edilemez.")
 
+    if check.status == ReceivedCheckStatus.DISCOUNTED:
+        raise CheckServiceError("İskontoya verilmiş çek tahsil edilemez.")
+
     if check.collected_transaction_id is not None:
         raise CheckServiceError("Bu çekin tahsilat hareketi zaten var.")
 
@@ -587,6 +787,7 @@ def collect_received_check(
     cleaned_description = _clean_optional_text(description)
 
     old_values = _received_check_to_dict(check)
+    previous_status = check.status
 
     try:
         collection_transaction = create_bank_transaction(
@@ -616,6 +817,24 @@ def collect_received_check(
     check.collected_transaction_id = collection_transaction.id
 
     session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.COLLECTED,
+        movement_date=collection_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.COLLECTED,
+        bank_account_id=bank_account.id,
+        counterparty_text=f"{bank_account.bank.name} / {bank_account.account_name}" if bank_account.bank else bank_account.account_name,
+        purpose_text="Alınan çek tahsil edildi.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        net_bank_amount=check.amount,
+        created_by_user_id=effective_collected_by_user_id,
+    )
 
     write_audit_log(
         session,

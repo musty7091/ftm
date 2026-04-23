@@ -3,7 +3,7 @@ from app.models.bank import Bank, BankAccount
 from app.models.bank_transaction import BankTransaction
 from app.models.bank_transfer import BankTransfer
 from app.models.business_partner import BusinessPartner
-from app.models.check import IssuedCheck, ReceivedCheck
+from app.models.check import IssuedCheck, ReceivedCheck, ReceivedCheckMovement
 from app.models.enums import (
     BankAccountType,
     BankTransactionStatus,
@@ -13,6 +13,7 @@ from app.models.enums import (
     FinancialSourceType,
     IssuedCheckStatus,
     PosSettlementStatus,
+    ReceivedCheckMovementType,
     ReceivedCheckStatus,
     TransactionDirection,
     UserRole,
@@ -30,6 +31,7 @@ __all__ = [
     "BusinessPartner",
     "IssuedCheck",
     "ReceivedCheck",
+    "ReceivedCheckMovement",
     "PosDevice",
     "PosSettlement",
     "BankAccountType",
@@ -40,6 +42,7 @@ __all__ = [
     "FinancialSourceType",
     "IssuedCheckStatus",
     "PosSettlementStatus",
+    "ReceivedCheckMovementType",
     "ReceivedCheckStatus",
     "TransactionDirection",
     "User",

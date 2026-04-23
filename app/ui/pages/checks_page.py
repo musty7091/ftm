@@ -3,10 +3,12 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QGridLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -15,6 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.db.session import session_scope
+from app.services.check_service import (
+    CheckServiceError,
+    collect_received_check,
+    create_issued_check,
+    create_received_check,
+    pay_issued_check,
+    send_received_check_to_bank,
+)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
 from app.ui.pages.checks.checks_data import (
@@ -24,6 +35,11 @@ from app.ui.pages.checks.checks_data import (
     load_checks_page_data,
     received_status_text,
 )
+from app.ui.pages.checks.issued_check_create_dialog import IssuedCheckCreateDialog
+from app.ui.pages.checks.issued_check_pay_dialog import IssuedCheckPayDialog
+from app.ui.pages.checks.received_check_collect_dialog import ReceivedCheckCollectDialog
+from app.ui.pages.checks.received_check_create_dialog import ReceivedCheckCreateDialog
+from app.ui.pages.checks.received_check_send_to_bank_dialog import ReceivedCheckSendToBankDialog
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
@@ -644,16 +660,24 @@ class ChecksPage(QWidget):
         description.setWordWrap(True)
 
         create_issued_button = QPushButton("Yazılan Çek Oluştur")
-        create_issued_button.setEnabled(False)
+        create_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
+        create_issued_button.clicked.connect(self._open_create_issued_check_dialog)
 
         pay_issued_button = QPushButton("Yazılan Çek Ödendi")
-        pay_issued_button.setEnabled(False)
+        pay_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        pay_issued_button.clicked.connect(self._open_pay_issued_check_dialog)
 
         create_received_button = QPushButton("Alınan Çek Oluştur")
-        create_received_button.setEnabled(False)
+        create_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
+        create_received_button.clicked.connect(self._open_create_received_check_dialog)
+
+        send_received_to_bank_button = QPushButton("Alınan Çeki Bankaya Tahsile Ver")
+        send_received_to_bank_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        send_received_to_bank_button.clicked.connect(self._open_send_received_check_to_bank_dialog)
 
         collect_received_button = QPushButton("Alınan Çek Tahsil Et")
-        collect_received_button.setEnabled(False)
+        collect_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        collect_received_button.clicked.connect(self._open_collect_received_check_dialog)
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -661,10 +685,321 @@ class ChecksPage(QWidget):
         layout.addWidget(create_issued_button)
         layout.addWidget(pay_issued_button)
         layout.addWidget(create_received_button)
+        layout.addWidget(send_received_to_bank_button)
         layout.addWidget(collect_received_button)
         layout.addStretch()
 
         return card
+
+    def _open_create_issued_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE", "DATA_ENTRY"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN, FINANCE veya DATA_ENTRY yetkisi gerekir.",
+            )
+            return
+
+        dialog = IssuedCheckCreateDialog(parent=self)
+
+        if not dialog.has_required_data():
+            QMessageBox.information(
+                self,
+                "Kayıt için gerekli tanım eksik",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                issued_check = create_issued_check(
+                    session,
+                    supplier_id=payload["supplier_id"],
+                    bank_account_id=payload["bank_account_id"],
+                    check_number=payload["check_number"],
+                    issue_date=payload["issue_date"],
+                    due_date=payload["due_date"],
+                    amount=payload["amount"],
+                    status=payload["status"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_issued_check_id = issued_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Yazılan çek oluşturuldu",
+                f"Yazılan çek başarıyla oluşturuldu. Çek ID: {created_issued_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Yazılan çek oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Yazılan çek oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_pay_issued_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = IssuedCheckPayDialog(parent=self)
+
+        if not dialog.has_payable_checks():
+            QMessageBox.information(
+                self,
+                "Ödenecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                issued_check = pay_issued_check(
+                    session,
+                    issued_check_id=payload["issued_check_id"],
+                    payment_date=payload["payment_date"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    paid_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                paid_issued_check_id = issued_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Yazılan çek ödendi",
+                f"Yazılan çek ödeme işlemi başarıyla tamamlandı. Çek ID: {paid_issued_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Yazılan çek ödenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Yazılan çek ödenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_create_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE", "DATA_ENTRY"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN, FINANCE veya DATA_ENTRY yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckCreateDialog(parent=self)
+
+        if not dialog.has_required_data():
+            QMessageBox.information(
+                self,
+                "Kayıt için gerekli tanım eksik",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = create_received_check(
+                    session,
+                    customer_id=payload["customer_id"],
+                    collection_bank_account_id=payload["collection_bank_account_id"],
+                    drawer_bank_name=payload["drawer_bank_name"],
+                    drawer_branch_name=payload["drawer_branch_name"],
+                    check_number=payload["check_number"],
+                    received_date=payload["received_date"],
+                    due_date=payload["due_date"],
+                    amount=payload["amount"],
+                    currency_code=payload["currency_code"],
+                    status=payload["status"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek oluşturuldu",
+                f"Alınan çek başarıyla oluşturuldu. Çek ID: {created_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_send_received_check_to_bank_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckSendToBankDialog(parent=self)
+
+        if not dialog.has_sendable_checks():
+            QMessageBox.information(
+                self,
+                "Gönderilecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = send_received_check_to_bank(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    collection_bank_account_id=payload["collection_bank_account_id"],
+                    sent_date=payload["sent_date"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    moved_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                changed_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Çek bankaya gönderildi",
+                f"Alınan çek bankaya tahsile başarıyla verildi. Çek ID: {changed_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Çek bankaya gönderilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Çek bankaya tahsile gönderilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_collect_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckCollectDialog(parent=self)
+
+        if not dialog.has_collectable_checks():
+            QMessageBox.information(
+                self,
+                "Tahsil edilecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = collect_received_check(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    collection_bank_account_id=payload["collection_bank_account_id"],
+                    collection_date=payload["collection_date"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    collected_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                collected_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek tahsil edildi",
+                f"Alınan çek tahsil işlemi başarıyla tamamlandı. Çek ID: {collected_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek tahsil edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek tahsil edilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
 
     def _build_admin_hint_card(self) -> QWidget:
         return InfoCard(
