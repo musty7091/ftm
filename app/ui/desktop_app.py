@@ -24,6 +24,7 @@ from app.ui.navigation import (
     username_to_text,
 )
 from app.ui.pages.banks_page import BanksPage
+from app.ui.pages.checks_page import ChecksPage
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.placeholder_page import AccessDeniedPage, PlaceholderPage
 from app.ui.pages.pos_page import PosPage
@@ -274,6 +275,16 @@ class FtmDesktopWindow(QMainWindow):
         if self.current_page == "POS Mutabakat":
             self.content_layout.addWidget(
                 PosPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if self.current_page == "Çek Yönetimi":
+            self.content_layout.addWidget(
+                ChecksPage(
                     current_user=self.current_user,
                 ),
                 1,

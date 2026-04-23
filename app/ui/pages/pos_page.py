@@ -64,7 +64,17 @@ class PosPage(QWidget):
         self.current_user = current_user
         self.current_role = _role_text(getattr(current_user, "role", None))
         self.data = load_pos_page_data()
+
         self.difference_settlement_by_row: dict[int, Any] = {}
+        self.settlement_by_row: dict[int, Any] = {}
+        self.selected_settlement: Any | None = None
+
+        self.settlement_table: QTableWidget | None = None
+        self.selected_record_info_label: QLabel | None = None
+        self.create_settlement_button: QPushButton | None = None
+        self.realize_settlement_button: QPushButton | None = None
+        self.cancel_settlement_button: QPushButton | None = None
+        self.history_button: QPushButton | None = None
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -75,6 +85,16 @@ class PosPage(QWidget):
     def _render_page(self) -> None:
         clear_layout(self.main_layout)
 
+        self.difference_settlement_by_row = {}
+        self.settlement_by_row = {}
+        self.selected_settlement = None
+        self.settlement_table = None
+        self.selected_record_info_label = None
+        self.create_settlement_button = None
+        self.realize_settlement_button = None
+        self.cancel_settlement_button = None
+        self.history_button = None
+
         if self.data.error_message:
             self.main_layout.addWidget(self._build_error_card())
             return
@@ -82,6 +102,7 @@ class PosPage(QWidget):
         self.main_layout.addLayout(self._build_summary_cards())
         self.main_layout.addWidget(self._build_settlement_table_card(), 1)
         self.main_layout.addLayout(self._build_action_area())
+        self._refresh_operation_controls()
 
     def _reload_page_data(self) -> None:
         self.data = load_pos_page_data()
@@ -275,6 +296,7 @@ class PosPage(QWidget):
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(11, QHeaderView.Fixed)
@@ -283,7 +305,9 @@ class PosPage(QWidget):
         table.cellClicked.connect(
             lambda row, column: self._handle_settlement_table_cell_clicked(row, column)
         )
+        table.itemSelectionChanged.connect(self._handle_settlement_table_selection_changed)
 
+        self.settlement_table = table
         self._fill_settlement_table(table)
 
         layout.addWidget(title)
@@ -294,9 +318,14 @@ class PosPage(QWidget):
 
     def _fill_settlement_table(self, table: QTableWidget) -> None:
         self.difference_settlement_by_row = {}
+        self.settlement_by_row = {}
+        self.selected_settlement = None
+
         table.setRowCount(len(self.data.pos_settlements))
 
         for row_index, settlement in enumerate(self.data.pos_settlements):
+            self.settlement_by_row[row_index] = settlement
+
             commission_text = (
                 f"{format_currency_amount(settlement.commission_amount, settlement.currency_code)} "
                 f"({format_rate_percent(settlement.commission_rate)})"
@@ -375,15 +404,102 @@ class PosPage(QWidget):
         table.setItem(row_index, 11, item)
 
     def _handle_settlement_table_cell_clicked(self, row: int, column: int) -> None:
-        if column != 11:
+        if column == 11:
+            settlement = self.difference_settlement_by_row.get(row)
+
+            if settlement is not None:
+                self._show_difference_detail(settlement)
+                return
+
+        settlement = self.settlement_by_row.get(row)
+        self.selected_settlement = settlement
+        self._refresh_operation_controls()
+
+    def _handle_settlement_table_selection_changed(self) -> None:
+        if self.settlement_table is None:
+            self.selected_settlement = None
+            self._refresh_operation_controls()
             return
 
-        settlement = self.difference_settlement_by_row.get(row)
+        selected_indexes = self.settlement_table.selectionModel().selectedRows()
 
-        if settlement is None:
+        if not selected_indexes:
+            self.selected_settlement = None
+            self._refresh_operation_controls()
             return
 
-        self._show_difference_detail(settlement)
+        selected_row_index = selected_indexes[0].row()
+        self.selected_settlement = self.settlement_by_row.get(selected_row_index)
+        self._refresh_operation_controls()
+
+    def _planned_settlements_for_action(self) -> list[Any]:
+        if self.selected_settlement is not None and self.selected_settlement.status == "PLANNED":
+            return [self.selected_settlement]
+
+        return [
+            settlement
+            for settlement in self.data.pos_settlements
+            if settlement.status == "PLANNED"
+        ]
+
+    def _refresh_operation_controls(self) -> None:
+        planned_settlements = [
+            settlement
+            for settlement in self.data.pos_settlements
+            if settlement.status == "PLANNED"
+        ]
+        has_any_planned = len(planned_settlements) > 0
+
+        if self.create_settlement_button is not None:
+            self.create_settlement_button.setEnabled(
+                self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"}
+            )
+
+        if self.realize_settlement_button is not None:
+            self.realize_settlement_button.setEnabled(
+                self.current_role in {"ADMIN", "FINANCE"} and has_any_planned
+            )
+
+            if self.selected_settlement is not None and self.selected_settlement.status == "PLANNED":
+                self.realize_settlement_button.setText("Seçili POS Yatışını Gerçekleştir")
+            else:
+                self.realize_settlement_button.setText("POS Yatışını Gerçekleştir")
+
+        if self.cancel_settlement_button is not None:
+            self.cancel_settlement_button.setEnabled(
+                self.current_role in {"ADMIN", "FINANCE"} and has_any_planned
+            )
+
+            if self.selected_settlement is not None and self.selected_settlement.status == "PLANNED":
+                self.cancel_settlement_button.setText("Seçili POS Kaydını İptal Et")
+            else:
+                self.cancel_settlement_button.setText("POS Kaydı İptal Et")
+
+        if self.history_button is not None:
+            self.history_button.setEnabled(True)
+
+        if self.selected_record_info_label is not None:
+            if self.selected_settlement is None:
+                self.selected_record_info_label.setText(
+                    "Seçili kayıt yok. Satır seçmezsen Gerçekleştir / İptal işlemleri "
+                    "uygun planlanan kayıt listesini açar."
+                )
+            elif self.selected_settlement.status == "PLANNED":
+                self.selected_record_info_label.setText(
+                    f"Seçili kayıt: #{self.selected_settlement.pos_settlement_id} / "
+                    f"{self.selected_settlement.pos_device_name} / "
+                    f"{status_text(self.selected_settlement.status)} / "
+                    f"{format_currency_amount(self.selected_settlement.net_amount, self.selected_settlement.currency_code)}. "
+                    f"İşlem butonları bu kayda odaklanır."
+                )
+            else:
+                self.selected_record_info_label.setText(
+                    f"Seçili kayıt: #{self.selected_settlement.pos_settlement_id} / "
+                    f"{self.selected_settlement.pos_device_name} / "
+                    f"{status_text(self.selected_settlement.status)}. "
+                    f"Bu kayıt planlanan durumda değil. Gerçekleştir / İptal butonları "
+                    f"uygun planlanan kayıt listesini açar."
+                )
 
     def _show_difference_detail(self, settlement: Any) -> None:
         expected_net_amount_text = format_currency_amount(
@@ -463,29 +579,31 @@ class PosPage(QWidget):
         description.setObjectName("MutedText")
         description.setWordWrap(True)
 
-        create_settlement_button = QPushButton("POS Yatış Kaydı Oluştur")
-        create_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
-        create_settlement_button.clicked.connect(self._open_create_pos_settlement_dialog)
+        self.create_settlement_button = QPushButton("POS Yatış Kaydı Oluştur")
+        self.create_settlement_button.clicked.connect(self._open_create_pos_settlement_dialog)
 
-        realize_settlement_button = QPushButton("POS Yatışını Gerçekleştir")
-        realize_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        realize_settlement_button.clicked.connect(self._open_realize_pos_settlement_dialog)
+        self.realize_settlement_button = QPushButton("POS Yatışını Gerçekleştir")
+        self.realize_settlement_button.clicked.connect(self._open_realize_pos_settlement_dialog)
 
-        cancel_settlement_button = QPushButton("POS Kaydı İptal Et")
-        cancel_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        cancel_settlement_button.clicked.connect(self._open_cancel_pos_settlement_dialog)
+        self.cancel_settlement_button = QPushButton("POS Kaydı İptal Et")
+        self.cancel_settlement_button.clicked.connect(self._open_cancel_pos_settlement_dialog)
 
-        history_button = QPushButton("Geçmiş İşlemler / Filtreler")
-        history_button.setEnabled(True)
-        history_button.clicked.connect(self._open_pos_history_dialog)
+        self.history_button = QPushButton("Geçmiş İşlemler / Filtreler")
+        self.history_button.clicked.connect(self._open_pos_history_dialog)
+
+        self.selected_record_info_label = QLabel("")
+        self.selected_record_info_label.setObjectName("MutedText")
+        self.selected_record_info_label.setWordWrap(True)
 
         layout.addWidget(title)
         layout.addWidget(description)
         layout.addSpacing(6)
-        layout.addWidget(create_settlement_button)
-        layout.addWidget(realize_settlement_button)
-        layout.addWidget(cancel_settlement_button)
-        layout.addWidget(history_button)
+        layout.addWidget(self.create_settlement_button)
+        layout.addWidget(self.realize_settlement_button)
+        layout.addWidget(self.cancel_settlement_button)
+        layout.addWidget(self.history_button)
+        layout.addSpacing(8)
+        layout.addWidget(self.selected_record_info_label)
 
         return card
 
@@ -648,11 +766,7 @@ class PosPage(QWidget):
             )
             return
 
-        planned_settlements = [
-            settlement
-            for settlement in self.data.pos_settlements
-            if settlement.status == "PLANNED"
-        ]
+        planned_settlements = self._planned_settlements_for_action()
 
         if not planned_settlements:
             QMessageBox.information(
@@ -718,11 +832,7 @@ class PosPage(QWidget):
             )
             return
 
-        planned_settlements = [
-            settlement
-            for settlement in self.data.pos_settlements
-            if settlement.status == "PLANNED"
-        ]
+        planned_settlements = self._planned_settlements_for_action()
 
         if not planned_settlements:
             QMessageBox.information(
