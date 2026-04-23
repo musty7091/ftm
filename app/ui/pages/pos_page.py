@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QGridLayout,
     QHeaderView,
@@ -15,8 +16,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.db.session import session_scope
+from app.services.pos_device_service import (
+    PosDeviceServiceError,
+    create_pos_device,
+    deactivate_pos_device,
+    reactivate_pos_device,
+    update_pos_device,
+)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
+from app.ui.pages.pos.pos_admin_data import load_admin_pos_bank_accounts
 from app.ui.pages.pos.pos_data import (
     build_currency_totals_text,
     format_currency_amount,
@@ -24,6 +34,9 @@ from app.ui.pages.pos.pos_data import (
     load_pos_page_data,
     status_text,
 )
+from app.ui.pages.pos.pos_device_dialog import PosDeviceDialog
+from app.ui.pages.pos.pos_device_toggle_dialog import PosDeviceToggleDialog
+from app.ui.pages.pos.pos_manage_dialog import PosManageDialog
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
@@ -481,8 +494,13 @@ class PosPage(QWidget):
         description.setWordWrap(True)
 
         add_device_button = QPushButton("POS Cihazı Ekle")
+        add_device_button.clicked.connect(self._open_create_pos_device_dialog)
+
         edit_device_button = QPushButton("POS Cihazı Düzenle")
+        edit_device_button.clicked.connect(self._open_manage_pos_device_dialog)
+
         deactivate_device_button = QPushButton("POS Cihazı Pasifleştir / Aktifleştir")
+        deactivate_device_button.clicked.connect(self._open_toggle_pos_device_dialog)
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -520,3 +538,204 @@ class PosPage(QWidget):
             "Bu rol için POS yönetim işlemleri sınırlıdır.",
             "Yetki sınırları arayüzde de korunur.",
         )
+
+    def _ensure_admin_role(self) -> bool:
+        if self.current_role != "ADMIN":
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN yetkisi gerekir.",
+            )
+            return False
+
+        return True
+
+    def _open_create_pos_device_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        active_bank_accounts = load_admin_pos_bank_accounts(include_passive=False)
+
+        if not active_bank_accounts:
+            QMessageBox.information(
+                self,
+                "Aktif banka hesabı yok",
+                "POS cihazı oluşturmak için önce en az bir aktif banka hesabı gerekir.",
+            )
+            return
+
+        dialog = PosDeviceDialog(
+            parent=self,
+            mode="create",
+            bank_accounts=active_bank_accounts,
+        )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                pos_device = create_pos_device(
+                    session,
+                    bank_account_id=payload["bank_account_id"],
+                    name=payload["name"],
+                    terminal_no=payload["terminal_no"],
+                    commission_rate=payload["commission_rate"],
+                    settlement_delay_days=payload["settlement_delay_days"],
+                    currency_code=payload["currency_code"],
+                    notes=payload["notes"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_pos_device_id = pos_device.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "POS cihazı oluşturuldu",
+                f"POS cihazı başarıyla oluşturuldu. POS ID: {created_pos_device_id}",
+            )
+
+        except PosDeviceServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS cihazı oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS cihazı oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_manage_pos_device_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        dialog = PosManageDialog(parent=self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+        edit_type = payload["edit_type"]
+        data = payload["data"]
+
+        try:
+            with session_scope() as session:
+                if edit_type != "POS_DEVICE":
+                    raise ValueError("Geçersiz POS düzenleme türü.")
+
+                pos_device = update_pos_device(
+                    session,
+                    pos_device_id=data["pos_device_id"],
+                    bank_account_id=data["bank_account_id"],
+                    name=data["name"],
+                    terminal_no=data["terminal_no"],
+                    commission_rate=data["commission_rate"],
+                    settlement_delay_days=data["settlement_delay_days"],
+                    currency_code=data["currency_code"],
+                    notes=data["notes"],
+                    is_active=data["is_active"],
+                    updated_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                updated_pos_device_id = pos_device.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "POS cihazı güncellendi",
+                f"POS cihazı başarıyla güncellendi. POS ID: {updated_pos_device_id}",
+            )
+
+        except PosDeviceServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS cihazı güncellenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS cihazı güncellenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_toggle_pos_device_dialog(self) -> None:
+        if not self._ensure_admin_role():
+            return
+
+        dialog = PosDeviceToggleDialog(parent=self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        operation_type = payload["operation_type"]
+        pos_device_id = payload["pos_device_id"]
+        reason = payload["reason"]
+
+        try:
+            with session_scope() as session:
+                if operation_type == "DEACTIVATE":
+                    pos_device = deactivate_pos_device(
+                        session,
+                        pos_device_id=pos_device_id,
+                        deactivate_reason=reason,
+                        deactivated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    changed_pos_device_id = pos_device.id
+                    success_title = "POS cihazı pasifleştirildi"
+                    success_message = (
+                        f"POS cihazı başarıyla pasifleştirildi. POS ID: {changed_pos_device_id}"
+                    )
+
+                elif operation_type == "REACTIVATE":
+                    pos_device = reactivate_pos_device(
+                        session,
+                        pos_device_id=pos_device_id,
+                        reactivate_reason=reason,
+                        reactivated_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+
+                    changed_pos_device_id = pos_device.id
+                    success_title = "POS cihazı aktifleştirildi"
+                    success_message = (
+                        f"POS cihazı başarıyla aktifleştirildi. POS ID: {changed_pos_device_id}"
+                    )
+
+                else:
+                    raise ValueError("Geçersiz POS durum işlemi.")
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                success_title,
+                success_message,
+            )
+
+        except PosDeviceServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS cihazı durumu değiştirilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS cihazı durumu değiştirilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
