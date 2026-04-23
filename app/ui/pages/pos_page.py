@@ -24,9 +24,16 @@ from app.services.pos_device_service import (
     reactivate_pos_device,
     update_pos_device,
 )
+from app.services.pos_settlement_service import (
+    PosSettlementServiceError,
+    cancel_pos_settlement,
+    create_pos_settlement,
+    realize_pos_settlement,
+)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
 from app.ui.pages.pos.pos_admin_data import load_admin_pos_bank_accounts
+from app.ui.pages.pos.pos_cancel_dialog import PosCancelDialog
 from app.ui.pages.pos.pos_data import (
     build_currency_totals_text,
     format_currency_amount,
@@ -36,7 +43,10 @@ from app.ui.pages.pos.pos_data import (
 )
 from app.ui.pages.pos.pos_device_dialog import PosDeviceDialog
 from app.ui.pages.pos.pos_device_toggle_dialog import PosDeviceToggleDialog
+from app.ui.pages.pos.pos_history_dialog import PosHistoryDialog
 from app.ui.pages.pos.pos_manage_dialog import PosManageDialog
+from app.ui.pages.pos.pos_realize_dialog import PosRealizeDialog
+from app.ui.pages.pos.pos_settlement_dialog import PosSettlementDialog
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
@@ -238,7 +248,7 @@ class PosPage(QWidget):
         subtitle = QLabel(
             f"Bu listede planlanan kayıtlar, fark olan kayıtlar ve son "
             f"{self.data.visible_realized_days} gün içinde gerçekleşen POS yatışları görünür. "
-            f"Eski gerçekleşen kayıtlar ileride Geçmiş İşlemler filtresinden çağrılacak."
+            f"Eski gerçekleşen kayıtlar Geçmiş İşlemler / Filtreler alanından çağrılabilir."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -455,16 +465,19 @@ class PosPage(QWidget):
 
         create_settlement_button = QPushButton("POS Yatış Kaydı Oluştur")
         create_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
+        create_settlement_button.clicked.connect(self._open_create_pos_settlement_dialog)
 
         realize_settlement_button = QPushButton("POS Yatışını Gerçekleştir")
         realize_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        realize_settlement_button.clicked.connect(self._open_realize_pos_settlement_dialog)
 
         cancel_settlement_button = QPushButton("POS Kaydı İptal Et")
         cancel_settlement_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        cancel_settlement_button.clicked.connect(self._open_cancel_pos_settlement_dialog)
 
         history_button = QPushButton("Geçmiş İşlemler / Filtreler")
-        history_button.setEnabled(False)
-        history_button.setToolTip("Bu alan bir sonraki adımda tarih ve durum filtresiyle aktif edilecek.")
+        history_button.setEnabled(True)
+        history_button.clicked.connect(self._open_pos_history_dialog)
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -549,6 +562,218 @@ class PosPage(QWidget):
             return False
 
         return True
+
+    def _open_pos_history_dialog(self) -> None:
+        dialog = PosHistoryDialog(
+            parent=self,
+            pos_devices=self.data.pos_devices,
+        )
+        dialog.exec()
+
+    def _open_create_pos_settlement_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE", "DATA_ENTRY"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN, FINANCE veya DATA_ENTRY yetkisi gerekir.",
+            )
+            return
+
+        active_pos_devices = [
+            pos_device
+            for pos_device in self.data.pos_devices
+            if pos_device.is_active
+        ]
+
+        if not active_pos_devices:
+            QMessageBox.information(
+                self,
+                "Aktif POS cihazı yok",
+                "POS yatış kaydı oluşturmak için en az bir aktif POS cihazı gerekir.",
+            )
+            return
+
+        dialog = PosSettlementDialog(
+            parent=self,
+            pos_devices=active_pos_devices,
+        )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                pos_settlement = create_pos_settlement(
+                    session,
+                    pos_device_id=payload["pos_device_id"],
+                    transaction_date=payload["transaction_date"],
+                    gross_amount=payload["gross_amount"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    created_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                created_pos_settlement_id = pos_settlement.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "POS yatış kaydı oluşturuldu",
+                f"POS yatış kaydı başarıyla oluşturuldu. Kayıt ID: {created_pos_settlement_id}",
+            )
+
+        except PosSettlementServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS yatış kaydı oluşturulamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS yatış kaydı oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_realize_pos_settlement_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        planned_settlements = [
+            settlement
+            for settlement in self.data.pos_settlements
+            if settlement.status == "PLANNED"
+        ]
+
+        if not planned_settlements:
+            QMessageBox.information(
+                self,
+                "Planlanan kayıt yok",
+                "Gerçekleştirilecek planlanan POS yatış kaydı bulunamadı.",
+            )
+            return
+
+        dialog = PosRealizeDialog(
+            parent=self,
+            planned_settlements=planned_settlements,
+        )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                pos_settlement = realize_pos_settlement(
+                    session,
+                    pos_settlement_id=payload["pos_settlement_id"],
+                    realized_settlement_date=payload["realized_settlement_date"],
+                    actual_net_amount=payload["actual_net_amount"],
+                    difference_reason=payload["difference_reason"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    realized_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                realized_settlement_id = pos_settlement.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "POS yatışı işlendi",
+                f"POS yatış kaydı işlendi. Kayıt ID: {realized_settlement_id}",
+            )
+
+        except PosSettlementServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS yatışı işlenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS yatışı işlenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_cancel_pos_settlement_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        planned_settlements = [
+            settlement
+            for settlement in self.data.pos_settlements
+            if settlement.status == "PLANNED"
+        ]
+
+        if not planned_settlements:
+            QMessageBox.information(
+                self,
+                "Planlanan kayıt yok",
+                "İptal edilecek planlanan POS kaydı bulunamadı.",
+            )
+            return
+
+        dialog = PosCancelDialog(
+            parent=self,
+            planned_settlements=planned_settlements,
+        )
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                pos_settlement = cancel_pos_settlement(
+                    session,
+                    pos_settlement_id=payload["pos_settlement_id"],
+                    cancel_reason=payload["cancel_reason"],
+                    cancelled_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                cancelled_settlement_id = pos_settlement.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "POS kaydı iptal edildi",
+                f"POS kaydı başarıyla iptal edildi. Kayıt ID: {cancelled_settlement_id}",
+            )
+
+        except PosSettlementServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "POS kaydı iptal edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"POS kaydı iptal edilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
 
     def _open_create_pos_device_dialog(self) -> None:
         if not self._ensure_admin_role():

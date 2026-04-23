@@ -22,10 +22,18 @@ class DashboardData:
     health_fail_count: int
     bank_accounts: list[dict[str, Any]]
     pending_pos_count: int
+    pending_pos_currency_totals: dict[str, Decimal]
     pending_issued_check_amount: Decimal
     pending_received_check_amount: Decimal
     permission_denied_count: int
     error_message: str | None = None
+
+
+def _enum_value(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+
+    return str(value or "").strip().upper()
 
 
 def load_dashboard_data() -> DashboardData:
@@ -71,6 +79,27 @@ def load_dashboard_data() -> DashboardData:
                 or 0
             )
 
+            pending_pos_currency_rows = session.execute(
+                select(
+                    PosSettlement.currency_code,
+                    func.coalesce(func.sum(PosSettlement.net_amount), Decimal("0.00")),
+                )
+                .where(PosSettlement.status == PosSettlementStatus.PLANNED)
+                .group_by(PosSettlement.currency_code)
+            ).all()
+
+            pending_pos_currency_totals: dict[str, Decimal] = {}
+
+            for currency_code, total_amount in pending_pos_currency_rows:
+                normalized_currency_code = _enum_value(currency_code)
+
+                if not normalized_currency_code:
+                    continue
+
+                pending_pos_currency_totals[normalized_currency_code] = decimal_or_zero(
+                    total_amount
+                )
+
             pending_issued_check_amount = decimal_or_zero(
                 session.execute(
                     select(func.coalesce(func.sum(IssuedCheck.amount), Decimal("0.00"))).where(
@@ -112,6 +141,7 @@ def load_dashboard_data() -> DashboardData:
                 health_fail_count=health_report.failed_count,
                 bank_accounts=bank_accounts,
                 pending_pos_count=pending_pos_count,
+                pending_pos_currency_totals=pending_pos_currency_totals,
                 pending_issued_check_amount=pending_issued_check_amount,
                 pending_received_check_amount=pending_received_check_amount,
                 permission_denied_count=permission_denied_count,
@@ -125,6 +155,7 @@ def load_dashboard_data() -> DashboardData:
             health_fail_count=1,
             bank_accounts=[],
             pending_pos_count=0,
+            pending_pos_currency_totals={},
             pending_issued_check_amount=Decimal("0.00"),
             pending_received_check_amount=Decimal("0.00"),
             permission_denied_count=0,

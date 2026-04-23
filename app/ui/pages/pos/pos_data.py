@@ -73,6 +73,14 @@ class PosPageData:
     error_message: str | None = None
 
 
+@dataclass
+class PosHistoryData:
+    pos_settlements: list[PosSettlementRow]
+    total_count: int
+    currency_totals: dict[str, Any]
+    error_message: str | None = None
+
+
 def _enum_value(value: Any) -> str:
     if hasattr(value, "value"):
         return str(value.value)
@@ -153,6 +161,41 @@ def build_currency_totals_text(currency_totals: dict[str, Any]) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _build_pos_settlement_row(
+    settlement: PosSettlement,
+    pos_device: PosDevice,
+    bank_account: BankAccount,
+    bank: Bank,
+) -> PosSettlementRow:
+    return PosSettlementRow(
+        pos_settlement_id=settlement.id,
+        pos_device_id=pos_device.id,
+        pos_device_name=pos_device.name,
+        terminal_no=pos_device.terminal_no,
+        bank_name=bank.name,
+        bank_account_name=bank_account.account_name,
+        transaction_date_text=settlement.transaction_date.strftime("%d.%m.%Y"),
+        expected_settlement_date_text=settlement.expected_settlement_date.strftime("%d.%m.%Y"),
+        realized_settlement_date_text=(
+            settlement.realized_settlement_date.strftime("%d.%m.%Y")
+            if settlement.realized_settlement_date
+            else None
+        ),
+        gross_amount=settlement.gross_amount,
+        commission_rate=settlement.commission_rate,
+        commission_amount=settlement.commission_amount,
+        net_amount=settlement.net_amount,
+        actual_net_amount=settlement.actual_net_amount,
+        difference_amount=settlement.difference_amount,
+        difference_reason=settlement.difference_reason,
+        currency_code=_enum_value(settlement.currency_code),
+        status=_enum_value(settlement.status),
+        bank_transaction_id=settlement.bank_transaction_id,
+        reference_no=settlement.reference_no,
+        description=settlement.description,
+    )
 
 
 def load_pos_page_data() -> PosPageData:
@@ -254,32 +297,11 @@ def load_pos_page_data() -> PosPageData:
                     mismatch_settlement_count += 1
 
                 pos_settlements.append(
-                    PosSettlementRow(
-                        pos_settlement_id=settlement.id,
-                        pos_device_id=pos_device.id,
-                        pos_device_name=pos_device.name,
-                        terminal_no=pos_device.terminal_no,
-                        bank_name=bank.name,
-                        bank_account_name=bank_account.account_name,
-                        transaction_date_text=settlement.transaction_date.strftime("%d.%m.%Y"),
-                        expected_settlement_date_text=settlement.expected_settlement_date.strftime("%d.%m.%Y"),
-                        realized_settlement_date_text=(
-                            settlement.realized_settlement_date.strftime("%d.%m.%Y")
-                            if settlement.realized_settlement_date
-                            else None
-                        ),
-                        gross_amount=settlement.gross_amount,
-                        commission_rate=settlement.commission_rate,
-                        commission_amount=settlement.commission_amount,
-                        net_amount=settlement.net_amount,
-                        actual_net_amount=settlement.actual_net_amount,
-                        difference_amount=settlement.difference_amount,
-                        difference_reason=settlement.difference_reason,
-                        currency_code=currency_code,
-                        status=status_value,
-                        bank_transaction_id=settlement.bank_transaction_id,
-                        reference_no=settlement.reference_no,
-                        description=settlement.description,
+                    _build_pos_settlement_row(
+                        settlement=settlement,
+                        pos_device=pos_device,
+                        bank_account=bank_account,
+                        bank=bank,
                     )
                 )
 
@@ -310,5 +332,91 @@ def load_pos_page_data() -> PosPageData:
             planned_currency_totals={},
             realized_currency_totals={},
             visible_realized_days=RECENT_REALIZED_DAYS,
+            error_message=str(exc),
+        )
+
+
+def load_pos_history_data(
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    status: str | None = None,
+    pos_device_id: int | None = None,
+    bank_id: int | None = None,
+    limit: int = 1000,
+) -> PosHistoryData:
+    try:
+        with session_scope() as session:
+            statement = (
+                select(PosSettlement, PosDevice, BankAccount, Bank)
+                .join(PosDevice, PosSettlement.pos_device_id == PosDevice.id)
+                .join(BankAccount, PosDevice.bank_account_id == BankAccount.id)
+                .join(Bank, BankAccount.bank_id == Bank.id)
+            )
+
+            if start_date is not None:
+                statement = statement.where(PosSettlement.transaction_date >= start_date)
+
+            if end_date is not None:
+                statement = statement.where(PosSettlement.transaction_date <= end_date)
+
+            if status:
+                normalized_status = str(status).strip().upper()
+
+                if normalized_status in {
+                    PosSettlementStatus.PLANNED.value,
+                    PosSettlementStatus.REALIZED.value,
+                    PosSettlementStatus.CANCELLED.value,
+                    PosSettlementStatus.MISMATCH.value,
+                }:
+                    statement = statement.where(PosSettlement.status == PosSettlementStatus(normalized_status))
+
+            if pos_device_id is not None:
+                statement = statement.where(PosSettlement.pos_device_id == pos_device_id)
+
+            if bank_id is not None:
+                statement = statement.where(Bank.id == bank_id)
+
+            statement = statement.order_by(
+                PosSettlement.transaction_date.desc(),
+                PosSettlement.id.desc(),
+            ).limit(limit)
+
+            settlement_rows = session.execute(statement).all()
+
+            pos_settlements: list[PosSettlementRow] = []
+            currency_totals: dict[str, Any] = {}
+
+            for settlement, pos_device, bank_account, bank in settlement_rows:
+                row = _build_pos_settlement_row(
+                    settlement=settlement,
+                    pos_device=pos_device,
+                    bank_account=bank_account,
+                    bank=bank,
+                )
+
+                pos_settlements.append(row)
+
+                total_amount = (
+                    settlement.actual_net_amount
+                    if settlement.actual_net_amount is not None
+                    else settlement.net_amount
+                )
+
+                currency_totals[row.currency_code] = decimal_or_zero(
+                    currency_totals.get(row.currency_code, "0.00")
+                ) + decimal_or_zero(total_amount)
+
+            return PosHistoryData(
+                pos_settlements=pos_settlements,
+                total_count=len(pos_settlements),
+                currency_totals=currency_totals,
+            )
+
+    except Exception as exc:
+        return PosHistoryData(
+            pos_settlements=[],
+            total_count=0,
+            currency_totals={},
             error_message=str(exc),
         )

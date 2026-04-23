@@ -96,6 +96,22 @@ class DashboardPage(QWidget):
 
         return "\n".join(lines)
 
+    def _build_pending_pos_text(self) -> str:
+        lines = [f"{tr_number(self.dashboard_data.pending_pos_count)} kayıt"]
+
+        if not self.dashboard_data.pending_pos_currency_totals:
+            return "\n".join(lines)
+
+        for currency_code in sorted(
+            self.dashboard_data.pending_pos_currency_totals.keys(),
+            key=_currency_sort_key,
+        ):
+            lines.append(
+                f"{currency_code}: {_format_currency_amount(self.dashboard_data.pending_pos_currency_totals[currency_code], currency_code)}"
+            )
+
+        return "\n".join(lines)
+
     def _build_summary_cards(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(16)
@@ -107,6 +123,7 @@ class DashboardPage(QWidget):
         )
 
         bank_currency_totals_text = self._build_currency_totals_text()
+        pending_pos_text = self._build_pending_pos_text()
 
         cards = [
             SummaryCard(
@@ -123,8 +140,8 @@ class DashboardPage(QWidget):
             ),
             SummaryCard(
                 "BEKLEYEN POS",
-                tr_number(self.dashboard_data.pending_pos_count),
-                "Henüz gerçekleşmemiş POS yatış kaydı",
+                pending_pos_text,
+                "Henüz gerçekleşmemiş POS yatış kaydı ve beklenen net tutar",
                 "normal",
             ),
             SummaryCard(
