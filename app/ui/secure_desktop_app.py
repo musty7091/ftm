@@ -156,9 +156,9 @@ def main() -> None:
         sys.exit(0)
 
     window = FtmDesktopWindow(
-        current_user=login_dialog.authenticated_user,
+    current_user=login_dialog.authenticated_user,
     )
-    window.show()
+    window.showMaximized()
 
     sys.exit(app.exec())
 

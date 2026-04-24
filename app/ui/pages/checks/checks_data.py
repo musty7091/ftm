@@ -26,7 +26,6 @@ RECEIVED_PENDING_STATUSES = {
     ReceivedCheckStatus.PORTFOLIO.value,
     ReceivedCheckStatus.GIVEN_TO_BANK.value,
     ReceivedCheckStatus.IN_COLLECTION.value,
-    ReceivedCheckStatus.ENDORSED.value,
 }
 
 RECEIVED_PROBLEM_STATUSES = {
@@ -175,6 +174,9 @@ def received_status_text(status: str) -> str:
 
     if normalized_status == "ENDORSED":
         return "Ciro Edildi"
+
+    if normalized_status == "DISCOUNTED":
+        return "İskontoya Verildi"
 
     if normalized_status == "CANCELLED":
         return "İptal"

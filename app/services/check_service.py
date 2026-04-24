@@ -26,7 +26,7 @@ from app.services.bank_transaction_service import (
 )
 from app.services.permission_audit_service import require_permission_with_audit
 from app.services.permission_service import Permission, PermissionServiceError
-from app.utils.decimal_utils import money
+from app.utils.decimal_utils import money, rate
 
 
 class CheckServiceError(ValueError):
@@ -58,6 +58,18 @@ def _validate_positive_money(value: object, field_name: str) -> Decimal:
         raise CheckServiceError(f"{field_name} sıfırdan büyük olmalıdır.")
 
     return cleaned_amount
+
+
+def _validate_discount_rate(value: object, field_name: str = "İskonto oranı") -> Decimal:
+    cleaned_rate = rate(value, field_name=field_name)
+
+    if cleaned_rate <= Decimal("0.000000"):
+        raise CheckServiceError(f"{field_name} sıfırdan büyük olmalıdır.")
+
+    if cleaned_rate >= Decimal("100.000000"):
+        raise CheckServiceError(f"{field_name} 100'den küçük olmalıdır.")
+
+    return cleaned_rate
 
 
 def _validate_due_date(*, start_date: date, due_date: date, start_field_name: str) -> None:
@@ -850,6 +862,250 @@ def collect_received_check(
     return check
 
 
+def discount_received_check(
+    session: Session,
+    *,
+    received_check_id: int,
+    bank_account_id: int,
+    discount_date: date,
+    discount_rate: object,
+    reference_no: Optional[str],
+    description: Optional[str],
+    discounted_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_DISCOUNT,
+        attempted_action="RECEIVED_CHECK_DISCOUNT",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "bank_account_id": bank_account_id,
+            "discount_date": discount_date.isoformat(),
+            "discount_rate": str(discount_rate),
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_discounted_by_user_id = (
+        permission_user_id if permission_user_id is not None else discounted_by_user_id
+    )
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+    }:
+        raise CheckServiceError(
+            "İskontoya verme işlemi sadece PORTFOLIO, GIVEN_TO_BANK veya IN_COLLECTION durumundaki çeklerde yapılabilir."
+        )
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek iskonto edilemez.")
+
+    bank_account = session.get(BankAccount, bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Banka hesabı bulunamadı. Hesap ID: {bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabına iskonto girişi yapılamaz.")
+
+    if bank_account.currency_code != check.currency_code:
+        raise CheckServiceError(
+            f"Çek para birimi ile banka hesabı para birimi aynı olmalıdır. "
+            f"Çek: {check.currency_code.value}, Hesap: {bank_account.currency_code.value}"
+        )
+
+    cleaned_discount_rate = _validate_discount_rate(discount_rate)
+    discount_expense_amount = money(
+        (check.amount * cleaned_discount_rate) / Decimal("100.000000"),
+        field_name="İskonto masrafı",
+    )
+    net_bank_amount = money(
+        check.amount - discount_expense_amount,
+        field_name="Net banka girişi",
+    )
+
+    if discount_expense_amount <= Decimal("0.00"):
+        raise CheckServiceError("İskonto masrafı sıfırdan büyük olmalıdır.")
+
+    if net_bank_amount <= Decimal("0.00"):
+        raise CheckServiceError("Net banka girişi sıfırdan büyük olmalıdır.")
+
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_optional_text(description)
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    try:
+        discount_transaction = create_bank_transaction(
+            session,
+            bank_account_id=bank_account.id,
+            transaction_date=discount_date,
+            value_date=discount_date,
+            direction=TransactionDirection.IN,
+            status=BankTransactionStatus.REALIZED,
+            amount=net_bank_amount,
+            currency_code=check.currency_code,
+            source_type=FinancialSourceType.RECEIVED_CHECK,
+            source_id=check.id,
+            reference_no=cleaned_reference_no,
+            description=(
+                f"Alınan çek iskonto/kırdırma net banka girişi: {check.check_number} "
+                f"(Brüt: {check.amount} {check.currency_code.value}, "
+                f"İskonto: {discount_expense_amount} {check.currency_code.value}, "
+                f"Oran: {cleaned_discount_rate}%)"
+                if not cleaned_description
+                else (
+                    f"Alınan çek iskonto/kırdırma net banka girişi: {check.check_number} "
+                    f"(Brüt: {check.amount} {check.currency_code.value}, "
+                    f"İskonto: {discount_expense_amount} {check.currency_code.value}, "
+                    f"Oran: {cleaned_discount_rate}%) - {cleaned_description}"
+                )
+            ),
+            created_by_user_id=effective_discounted_by_user_id,
+        )
+    except BankTransactionServiceError as exc:
+        raise CheckServiceError(f"Çek iskonto banka hareketi oluşturulamadı: {exc}") from exc
+
+    check.status = ReceivedCheckStatus.DISCOUNTED
+    check.collection_bank_account_id = bank_account.id
+    check.collected_transaction_id = discount_transaction.id
+
+    session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.DISCOUNTED,
+        movement_date=discount_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.DISCOUNTED,
+        bank_account_id=bank_account.id,
+        counterparty_text=f"{bank_account.bank.name} / {bank_account.account_name}" if bank_account.bank else bank_account.account_name,
+        purpose_text="Alınan çek iskonto/kırdırma yoluyla bankaya aktarıldı.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        discount_rate=cleaned_discount_rate,
+        discount_expense_amount=discount_expense_amount,
+        net_bank_amount=net_bank_amount,
+        created_by_user_id=effective_discounted_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_discounted_by_user_id,
+        action="RECEIVED_CHECK_DISCOUNTED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=(
+            f"Alınan çek iskonto/kırdırma işlemine alındı: "
+            f"{check.check_number} / Brüt: {check.amount} {check.currency_code.value} / "
+            f"Masraf: {discount_expense_amount} {check.currency_code.value} / "
+            f"Net: {net_bank_amount} {check.currency_code.value}"
+        ),
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
+def endorse_received_check(
+    session: Session,
+    *,
+    received_check_id: int,
+    endorse_date: date,
+    counterparty_text: str,
+    reference_no: Optional[str],
+    description: Optional[str],
+    endorsed_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_ENDORSE,
+        attempted_action="RECEIVED_CHECK_ENDORSE",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "endorse_date": endorse_date.isoformat(),
+            "counterparty_text": counterparty_text,
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_endorsed_by_user_id = permission_user_id if permission_user_id is not None else endorsed_by_user_id
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+    }:
+        raise CheckServiceError(
+            "Ciro işlemi sadece PORTFOLIO, GIVEN_TO_BANK veya IN_COLLECTION durumundaki çeklerde yapılabilir."
+        )
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek ciro edilemez.")
+
+    cleaned_counterparty_text = _clean_required_text(counterparty_text, "Ciro edilen kişi/kurum")
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_optional_text(description)
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    check.status = ReceivedCheckStatus.ENDORSED
+
+    session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.ENDORSED,
+        movement_date=endorse_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.ENDORSED,
+        bank_account_id=None,
+        counterparty_text=cleaned_counterparty_text,
+        purpose_text="Alınan çek kullanıldı / ciro edildi.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_endorsed_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_endorsed_by_user_id,
+        action="RECEIVED_CHECK_ENDORSED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek ciro edildi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
 def cancel_issued_check(
     session: Session,
     *,
@@ -871,6 +1127,8 @@ def cancel_issued_check(
 
     effective_cancelled_by_user_id = permission_user_id if permission_user_id is not None else cancelled_by_user_id
 
+    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+
     check = session.get(IssuedCheck, issued_check_id)
 
     if check is None:
@@ -879,10 +1137,11 @@ def cancel_issued_check(
     if check.status == IssuedCheckStatus.CANCELLED:
         raise CheckServiceError("Bu çek zaten iptal edilmiş.")
 
-    if check.status == IssuedCheckStatus.PAID or check.paid_transaction_id is not None:
-        raise CheckServiceError("Ödenmiş çek bu işlemle iptal edilemez.")
+    if check.status == IssuedCheckStatus.PAID:
+        raise CheckServiceError("Ödenmiş çek iptal edilemez.")
 
-    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+    if check.paid_transaction_id is not None:
+        raise CheckServiceError("Banka ödeme hareketi oluşmuş çek iptal edilemez.")
 
     old_values = _issued_check_to_dict(check)
 
@@ -928,6 +1187,8 @@ def cancel_received_check(
 
     effective_cancelled_by_user_id = permission_user_id if permission_user_id is not None else cancelled_by_user_id
 
+    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+
     check = session.get(ReceivedCheck, received_check_id)
 
     if check is None:
@@ -936,12 +1197,18 @@ def cancel_received_check(
     if check.status == ReceivedCheckStatus.CANCELLED:
         raise CheckServiceError("Bu çek zaten iptal edilmiş.")
 
-    if check.status == ReceivedCheckStatus.COLLECTED or check.collected_transaction_id is not None:
-        raise CheckServiceError("Tahsil edilmiş çek bu işlemle iptal edilemez.")
+    if check.status in {
+        ReceivedCheckStatus.COLLECTED,
+        ReceivedCheckStatus.ENDORSED,
+        ReceivedCheckStatus.DISCOUNTED,
+    }:
+        raise CheckServiceError("Tahsil edilmiş, ciro edilmiş veya iskonto edilmiş çek iptal edilemez.")
 
-    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek iptal edilemez.")
 
     old_values = _received_check_to_dict(check)
+    previous_status = check.status
 
     check.status = ReceivedCheckStatus.CANCELLED
     check.cancelled_by_user_id = effective_cancelled_by_user_id
@@ -949,6 +1216,23 @@ def cancel_received_check(
     check.cancel_reason = cleaned_cancel_reason
 
     session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.CANCELLED,
+        movement_date=date.today(),
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.CANCELLED,
+        bank_account_id=check.collection_bank_account_id,
+        counterparty_text=None,
+        purpose_text="Alınan çek iptal edildi.",
+        reference_no=check.reference_no,
+        description=cleaned_cancel_reason,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_cancelled_by_user_id,
+    )
 
     write_audit_log(
         session,

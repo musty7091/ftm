@@ -6,8 +6,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -23,24 +25,80 @@ from app.services.check_service import (
     collect_received_check,
     create_issued_check,
     create_received_check,
+    discount_received_check,
     pay_issued_check,
     send_received_check_to_bank,
 )
-from app.ui.components.info_card import InfoCard
-from app.ui.components.summary_card import SummaryCard
+
+try:
+    from app.services.check_service import endorse_received_check
+except ImportError:
+    endorse_received_check = None
+
 from app.ui.pages.checks.checks_data import (
     build_currency_totals_text,
     format_currency_amount,
     issued_status_text,
     load_checks_page_data,
-    received_status_text,
+    received_status_text as base_received_status_text,
 )
 from app.ui.pages.checks.issued_check_create_dialog import IssuedCheckCreateDialog
 from app.ui.pages.checks.issued_check_pay_dialog import IssuedCheckPayDialog
 from app.ui.pages.checks.received_check_collect_dialog import ReceivedCheckCollectDialog
 from app.ui.pages.checks.received_check_create_dialog import ReceivedCheckCreateDialog
+from app.ui.pages.checks.received_check_discount_dialog import ReceivedCheckDiscountDialog
 from app.ui.pages.checks.received_check_send_to_bank_dialog import ReceivedCheckSendToBankDialog
+
+try:
+    from app.ui.pages.checks.received_check_endorse_dialog import ReceivedCheckEndorseDialog
+except ImportError:
+    ReceivedCheckEndorseDialog = None
+
 from app.ui.ui_helpers import clear_layout, tr_number
+
+
+CHECK_LIST_PAGE_SIZE = 25
+
+
+ISSUED_OPEN_STATUSES = {
+    "PREPARED",
+    "GIVEN",
+}
+
+ISSUED_PROBLEM_STATUSES = {
+    "RISK",
+}
+
+ISSUED_CLOSED_STATUSES = {
+    "PAID",
+    "CANCELLED",
+}
+
+RECEIVED_OPEN_STATUSES = {
+    "PORTFOLIO",
+    "GIVEN_TO_BANK",
+    "IN_COLLECTION",
+}
+
+RECEIVED_PROBLEM_STATUSES = {
+    "BOUNCED",
+    "RETURNED",
+}
+
+RECEIVED_CLOSED_STATUSES = {
+    "COLLECTED",
+    "ENDORSED",
+    "DISCOUNTED",
+    "CANCELLED",
+}
+
+
+FILTER_OPTIONS = [
+    ("OPEN", "Açık Çekler"),
+    ("PROBLEM", "Problemli"),
+    ("CLOSED", "Sonuçlananlar"),
+    ("ALL", "Tümü"),
+]
 
 
 def _role_text(role: Any) -> str:
@@ -48,6 +106,19 @@ def _role_text(role: Any) -> str:
         return str(role.value)
 
     return str(role or "").strip().upper()
+
+
+def _normalize_search_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def received_status_text(status: str) -> str:
+    normalized_status = str(status or "").strip().upper()
+
+    if normalized_status == "DISCOUNTED":
+        return "İskontoya Verildi"
+
+    return base_received_status_text(status)
 
 
 class ChecksPage(QWidget):
@@ -60,7 +131,7 @@ class ChecksPage(QWidget):
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(16)
+        self.main_layout.setSpacing(8)
 
         self._render_page()
 
@@ -83,8 +154,8 @@ class ChecksPage(QWidget):
         card.setObjectName("CardRisk")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
 
         title = QLabel("Çek verileri okunamadı")
         title.setObjectName("SectionTitle")
@@ -100,28 +171,28 @@ class ChecksPage(QWidget):
 
     def _build_summary_cards(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 2)
-        grid.setColumnStretch(2, 1)
+        grid.setSpacing(10)
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 3)
+        grid.setColumnStretch(2, 2)
 
         grid.addWidget(
-            SummaryCard(
-                "YAZILAN ÇEK YÜKÜ",
-                build_currency_totals_text(self.data.pending_issued_currency_totals),
-                f"{tr_number(self.data.pending_issued_count)} açık yazılan çek",
-                "risk",
+            self._build_simple_summary_card(
+                title="YAZILAN ÇEK YÜKÜ",
+                value=build_currency_totals_text(self.data.pending_issued_currency_totals),
+                hint=f"{tr_number(self.data.pending_issued_count)} açık yazılan çek",
+                card_type="risk",
             ),
             0,
             0,
         )
 
         grid.addWidget(
-            SummaryCard(
-                "ALINAN ÇEK PORTFÖYÜ",
-                build_currency_totals_text(self.data.pending_received_currency_totals),
-                f"{tr_number(self.data.pending_received_count)} açık alınan çek",
-                "success",
+            self._build_simple_summary_card(
+                title="ALINAN ÇEK PORTFÖYÜ",
+                value=build_currency_totals_text(self.data.pending_received_currency_totals),
+                hint=f"{tr_number(self.data.pending_received_count)} açık alınan çek",
+                card_type="success",
             ),
             0,
             1,
@@ -135,93 +206,154 @@ class ChecksPage(QWidget):
 
         return grid
 
+    def _build_simple_summary_card(
+        self,
+        *,
+        title: str,
+        value: str,
+        hint: str,
+        card_type: str,
+    ) -> QWidget:
+        card = QFrame()
+
+        if card_type == "risk":
+            card.setObjectName("CardRisk")
+        elif card_type == "success":
+            card.setObjectName("CardSuccess")
+        else:
+            card.setObjectName("Card")
+
+        card.setMinimumHeight(124)
+        card.setMaximumHeight(132)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(6)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("CardTitle")
+
+        value_label = QLabel(value)
+        value_label.setObjectName("CardValue")
+        value_label.setWordWrap(True)
+
+        hint_label = QLabel(hint)
+        hint_label.setObjectName("CardHint")
+        hint_label.setWordWrap(True)
+
+        layout.addWidget(title_label)
+        layout.addStretch(1)
+        layout.addWidget(value_label)
+        layout.addWidget(hint_label)
+
+        return card
+
     def _build_check_status_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
-        card.setMinimumHeight(145)
+        card.setMinimumHeight(124)
+        card.setMaximumHeight(132)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
         title = QLabel("ÇEK DURUMU")
         title.setObjectName("CardTitle")
 
         metrics_layout = QGridLayout()
-        metrics_layout.setSpacing(10)
+        metrics_layout.setContentsMargins(0, 0, 0, 0)
+        metrics_layout.setHorizontalSpacing(14)
+        metrics_layout.setVerticalSpacing(8)
+        metrics_layout.setColumnStretch(0, 1)
+        metrics_layout.setColumnStretch(1, 1)
 
         metrics_layout.addWidget(
-            self._build_compact_metric(
-                "7 GÜN / YAZILAN",
+            self._build_status_line(
+                "7 Gün / Yazılan",
                 tr_number(self.data.issued_due_soon_count),
-                "Vade",
             ),
             0,
             0,
         )
 
         metrics_layout.addWidget(
-            self._build_compact_metric(
-                "7 GÜN / ALINAN",
+            self._build_status_line(
+                "7 Gün / Alınan",
                 tr_number(self.data.received_due_soon_count),
-                "Vade",
             ),
             0,
             1,
         )
 
         metrics_layout.addWidget(
-            self._build_compact_metric(
-                "YAZILAN RİSK",
+            self._build_status_line(
+                "Yazılan Risk",
                 tr_number(self.data.issued_problem_count),
-                "Kayıt",
             ),
             1,
             0,
         )
 
         metrics_layout.addWidget(
-            self._build_compact_metric(
-                "ALINAN PROBLEM",
+            self._build_status_line(
+                "Alınan Problem",
                 tr_number(self.data.received_problem_count),
-                "Kayıt",
             ),
             1,
             1,
         )
-
-        hint = QLabel("Yaklaşan vade ve problemli çek kayıt özeti.")
-        hint.setObjectName("CardHint")
-        hint.setWordWrap(True)
 
         layout.addWidget(title)
         layout.addLayout(metrics_layout)
-        layout.addWidget(hint)
 
         return card
 
-    def _build_compact_metric(self, title_text: str, value_text: str, hint_text: str) -> QWidget:
-        box = QWidget()
+    def _build_status_line(self, title_text: str, value_text: str) -> QWidget:
+        box = QFrame()
+        box.setStyleSheet(
+            """
+            QFrame {
+                background-color: rgba(15, 23, 42, 0.32);
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                border-radius: 8px;
+            }
+            """
+        )
 
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout = QHBoxLayout(box)
+        layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(8)
 
         title = QLabel(title_text)
-        title.setObjectName("CardTitle")
-        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet(
+            """
+            QLabel {
+                color: #bfdbfe;
+                font-size: 11px;
+                font-weight: 700;
+                border: none;
+                background-color: transparent;
+            }
+            """
+        )
 
         value = QLabel(value_text)
-        value.setObjectName("CardValue")
-        value.setAlignment(Qt.AlignCenter)
+        value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        value.setStyleSheet(
+            """
+            QLabel {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: 800;
+                border: none;
+                background-color: transparent;
+            }
+            """
+        )
 
-        hint = QLabel(hint_text)
-        hint.setObjectName("CardHint")
-        hint.setAlignment(Qt.AlignCenter)
-
-        layout.addWidget(title)
+        layout.addWidget(title, 1)
         layout.addWidget(value)
-        layout.addWidget(hint)
 
         return box
 
@@ -230,8 +362,8 @@ class ChecksPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         tabs = QTabWidget()
         tabs.setObjectName("ChecksTabs")
@@ -253,9 +385,9 @@ class ChecksPage(QWidget):
                 border-bottom: none;
                 border-top-left-radius: 10px;
                 border-top-right-radius: 10px;
-                padding: 10px 18px;
-                margin-right: 6px;
-                min-width: 120px;
+                padding: 8px 16px;
+                margin-right: 5px;
+                min-width: 112px;
                 font-weight: 600;
             }
 
@@ -283,8 +415,8 @@ class ChecksPage(QWidget):
         page = QWidget()
 
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 10, 8, 8)
-        layout.setSpacing(16)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(10)
 
         layout.addLayout(self._build_overview_status_cards())
         layout.addLayout(self._build_overview_action_area())
@@ -294,7 +426,7 @@ class ChecksPage(QWidget):
 
     def _build_overview_status_cards(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(10)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
@@ -345,11 +477,12 @@ class ChecksPage(QWidget):
     def _build_small_status_card(self, title_text: str, value_text: str, hint_text: str) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
-        card.setMinimumHeight(115)
+        card.setMinimumHeight(88)
+        card.setMaximumHeight(96)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(3)
 
         title = QLabel(title_text)
         title.setObjectName("CardTitle")
@@ -369,7 +502,7 @@ class ChecksPage(QWidget):
 
     def _build_overview_action_area(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(10)
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
 
@@ -382,12 +515,60 @@ class ChecksPage(QWidget):
 
         return grid
 
+    def _build_admin_hint_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        title = QLabel("Admin Yetkisi")
+        title.setObjectName("SectionTitle")
+
+        body = QLabel(
+            "Bu kullanıcı ADMIN rolünde olduğu için çek oluşturma, ödeme, tahsil, bankaya gönderme, "
+            "ciro ve iskonto/kırdırma işlemlerinin tamamını çalıştırabilir."
+        )
+        body.setObjectName("MutedText")
+        body.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addStretch()
+
+        return card
+
+    def _build_role_hint_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        title = QLabel("Rol Bilgisi")
+        title.setObjectName("SectionTitle")
+
+        body = QLabel(
+            f"Aktif rol: {self.current_role or '-'}\n"
+            "Butonlar role göre açılır veya pasif kalır. Yetkisiz denemeler servis tarafında da engellenir."
+        )
+        body.setObjectName("MutedText")
+        body.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addStretch()
+
+        return card
+
     def _build_issued_checks_tab(self) -> QWidget:
         page = QWidget()
 
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 10, 8, 8)
-        layout.setSpacing(14)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
         layout.addWidget(
             self._build_issued_checks_card(
@@ -404,8 +585,8 @@ class ChecksPage(QWidget):
         page = QWidget()
 
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 10, 8, 8)
-        layout.setSpacing(14)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
         layout.addWidget(
             self._build_received_checks_card(
@@ -421,10 +602,235 @@ class ChecksPage(QWidget):
     def _configure_table_for_compact_view(self, table: QTableWidget) -> None:
         table.setWordWrap(False)
         table.setTextElideMode(Qt.ElideRight)
-        table.verticalHeader().setDefaultSectionSize(34)
-        table.verticalHeader().setMinimumSectionSize(30)
-        table.horizontalHeader().setMinimumSectionSize(70)
+        table.verticalHeader().setDefaultSectionSize(30)
+        table.verticalHeader().setMinimumSectionSize(28)
+        table.horizontalHeader().setMinimumSectionSize(60)
         table.horizontalHeader().setStretchLastSection(False)
+
+    def _filter_issued_rows(self, rows: list[Any], filter_key: str) -> list[Any]:
+        normalized_filter_key = str(filter_key or "OPEN").strip().upper()
+
+        if normalized_filter_key == "OPEN":
+            return [
+                issued_check
+                for issued_check in rows
+                if str(issued_check.status or "").strip().upper() in ISSUED_OPEN_STATUSES
+            ]
+
+        if normalized_filter_key == "PROBLEM":
+            return [
+                issued_check
+                for issued_check in rows
+                if str(issued_check.status or "").strip().upper() in ISSUED_PROBLEM_STATUSES
+            ]
+
+        if normalized_filter_key == "CLOSED":
+            return [
+                issued_check
+                for issued_check in rows
+                if str(issued_check.status or "").strip().upper() in ISSUED_CLOSED_STATUSES
+            ]
+
+        return rows
+
+    def _filter_received_rows(self, rows: list[Any], filter_key: str) -> list[Any]:
+        normalized_filter_key = str(filter_key or "OPEN").strip().upper()
+
+        if normalized_filter_key == "OPEN":
+            return [
+                received_check
+                for received_check in rows
+                if str(received_check.status or "").strip().upper() in RECEIVED_OPEN_STATUSES
+            ]
+
+        if normalized_filter_key == "PROBLEM":
+            return [
+                received_check
+                for received_check in rows
+                if str(received_check.status or "").strip().upper() in RECEIVED_PROBLEM_STATUSES
+            ]
+
+        if normalized_filter_key == "CLOSED":
+            return [
+                received_check
+                for received_check in rows
+                if str(received_check.status or "").strip().upper() in RECEIVED_CLOSED_STATUSES
+            ]
+
+        return rows
+
+    def _issued_row_matches_search(self, issued_check: Any, search_text: str) -> bool:
+        normalized_search_text = _normalize_search_text(search_text)
+
+        if not normalized_search_text:
+            return True
+
+        searchable_text = " | ".join(
+            [
+                str(issued_check.issued_check_id),
+                issued_check.supplier_name,
+                issued_check.bank_name,
+                issued_check.bank_account_name,
+                issued_check.check_number,
+                issued_check.issue_date_text,
+                issued_check.due_date_text,
+                format_currency_amount(issued_check.amount, issued_check.currency_code),
+                issued_status_text(issued_check.status),
+                issued_check.reference_no or "",
+                issued_check.description or "",
+            ]
+        )
+
+        return normalized_search_text in _normalize_search_text(searchable_text)
+
+    def _received_row_matches_search(self, received_check: Any, search_text: str) -> bool:
+        normalized_search_text = _normalize_search_text(search_text)
+
+        if not normalized_search_text:
+            return True
+
+        collection_text = (
+            f"{received_check.collection_bank_name} / {received_check.collection_bank_account_name}"
+            if received_check.collection_bank_name and received_check.collection_bank_account_name
+            else ""
+        )
+
+        searchable_text = " | ".join(
+            [
+                str(received_check.received_check_id),
+                received_check.customer_name,
+                received_check.drawer_bank_name,
+                collection_text,
+                received_check.check_number,
+                received_check.received_date_text,
+                received_check.due_date_text,
+                format_currency_amount(received_check.amount, received_check.currency_code),
+                received_status_text(received_check.status),
+                received_check.reference_no or "",
+                received_check.description or "",
+            ]
+        )
+
+        return normalized_search_text in _normalize_search_text(searchable_text)
+
+    def _style_filter_buttons(self, buttons: dict[str, QPushButton], active_key: str) -> None:
+        normalized_active_key = str(active_key or "OPEN").strip().upper()
+
+        for filter_key, button in buttons.items():
+            if filter_key == normalized_active_key:
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: #2563eb;
+                        color: #ffffff;
+                        border: 1px solid #3b82f6;
+                        border-radius: 9px;
+                        padding: 6px 12px;
+                        font-weight: 700;
+                    }
+
+                    QPushButton:hover {
+                        background-color: #1d4ed8;
+                    }
+                    """
+                )
+            else:
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: #172033;
+                        color: #cbd5e1;
+                        border: 1px solid #24324a;
+                        border-radius: 9px;
+                        padding: 6px 12px;
+                        font-weight: 600;
+                    }
+
+                    QPushButton:hover {
+                        background-color: #1e293b;
+                        color: #ffffff;
+                    }
+                    """
+                )
+
+    def _build_table_tools_layout(
+        self,
+        *,
+        search_input: QLineEdit,
+        filter_buttons: dict[str, QPushButton],
+        result_label: QLabel,
+        previous_button: QPushButton,
+        next_button: QPushButton,
+    ) -> QVBoxLayout:
+        tools_layout = QVBoxLayout()
+        tools_layout.setContentsMargins(0, 0, 0, 0)
+        tools_layout.setSpacing(7)
+
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+
+        search_label = QLabel("Ara")
+        search_label.setObjectName("MutedText")
+
+        search_input.setMinimumHeight(34)
+        search_input.setPlaceholderText("Müşteri / tedarikçi / çek no / banka / referans ara")
+
+        result_label.setObjectName("MutedText")
+        result_label.setWordWrap(True)
+
+        search_row.addWidget(search_label)
+        search_row.addWidget(search_input, 1)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(7)
+
+        for filter_key, filter_text in FILTER_OPTIONS:
+            button = QPushButton(filter_text)
+            button.setMinimumHeight(32)
+            filter_buttons[filter_key] = button
+            filter_row.addWidget(button)
+
+        filter_row.addStretch(1)
+
+        previous_button.setText("Önceki")
+        next_button.setText("Sonraki")
+        previous_button.setMinimumHeight(32)
+        next_button.setMinimumHeight(32)
+
+        previous_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #172033;
+                color: #cbd5e1;
+                border: 1px solid #24324a;
+                border-radius: 9px;
+                padding: 6px 12px;
+                font-weight: 600;
+            }
+
+            QPushButton:hover {
+                background-color: #1e293b;
+                color: #ffffff;
+            }
+
+            QPushButton:disabled {
+                background-color: #111827;
+                color: #475569;
+                border: 1px solid #1e293b;
+            }
+            """
+        )
+
+        next_button.setStyleSheet(previous_button.styleSheet())
+
+        filter_row.addWidget(previous_button)
+        filter_row.addWidget(next_button)
+
+        tools_layout.addLayout(search_row)
+        tools_layout.addLayout(filter_row)
+        tools_layout.addWidget(result_label)
+
+        return tools_layout
 
     def _build_issued_checks_card(
         self,
@@ -437,8 +843,8 @@ class ChecksPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(9)
 
         title_label = QLabel(title)
         title_label.setObjectName("SectionTitle")
@@ -446,6 +852,20 @@ class ChecksPage(QWidget):
         subtitle_label = QLabel(subtitle)
         subtitle_label.setObjectName("MutedText")
         subtitle_label.setWordWrap(True)
+
+        search_input = QLineEdit()
+        result_label = QLabel("")
+        previous_button = QPushButton()
+        next_button = QPushButton()
+        filter_buttons: dict[str, QPushButton] = {}
+
+        tools_layout = self._build_table_tools_layout(
+            search_input=search_input,
+            filter_buttons=filter_buttons,
+            result_label=result_label,
+            previous_button=previous_button,
+            next_button=next_button,
+        )
 
         table = QTableWidget()
         table.setColumnCount(9)
@@ -466,17 +886,97 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setMinimumHeight(420)
+        table.setMinimumHeight(260)
 
         self._configure_table_for_compact_view(table)
-        self._fill_issued_checks_table(table, rows)
         self._configure_issued_table_columns(table)
+
+        state = {
+            "filter_key": "OPEN",
+            "page_index": 0,
+        }
+
+        def refresh_table() -> None:
+            filter_key = str(state["filter_key"])
+            page_index = int(state["page_index"])
+            search_text = search_input.text().strip()
+
+            filtered_by_status_rows = self._filter_issued_rows(rows, filter_key)
+            filtered_rows = [
+                issued_check
+                for issued_check in filtered_by_status_rows
+                if self._issued_row_matches_search(issued_check, search_text)
+            ]
+
+            total_count = len(filtered_rows)
+            max_page_index = max(0, (total_count - 1) // CHECK_LIST_PAGE_SIZE)
+
+            if page_index > max_page_index:
+                page_index = max_page_index
+                state["page_index"] = page_index
+
+            start_index = page_index * CHECK_LIST_PAGE_SIZE
+            end_index = min(start_index + CHECK_LIST_PAGE_SIZE, total_count)
+            visible_rows = filtered_rows[start_index:end_index]
+
+            self._fill_issued_checks_table(table, visible_rows)
+            self._style_filter_buttons(filter_buttons, filter_key)
+
+            previous_button.setEnabled(page_index > 0)
+            next_button.setEnabled(end_index < total_count)
+
+            if total_count == 0:
+                result_label.setText(
+                    f"{self._filter_label(filter_key)}: filtreye uygun kayıt bulunamadı. "
+                    f"Toplam kayıt: {len(rows)}"
+                )
+            else:
+                result_label.setText(
+                    f"{self._filter_label(filter_key)}: {start_index + 1}-{end_index} / "
+                    f"{total_count} kayıt gösteriliyor. Toplam kayıt: {len(rows)}"
+                )
+
+        def change_filter(filter_key: str) -> None:
+            state["filter_key"] = filter_key
+            state["page_index"] = 0
+            refresh_table()
+
+        def search_changed() -> None:
+            state["page_index"] = 0
+            refresh_table()
+
+        def previous_page() -> None:
+            state["page_index"] = max(0, int(state["page_index"]) - 1)
+            refresh_table()
+
+        def next_page() -> None:
+            state["page_index"] = int(state["page_index"]) + 1
+            refresh_table()
+
+        for filter_key, button in filter_buttons.items():
+            button.clicked.connect(lambda checked=False, selected_filter_key=filter_key: change_filter(selected_filter_key))
+
+        search_input.textChanged.connect(lambda _text: search_changed())
+        previous_button.clicked.connect(previous_page)
+        next_button.clicked.connect(next_page)
+
+        refresh_table()
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
+        layout.addLayout(tools_layout)
         layout.addWidget(table, 1)
 
         return card
+
+    def _filter_label(self, filter_key: str) -> str:
+        normalized_filter_key = str(filter_key or "OPEN").strip().upper()
+
+        for option_key, option_text in FILTER_OPTIONS:
+            if option_key == normalized_filter_key:
+                return option_text
+
+        return "Tümü"
 
     def _configure_issued_table_columns(self, table: QTableWidget) -> None:
         header = table.horizontalHeader()
@@ -491,7 +991,7 @@ class ChecksPage(QWidget):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
 
-        table.setColumnWidth(2, 260)
+        table.setColumnWidth(2, 240)
 
     def _fill_issued_checks_table(self, table: QTableWidget, rows: list[Any]) -> None:
         table.setRowCount(len(rows))
@@ -516,6 +1016,8 @@ class ChecksPage(QWidget):
                     item.setForeground(QColor("#fbbf24"))
                 elif issued_check.status == "CANCELLED":
                     item.setForeground(QColor("#64748b"))
+                elif issued_check.status == "PAID":
+                    item.setForeground(QColor("#22c55e"))
                 else:
                     item.setForeground(QColor("#e5e7eb"))
 
@@ -540,8 +1042,8 @@ class ChecksPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(9)
 
         title_label = QLabel(title)
         title_label.setObjectName("SectionTitle")
@@ -549,6 +1051,20 @@ class ChecksPage(QWidget):
         subtitle_label = QLabel(subtitle)
         subtitle_label.setObjectName("MutedText")
         subtitle_label.setWordWrap(True)
+
+        search_input = QLineEdit()
+        result_label = QLabel("")
+        previous_button = QPushButton()
+        next_button = QPushButton()
+        filter_buttons: dict[str, QPushButton] = {}
+
+        tools_layout = self._build_table_tools_layout(
+            search_input=search_input,
+            filter_buttons=filter_buttons,
+            result_label=result_label,
+            previous_button=previous_button,
+            next_button=next_button,
+        )
 
         table = QTableWidget()
         table.setColumnCount(10)
@@ -570,14 +1086,85 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setMinimumHeight(420)
+        table.setMinimumHeight(260)
 
         self._configure_table_for_compact_view(table)
-        self._fill_received_checks_table(table, rows)
         self._configure_received_table_columns(table)
+
+        state = {
+            "filter_key": "OPEN",
+            "page_index": 0,
+        }
+
+        def refresh_table() -> None:
+            filter_key = str(state["filter_key"])
+            page_index = int(state["page_index"])
+            search_text = search_input.text().strip()
+
+            filtered_by_status_rows = self._filter_received_rows(rows, filter_key)
+            filtered_rows = [
+                received_check
+                for received_check in filtered_by_status_rows
+                if self._received_row_matches_search(received_check, search_text)
+            ]
+
+            total_count = len(filtered_rows)
+            max_page_index = max(0, (total_count - 1) // CHECK_LIST_PAGE_SIZE)
+
+            if page_index > max_page_index:
+                page_index = max_page_index
+                state["page_index"] = page_index
+
+            start_index = page_index * CHECK_LIST_PAGE_SIZE
+            end_index = min(start_index + CHECK_LIST_PAGE_SIZE, total_count)
+            visible_rows = filtered_rows[start_index:end_index]
+
+            self._fill_received_checks_table(table, visible_rows)
+            self._style_filter_buttons(filter_buttons, filter_key)
+
+            previous_button.setEnabled(page_index > 0)
+            next_button.setEnabled(end_index < total_count)
+
+            if total_count == 0:
+                result_label.setText(
+                    f"{self._filter_label(filter_key)}: filtreye uygun kayıt bulunamadı. "
+                    f"Toplam kayıt: {len(rows)}"
+                )
+            else:
+                result_label.setText(
+                    f"{self._filter_label(filter_key)}: {start_index + 1}-{end_index} / "
+                    f"{total_count} kayıt gösteriliyor. Toplam kayıt: {len(rows)}"
+                )
+
+        def change_filter(filter_key: str) -> None:
+            state["filter_key"] = filter_key
+            state["page_index"] = 0
+            refresh_table()
+
+        def search_changed() -> None:
+            state["page_index"] = 0
+            refresh_table()
+
+        def previous_page() -> None:
+            state["page_index"] = max(0, int(state["page_index"]) - 1)
+            refresh_table()
+
+        def next_page() -> None:
+            state["page_index"] = int(state["page_index"]) + 1
+            refresh_table()
+
+        for filter_key, button in filter_buttons.items():
+            button.clicked.connect(lambda checked=False, selected_filter_key=filter_key: change_filter(selected_filter_key))
+
+        search_input.textChanged.connect(lambda _text: search_changed())
+        previous_button.clicked.connect(previous_page)
+        next_button.clicked.connect(next_page)
+
+        refresh_table()
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
+        layout.addLayout(tools_layout)
         layout.addWidget(table, 1)
 
         return card
@@ -596,7 +1183,7 @@ class ChecksPage(QWidget):
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
 
-        table.setColumnWidth(3, 280)
+        table.setColumnWidth(3, 260)
 
     def _fill_received_checks_table(self, table: QTableWidget, rows: list[Any]) -> None:
         table.setRowCount(len(rows))
@@ -628,6 +1215,12 @@ class ChecksPage(QWidget):
                     item.setForeground(QColor("#fbbf24"))
                 elif received_check.status == "CANCELLED":
                     item.setForeground(QColor("#64748b"))
+                elif received_check.status == "DISCOUNTED":
+                    item.setForeground(QColor("#38bdf8"))
+                elif received_check.status == "COLLECTED":
+                    item.setForeground(QColor("#22c55e"))
+                elif received_check.status == "ENDORSED":
+                    item.setForeground(QColor("#e5e7eb"))
                 else:
                     item.setForeground(QColor("#e5e7eb"))
 
@@ -646,8 +1239,8 @@ class ChecksPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
 
         title = QLabel("Operasyon Alanı")
         title.setObjectName("SectionTitle")
@@ -675,17 +1268,27 @@ class ChecksPage(QWidget):
         send_received_to_bank_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         send_received_to_bank_button.clicked.connect(self._open_send_received_check_to_bank_dialog)
 
+        endorse_received_button = QPushButton("Alınan Çeki Kullan / Ciro Et")
+        endorse_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        endorse_received_button.clicked.connect(self._open_endorse_received_check_dialog)
+
+        discount_received_button = QPushButton("Alınan Çeki İskontoya Ver / Kırdır")
+        discount_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        discount_received_button.clicked.connect(self._open_discount_received_check_dialog)
+
         collect_received_button = QPushButton("Alınan Çek Tahsil Et")
         collect_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         collect_received_button.clicked.connect(self._open_collect_received_check_dialog)
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(8)
+        layout.addSpacing(6)
         layout.addWidget(create_issued_button)
         layout.addWidget(pay_issued_button)
         layout.addWidget(create_received_button)
         layout.addWidget(send_received_to_bank_button)
+        layout.addWidget(endorse_received_button)
+        layout.addWidget(discount_received_button)
         layout.addWidget(collect_received_button)
         layout.addStretch()
 
@@ -941,6 +1544,137 @@ class ChecksPage(QWidget):
                 f"Çek bankaya tahsile gönderilirken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
+    def _open_endorse_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        if ReceivedCheckEndorseDialog is None or endorse_received_check is None:
+            QMessageBox.information(
+                self,
+                "Ciro modülü hazır değil",
+                "Alınan çeki kullan / ciro et dialog dosyası veya servis fonksiyonu bulunamadı.",
+            )
+            return
+
+        dialog = ReceivedCheckEndorseDialog(parent=self)
+
+        if hasattr(dialog, "has_endorsable_checks") and not dialog.has_endorsable_checks():
+            QMessageBox.information(
+                self,
+                "Ciro edilecek çek bulunamadı",
+                dialog.get_missing_data_message()
+                if hasattr(dialog, "get_missing_data_message")
+                else "Ciro edilebilir alınan çek kaydı bulunamadı.",
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = endorse_received_check(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    endorse_date=payload["endorse_date"],
+                    counterparty_text=payload["counterparty_text"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    endorsed_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                endorsed_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek ciro edildi",
+                f"Alınan çek kullan / ciro et işlemi başarıyla tamamlandı. Çek ID: {endorsed_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek ciro edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek ciro edilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_discount_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckDiscountDialog(parent=self)
+
+        if not dialog.has_discountable_checks():
+            QMessageBox.information(
+                self,
+                "İskontoya verilecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = discount_received_check(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    bank_account_id=payload["bank_account_id"],
+                    discount_date=payload["discount_date"],
+                    discount_rate=payload["discount_rate"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    discounted_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                discounted_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek iskonto edildi",
+                f"Alınan çek iskonto/kırdırma işlemi başarıyla tamamlandı. Çek ID: {discounted_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek iskonto edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek iskonto/kırdırma işleminde beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
     def _open_collect_received_check_dialog(self) -> None:
         if self.current_role not in {"ADMIN", "FINANCE"}:
             QMessageBox.warning(
@@ -1000,38 +1734,3 @@ class ChecksPage(QWidget):
                 "Beklenmeyen hata",
                 f"Alınan çek tahsil edilirken beklenmeyen bir hata oluştu:\n{exc}",
             )
-
-    def _build_admin_hint_card(self) -> QWidget:
-        return InfoCard(
-            "Yönetim Hazırlığı",
-            "Bu giriş sekmesi artık sadece özet ve operasyon alanına odaklanır. Çek listeleri ayrı sekmelere taşındı.",
-            "Kalabalık çıktı, kontrol kaldı.",
-        )
-
-    def _build_role_hint_card(self) -> QWidget:
-        if self.current_role == "VIEWER":
-            return InfoCard(
-                "Görüntüleme Modu",
-                "Bu kullanıcı çek kayıtlarını görüntüleyebilir. İşlem butonları sonraki adımda yetki bazlı açılacak.",
-                "Şimdilik sadece seyirci koltuğu.",
-            )
-
-        if self.current_role == "FINANCE":
-            return InfoCard(
-                "Finans Operasyon Modu",
-                "Bu kullanıcı çek ödeme ve tahsil işlemlerini sonraki adımda kullanabilecek.",
-                "Çek sahnesi hazırlanıyor.",
-            )
-
-        if self.current_role == "DATA_ENTRY":
-            return InfoCard(
-                "Veri Giriş Modu",
-                "Bu kullanıcı çek kayıtlarını girecek; ödeme ve tahsil işlemleri finans yetkisinde olacak.",
-                "Veriyi girer, kasayı devirmez.",
-            )
-
-        return InfoCard(
-            "Sınırlı Erişim",
-            "Bu rol için çek yönetim işlemleri sınırlıdır.",
-            "Yetki sınırları burada da korunur.",
-        )
