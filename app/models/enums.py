@@ -56,6 +56,7 @@ class BusinessPartnerType(StrEnum):
     CUSTOMER = "CUSTOMER"
     SUPPLIER = "SUPPLIER"
     BOTH = "BOTH"
+    OTHER = "OTHER"
 
 
 class IssuedCheckStatus(StrEnum):

@@ -74,8 +74,9 @@ class ReceivedCheckCreateDialog(QDialog):
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Müşteriden alınan yeni çeki sisteme kaydeder. "
-            "İlk durum, para birimi ve isteğe bağlı tahsil hesabı bilgisiyle kayıt oluşturulur."
+            "Müşteriden, hem müşteri hem tedarikçi olan taraftan veya diğer tipindeki nadir işlem tarafından "
+            "alınan yeni çeki sisteme kaydeder. İlk durum, para birimi ve isteğe bağlı tahsil hesabı bilgisiyle "
+            "kayıt oluşturulur."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -89,7 +90,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.customer_combo = QComboBox()
         self.customer_combo.setMinimumHeight(38)
         self._fill_customer_combo()
-        form_layout.addRow("Müşteri cari", self.customer_combo)
+        form_layout.addRow("Müşteri kartı", self.customer_combo)
 
         self.drawer_bank_name_input = QLineEdit()
         self.drawer_bank_name_input.setMinimumHeight(42)
@@ -203,6 +204,7 @@ class ReceivedCheckCreateDialog(QDialog):
                         [
                             BusinessPartnerType.CUSTOMER,
                             BusinessPartnerType.BOTH,
+                            BusinessPartnerType.OTHER,
                         ]
                     ),
                 )
@@ -302,7 +304,10 @@ class ReceivedCheckCreateDialog(QDialog):
 
     def get_missing_data_message(self) -> str:
         if not self.customers:
-            return "Alınan çek kaydı açılabilmesi için en az bir aktif müşteri cari kartı bulunmalıdır."
+            return (
+                "Alınan çek kaydı açılabilmesi için en az bir aktif müşteri / "
+                "müşteri & tedarikçi / diğer kartı bulunmalıdır."
+            )
 
         return ""
 
@@ -312,12 +317,12 @@ class ReceivedCheckCreateDialog(QDialog):
         try:
             normalized_customer_id = int(customer_id)
         except (TypeError, ValueError) as exc:
-            raise ValueError("Geçerli bir müşteri cari seçilmelidir.") from exc
+            raise ValueError("Geçerli bir müşteri kartı seçilmelidir.") from exc
 
         customer = self.customer_lookup.get(normalized_customer_id)
 
         if customer is None:
-            raise ValueError("Seçilen müşteri cari bulunamadı.")
+            raise ValueError("Seçilen müşteri kartı bulunamadı.")
 
         return customer
 

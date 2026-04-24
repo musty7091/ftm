@@ -74,8 +74,9 @@ class IssuedCheckCreateDialog(QDialog):
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Tedarikçiye yazılan yeni çeki sisteme kaydeder. "
-            "Kayıt servis katmanındaki yetki ve audit kontrollerinden geçerek oluşturulur."
+            "Tedarikçiye, hem müşteri hem tedarikçi olan tarafa veya diğer tipindeki nadir işlem tarafına "
+            "yazılan yeni çeki sisteme kaydeder. Kayıt servis katmanındaki yetki ve audit kontrollerinden "
+            "geçerek oluşturulur."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -89,7 +90,7 @@ class IssuedCheckCreateDialog(QDialog):
         self.supplier_combo = QComboBox()
         self.supplier_combo.setMinimumHeight(38)
         self._fill_supplier_combo()
-        form_layout.addRow("Tedarikçi cari", self.supplier_combo)
+        form_layout.addRow("Tedarikçi kartı", self.supplier_combo)
 
         self.bank_account_combo = QComboBox()
         self.bank_account_combo.setMinimumHeight(38)
@@ -183,6 +184,7 @@ class IssuedCheckCreateDialog(QDialog):
                         [
                             BusinessPartnerType.SUPPLIER,
                             BusinessPartnerType.BOTH,
+                            BusinessPartnerType.OTHER,
                         ]
                     ),
                 )
@@ -266,7 +268,7 @@ class IssuedCheckCreateDialog(QDialog):
         missing_items: list[str] = []
 
         if not self.suppliers:
-            missing_items.append("aktif tedarikçi cari kartı")
+            missing_items.append("aktif tedarikçi / müşteri & tedarikçi / diğer kartı")
 
         if not self.bank_accounts:
             missing_items.append("aktif banka hesabı")
@@ -286,12 +288,12 @@ class IssuedCheckCreateDialog(QDialog):
         try:
             normalized_supplier_id = int(supplier_id)
         except (TypeError, ValueError) as exc:
-            raise ValueError("Geçerli bir tedarikçi cari seçilmelidir.") from exc
+            raise ValueError("Geçerli bir tedarikçi kartı seçilmelidir.") from exc
 
         supplier = self.supplier_lookup.get(normalized_supplier_id)
 
         if supplier is None:
-            raise ValueError("Seçilen tedarikçi cari bulunamadı.")
+            raise ValueError("Seçilen tedarikçi kartı bulunamadı.")
 
         return supplier
 

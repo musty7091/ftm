@@ -24,6 +24,7 @@ from app.ui.navigation import (
     username_to_text,
 )
 from app.ui.pages.banks_page import BanksPage
+from app.ui.pages.business_partners_page import BusinessPartnersPage
 from app.ui.pages.checks_page import ChecksPage
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.placeholder_page import AccessDeniedPage, PlaceholderPage
@@ -37,7 +38,7 @@ PAGE_SUBTITLES = {
     "Bankalar": "Banka hesapları, bakiyeler, hareketler ve transfer yönetimi.",
     "POS Mutabakat": "Beklenen POS yatışları, gerçekleşen tutarlar ve fark analizleri burada olacak.",
     "Çek Yönetimi": "Yazılan çekler, alınan çekler, vade takvimi ve çek riskleri burada yönetilecek.",
-    "Cari Kartlar": "Müşteri ve tedarikçi kartları burada listelenecek.",
+    "Müşteri / Tedarikçi Kartları": "Çek aldığın müşteriler, çek verdiğin tedarikçiler ve nadir işlem yapılan taraflar burada yönetilecek.",
     "Raporlar": "Finansal Excel, POS mutabakat, risk ve transfer öneri raporları burada olacak.",
     "Güvenlik": "Kullanıcılar, roller, audit log ve yetkisiz işlem denemeleri burada izlenecek.",
     "Sistem": "Yedekleme, restore testi, sağlık kontrolü ve mail durumları burada yönetilecek.",
@@ -285,6 +286,16 @@ class FtmDesktopWindow(QMainWindow):
         if self.current_page == "Çek Yönetimi":
             self.content_layout.addWidget(
                 ChecksPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if self.current_page == "Müşteri / Tedarikçi Kartları":
+            self.content_layout.addWidget(
+                BusinessPartnersPage(
                     current_user=self.current_user,
                 ),
                 1,
