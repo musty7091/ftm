@@ -28,6 +28,9 @@ from app.services.permission_service import Permission, PermissionServiceError
 from app.utils.decimal_utils import Q2, Q6, money, rate
 
 
+DEFAULT_BSIV_RATE = Decimal("0.300000")
+
+
 class ReceivedCheckDiscountBatchServiceError(ValueError):
     pass
 
@@ -53,6 +56,8 @@ class DiscountBatchItemCalculation:
     interest_expense_amount: Decimal
     commission_rate: Decimal
     commission_amount: Decimal
+    bsiv_rate: Decimal
+    bsiv_amount: Decimal
     total_expense_amount: Decimal
     net_amount: Decimal
     currency_code: str
@@ -67,10 +72,12 @@ class DiscountBatchCalculationResult:
     annual_interest_rate: Decimal
     day_basis: int
     commission_rate: Decimal
+    bsiv_rate: Decimal
     total_gross_amount: Decimal
     weighted_average_days_to_due: Decimal
     total_interest_expense_amount: Decimal
     total_commission_amount: Decimal
+    total_bsiv_amount: Decimal
     total_discount_expense_amount: Decimal
     net_bank_amount: Decimal
 
@@ -148,6 +155,18 @@ def _validate_commission_rate(value: Any) -> Decimal:
     return cleaned_rate
 
 
+def _validate_bsiv_rate(value: Any) -> Decimal:
+    cleaned_rate = rate(value, field_name="BSİV oranı")
+
+    if cleaned_rate < Decimal("0.000000"):
+        raise ReceivedCheckDiscountBatchServiceError("BSİV oranı negatif olamaz.")
+
+    if cleaned_rate >= Decimal("100.000000"):
+        raise ReceivedCheckDiscountBatchServiceError("BSİV oranı 100'den küçük olmalıdır.")
+
+    return cleaned_rate
+
+
 def _validate_discount_date(value: Any) -> date:
     if not isinstance(value, date):
         raise ReceivedCheckDiscountBatchServiceError("İskonto tarihi geçerli bir tarih olmalıdır.")
@@ -206,6 +225,21 @@ def _calculate_commission_amount(
     commission_rate: Decimal,
 ) -> Decimal:
     calculated_amount = gross_amount * commission_rate / Decimal("100")
+
+    return calculated_amount.quantize(Q2)
+
+
+def _calculate_bsiv_amount(
+    *,
+    interest_expense_amount: Decimal,
+    commission_amount: Decimal,
+    bsiv_rate: Decimal,
+) -> Decimal:
+    calculated_amount = (
+        (interest_expense_amount + commission_amount)
+        * bsiv_rate
+        / Decimal("100")
+    )
 
     return calculated_amount.quantize(Q2)
 
@@ -316,10 +350,12 @@ def calculate_received_check_discount_batch(
     annual_interest_rate: Any,
     commission_rate: Any,
     day_basis: int = 365,
+    bsiv_rate: Any = DEFAULT_BSIV_RATE,
 ) -> DiscountBatchCalculationResult:
     normalized_discount_date = _validate_discount_date(discount_date)
     normalized_annual_interest_rate = _validate_annual_interest_rate(annual_interest_rate)
     normalized_commission_rate = _validate_commission_rate(commission_rate)
+    normalized_bsiv_rate = _validate_bsiv_rate(bsiv_rate)
     normalized_day_basis = _validate_day_basis(day_basis)
     normalized_checks = normalize_discount_batch_check_inputs(checks)
 
@@ -329,6 +365,7 @@ def calculate_received_check_discount_batch(
     total_weighted_days_amount = Decimal("0.000000")
     total_interest_expense_amount = Decimal("0.00")
     total_commission_amount = Decimal("0.00")
+    total_bsiv_amount = Decimal("0.00")
     total_discount_expense_amount = Decimal("0.00")
     net_bank_amount = Decimal("0.00")
 
@@ -352,7 +389,17 @@ def calculate_received_check_discount_batch(
             commission_rate=normalized_commission_rate,
         )
 
-        total_expense_amount = (interest_expense_amount + commission_amount).quantize(Q2)
+        bsiv_amount = _calculate_bsiv_amount(
+            interest_expense_amount=interest_expense_amount,
+            commission_amount=commission_amount,
+            bsiv_rate=normalized_bsiv_rate,
+        )
+
+        total_expense_amount = (
+            interest_expense_amount
+            + commission_amount
+            + bsiv_amount
+        ).quantize(Q2)
         net_amount = (check.gross_amount - total_expense_amount).quantize(Q2)
 
         if net_amount <= Decimal("0.00"):
@@ -371,6 +418,8 @@ def calculate_received_check_discount_batch(
             interest_expense_amount=interest_expense_amount,
             commission_rate=normalized_commission_rate,
             commission_amount=commission_amount,
+            bsiv_rate=normalized_bsiv_rate,
+            bsiv_amount=bsiv_amount,
             total_expense_amount=total_expense_amount,
             net_amount=net_amount,
             currency_code=check.currency_code,
@@ -384,6 +433,7 @@ def calculate_received_check_discount_batch(
             total_interest_expense_amount + interest_expense_amount
         ).quantize(Q2)
         total_commission_amount = (total_commission_amount + commission_amount).quantize(Q2)
+        total_bsiv_amount = (total_bsiv_amount + bsiv_amount).quantize(Q2)
         total_discount_expense_amount = (
             total_discount_expense_amount + total_expense_amount
         ).quantize(Q2)
@@ -404,10 +454,12 @@ def calculate_received_check_discount_batch(
         annual_interest_rate=normalized_annual_interest_rate,
         day_basis=normalized_day_basis,
         commission_rate=normalized_commission_rate,
+        bsiv_rate=normalized_bsiv_rate,
         total_gross_amount=total_gross_amount,
         weighted_average_days_to_due=weighted_average_days_to_due,
         total_interest_expense_amount=total_interest_expense_amount,
         total_commission_amount=total_commission_amount,
+        total_bsiv_amount=total_bsiv_amount,
         total_discount_expense_amount=total_discount_expense_amount,
         net_bank_amount=net_bank_amount,
     )
@@ -422,9 +474,11 @@ def _received_check_discount_batch_to_dict(batch: ReceivedCheckDiscountBatch) ->
         "annual_interest_rate": str(batch.annual_interest_rate),
         "day_basis": batch.day_basis,
         "commission_rate": str(batch.commission_rate),
+        "bsiv_rate": str(batch.bsiv_rate),
         "total_gross_amount": str(batch.total_gross_amount),
         "total_interest_expense_amount": str(batch.total_interest_expense_amount),
         "total_commission_amount": str(batch.total_commission_amount),
+        "total_bsiv_amount": str(batch.total_bsiv_amount),
         "total_discount_expense_amount": str(batch.total_discount_expense_amount),
         "net_bank_amount": str(batch.net_bank_amount),
         "currency_code": batch.currency_code.value,
@@ -447,6 +501,8 @@ def _received_check_discount_batch_item_to_dict(item: ReceivedCheckDiscountBatch
         "interest_expense_amount": str(item.interest_expense_amount),
         "commission_rate": str(item.commission_rate),
         "commission_amount": str(item.commission_amount),
+        "bsiv_rate": str(item.bsiv_rate),
+        "bsiv_amount": str(item.bsiv_amount),
         "total_expense_amount": str(item.total_expense_amount),
         "net_amount": str(item.net_amount),
         "currency_code": item.currency_code.value,
@@ -569,6 +625,7 @@ def create_received_check_discount_batch(
     day_basis: int,
     reference_no: Optional[str],
     description: Optional[str],
+    bsiv_rate: Any = DEFAULT_BSIV_RATE,
     created_by_user_id: Optional[int] = None,
     acting_user: Optional[Any] = None,
 ) -> ReceivedCheckDiscountBatch:
@@ -583,6 +640,7 @@ def create_received_check_discount_batch(
             "discount_date": discount_date.isoformat(),
             "annual_interest_rate": str(annual_interest_rate),
             "commission_rate": str(commission_rate),
+            "bsiv_rate": str(bsiv_rate),
             "day_basis": day_basis,
             "reference_no": reference_no,
         },
@@ -667,6 +725,7 @@ def create_received_check_discount_batch(
         annual_interest_rate=annual_interest_rate,
         commission_rate=commission_rate,
         day_basis=day_basis,
+        bsiv_rate=bsiv_rate,
     )
 
     batch_currency_code = _normalize_currency_enum(calculation_result.currency_code)
@@ -680,9 +739,11 @@ def create_received_check_discount_batch(
         annual_interest_rate=calculation_result.annual_interest_rate,
         day_basis=calculation_result.day_basis,
         commission_rate=calculation_result.commission_rate,
+        bsiv_rate=calculation_result.bsiv_rate,
         total_gross_amount=calculation_result.total_gross_amount,
         total_interest_expense_amount=calculation_result.total_interest_expense_amount,
         total_commission_amount=calculation_result.total_commission_amount,
+        total_bsiv_amount=calculation_result.total_bsiv_amount,
         total_discount_expense_amount=calculation_result.total_discount_expense_amount,
         net_bank_amount=calculation_result.net_bank_amount,
         currency_code=batch_currency_code,
@@ -712,6 +773,7 @@ def create_received_check_discount_batch(
                 f"Brüt: {calculation_result.total_gross_amount} {batch_currency_code.value} | "
                 f"Faiz: {calculation_result.total_interest_expense_amount} | "
                 f"Komisyon: {calculation_result.total_commission_amount} | "
+                f"BSİV: {calculation_result.total_bsiv_amount} | "
                 f"Net: {calculation_result.net_bank_amount}"
                 if not cleaned_description
                 else (
@@ -719,6 +781,7 @@ def create_received_check_discount_batch(
                     f"Brüt: {calculation_result.total_gross_amount} {batch_currency_code.value} | "
                     f"Faiz: {calculation_result.total_interest_expense_amount} | "
                     f"Komisyon: {calculation_result.total_commission_amount} | "
+                    f"BSİV: {calculation_result.total_bsiv_amount} | "
                     f"Net: {calculation_result.net_bank_amount} - {cleaned_description}"
                 )
             ),
@@ -757,6 +820,8 @@ def create_received_check_discount_batch(
             interest_expense_amount=item_calculation.interest_expense_amount,
             commission_rate=item_calculation.commission_rate,
             commission_amount=item_calculation.commission_amount,
+            bsiv_rate=item_calculation.bsiv_rate,
+            bsiv_amount=item_calculation.bsiv_amount,
             total_expense_amount=item_calculation.total_expense_amount,
             net_amount=item_calculation.net_amount,
             currency_code=_normalize_currency_enum(item_calculation.currency_code),
@@ -792,6 +857,8 @@ def create_received_check_discount_batch(
             f"Faiz kesintisi: {item_calculation.interest_expense_amount}",
             f"Komisyon oranı: %{item_calculation.commission_rate}",
             f"Komisyon: {item_calculation.commission_amount}",
+            f"BSİV oranı: %{item_calculation.bsiv_rate}",
+            f"BSİV: {item_calculation.bsiv_amount}",
             f"Toplam kesinti: {item_calculation.total_expense_amount}",
             f"Net banka girişi: {item_calculation.net_amount}",
         ]
@@ -825,6 +892,7 @@ def create_received_check_discount_batch(
                 f"Alınan çek iskonto paketi içinde kırdırıldı: "
                 f"Paket ID {batch.id}, Çek {check.check_number}, "
                 f"Brüt {item_calculation.gross_amount} {check.currency_code.value}, "
+                f"BSİV {item_calculation.bsiv_amount}, "
                 f"Net {item_calculation.net_amount}"
             ),
             old_values=old_check_values,
@@ -841,6 +909,7 @@ def create_received_check_discount_batch(
             f"Çoklu alınan çek iskonto paketi oluşturuldu. "
             f"Paket ID: {batch.id}, Çek sayısı: {calculation_result.selected_check_count}, "
             f"Brüt: {calculation_result.total_gross_amount} {batch_currency_code.value}, "
+            f"BSİV: {calculation_result.total_bsiv_amount} {batch_currency_code.value}, "
             f"Net: {calculation_result.net_bank_amount} {batch_currency_code.value}"
         ),
         old_values=None,

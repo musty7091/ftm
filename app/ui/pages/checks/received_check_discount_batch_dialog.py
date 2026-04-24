@@ -231,6 +231,12 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         self.commission_rate_input.setText("0")
         self.commission_rate_input.textChanged.connect(self._update_preview)
 
+        self.bsiv_rate_input = QLineEdit()
+        self.bsiv_rate_input.setMinimumHeight(38)
+        self.bsiv_rate_input.setPlaceholderText("Örn: 0,30")
+        self.bsiv_rate_input.setText("0,30")
+        self.bsiv_rate_input.textChanged.connect(self._update_preview)
+
         self.day_basis_combo = QComboBox()
         self.day_basis_combo.setMinimumHeight(38)
         self.day_basis_combo.addItem("365 gün", 365)
@@ -256,13 +262,15 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         top_form_layout.addWidget(self.annual_interest_rate_input, 1, 2)
         top_form_layout.addWidget(self.commission_rate_input, 1, 3)
 
-        top_form_layout.addWidget(self._build_field_label("Gün bazı"), 2, 0)
-        top_form_layout.addWidget(self._build_field_label("Referans no"), 2, 1)
-        top_form_layout.addWidget(self._build_field_label("Arama"), 2, 2, 1, 2)
+        top_form_layout.addWidget(self._build_field_label("BSİV (%)"), 2, 0)
+        top_form_layout.addWidget(self._build_field_label("Gün bazı"), 2, 1)
+        top_form_layout.addWidget(self._build_field_label("Referans no"), 2, 2)
+        top_form_layout.addWidget(self._build_field_label("Arama"), 2, 3)
 
-        top_form_layout.addWidget(self.day_basis_combo, 3, 0)
-        top_form_layout.addWidget(self.reference_no_input, 3, 1)
-        top_form_layout.addWidget(self.search_input, 3, 2, 1, 2)
+        top_form_layout.addWidget(self.bsiv_rate_input, 3, 0)
+        top_form_layout.addWidget(self.day_basis_combo, 3, 1)
+        top_form_layout.addWidget(self.reference_no_input, 3, 2)
+        top_form_layout.addWidget(self.search_input, 3, 3)
 
         self.bank_account_info_label = QLabel("")
         self.bank_account_info_label.setObjectName("MutedText")
@@ -273,7 +281,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         self.results_info_label.setWordWrap(True)
 
         self.checks_table = QTableWidget()
-        self.checks_table.setColumnCount(12)
+        self.checks_table.setColumnCount(13)
         self.checks_table.setHorizontalHeaderLabels(
             [
                 "Seç",
@@ -286,6 +294,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 "Tutar",
                 "Faiz",
                 "Komisyon",
+                "BSİV",
                 "Net",
                 "Durum",
             ]
@@ -314,6 +323,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         checks_header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
         checks_header.setSectionResizeMode(10, QHeaderView.ResizeToContents)
         checks_header.setSectionResizeMode(11, QHeaderView.ResizeToContents)
+        checks_header.setSectionResizeMode(12, QHeaderView.ResizeToContents)
 
         preview_layout = self._build_preview_layout()
 
@@ -367,12 +377,14 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         preview_layout.setColumnStretch(3, 1)
         preview_layout.setColumnStretch(4, 1)
         preview_layout.setColumnStretch(5, 1)
+        preview_layout.setColumnStretch(6, 1)
 
         self.selected_count_label = self._build_preview_box("SEÇİLEN", "0")
         self.total_gross_label = self._build_preview_box("BRÜT TOPLAM", "-")
         self.weighted_average_days_label = self._build_preview_box("ORT. VADE", "-")
         self.total_interest_label = self._build_preview_box("FAİZ", "-")
         self.total_commission_label = self._build_preview_box("KOMİSYON", "-")
+        self.total_bsiv_label = self._build_preview_box("BSİV", "-")
         self.net_bank_amount_label = self._build_preview_box("NET BANKA", "-")
 
         preview_layout.addWidget(self.selected_count_label, 0, 0)
@@ -380,7 +392,8 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         preview_layout.addWidget(self.weighted_average_days_label, 0, 2)
         preview_layout.addWidget(self.total_interest_label, 0, 3)
         preview_layout.addWidget(self.total_commission_label, 0, 4)
-        preview_layout.addWidget(self.net_bank_amount_label, 0, 5)
+        preview_layout.addWidget(self.total_bsiv_label, 0, 5)
+        preview_layout.addWidget(self.net_bank_amount_label, 0, 6)
 
         return preview_layout
 
@@ -673,6 +686,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
 
             interest_text = "-"
             commission_text = "-"
+            bsiv_text = "-"
             net_text = "-"
 
             if row_calculation is not None:
@@ -682,6 +696,10 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 )
                 commission_text = format_currency_amount(
                     row_calculation.commission_amount,
+                    row_calculation.currency_code,
+                )
+                bsiv_text = format_currency_amount(
+                    row_calculation.bsiv_amount,
                     row_calculation.currency_code,
                 )
                 net_text = format_currency_amount(
@@ -700,6 +718,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 format_currency_amount(discountable_check.amount, discountable_check.currency_code),
                 interest_text,
                 commission_text,
+                bsiv_text,
                 net_text,
                 received_status_text(discountable_check.status),
             ]
@@ -724,7 +743,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 else:
                     item.setForeground(QColor("#e5e7eb"))
 
-                if column_index in {6, 7, 8, 9, 10}:
+                if column_index in {6, 7, 8, 9, 10, 11}:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 elif column_index != 0:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -740,6 +759,16 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                     f"Vadeye kalan gün: {days_to_due}",
                     f"Tutar: {format_currency_amount(discountable_check.amount, discountable_check.currency_code)}",
                 ]
+
+                if row_calculation is not None:
+                    tooltip_lines.extend(
+                        [
+                            f"Faiz kesintisi: {interest_text}",
+                            f"Komisyon: {commission_text}",
+                            f"BSİV: {bsiv_text}",
+                            f"Net: {net_text}",
+                        ]
+                    )
 
                 if discountable_check.collection_bank_name and discountable_check.collection_bank_account_name:
                     tooltip_lines.append(
@@ -869,6 +898,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 discount_date=self._current_discount_date(),
                 annual_interest_rate=self.annual_interest_rate_input.text().strip(),
                 commission_rate=self.commission_rate_input.text().strip(),
+                bsiv_rate=self.bsiv_rate_input.text().strip(),
                 day_basis=self._selected_day_basis(),
             )
         except ReceivedCheckDiscountBatchServiceError:
@@ -889,6 +919,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
             self.weighted_average_days_label.value_label.setText("-")
             self.total_interest_label.value_label.setText("-")
             self.total_commission_label.value_label.setText("-")
+            self.total_bsiv_label.value_label.setText("-")
             self.net_bank_amount_label.value_label.setText("-")
             self.save_button.setEnabled(False)
             return
@@ -906,6 +937,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
             self.weighted_average_days_label.value_label.setText("-")
             self.total_interest_label.value_label.setText("-")
             self.total_commission_label.value_label.setText("-")
+            self.total_bsiv_label.value_label.setText("-")
             self.net_bank_amount_label.value_label.setText("-")
             self.save_button.setEnabled(False)
             return
@@ -916,6 +948,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 discount_date=self._current_discount_date(),
                 annual_interest_rate=self.annual_interest_rate_input.text().strip(),
                 commission_rate=self.commission_rate_input.text().strip(),
+                bsiv_rate=self.bsiv_rate_input.text().strip(),
                 day_basis=self._selected_day_basis(),
             )
         except ReceivedCheckDiscountBatchServiceError as exc:
@@ -923,6 +956,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
             self.weighted_average_days_label.value_label.setText("-")
             self.total_interest_label.value_label.setText("-")
             self.total_commission_label.value_label.setText("-")
+            self.total_bsiv_label.value_label.setText("-")
             self.net_bank_amount_label.value_label.setText("-")
             self.net_bank_amount_label.hint_label.setText(str(exc))
             self.save_button.setEnabled(False)
@@ -951,6 +985,12 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 calculation_result.currency_code,
             )
         )
+        self.total_bsiv_label.value_label.setText(
+            format_currency_amount(
+                calculation_result.total_bsiv_amount,
+                calculation_result.currency_code,
+            )
+        )
         self.net_bank_amount_label.value_label.setText(
             format_currency_amount(
                 calculation_result.net_bank_amount,
@@ -976,11 +1016,15 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         if not self.commission_rate_input.text().strip():
             raise ValueError("Komisyon oranı girilmelidir.")
 
+        if not self.bsiv_rate_input.text().strip():
+            raise ValueError("BSİV oranı girilmelidir.")
+
         calculate_received_check_discount_batch(
             checks=selected_check_inputs,
             discount_date=self._current_discount_date(),
             annual_interest_rate=self.annual_interest_rate_input.text().strip(),
             commission_rate=self.commission_rate_input.text().strip(),
+            bsiv_rate=self.bsiv_rate_input.text().strip(),
             day_basis=self._selected_day_basis(),
         )
 
@@ -993,6 +1037,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
             "discount_date": self._current_discount_date(),
             "annual_interest_rate": self.annual_interest_rate_input.text().strip(),
             "commission_rate": self.commission_rate_input.text().strip(),
+            "bsiv_rate": self.bsiv_rate_input.text().strip(),
             "day_basis": self._selected_day_basis(),
             "reference_no": self.reference_no_input.text().strip() or None,
             "description": self.description_input.toPlainText().strip() or None,

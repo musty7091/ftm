@@ -1838,6 +1838,7 @@ class ChecksPage(QWidget):
                     discount_date=payload["discount_date"],
                     annual_interest_rate=payload["annual_interest_rate"],
                     commission_rate=payload["commission_rate"],
+                    bsiv_rate=payload["bsiv_rate"],
                     day_basis=payload["day_basis"],
                     reference_no=payload["reference_no"],
                     description=payload["description"],

@@ -414,6 +414,20 @@ class ReceivedCheckDiscountBatch(Base):
     total_gross_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     total_interest_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     total_commission_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    bsiv_rate: Mapped[Decimal] = mapped_column(
+        RATE,
+        nullable=False,
+        default=Decimal("0.300000"),
+        server_default="0.300000",
+    )
+    total_bsiv_amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
     total_discount_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     net_bank_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
 
@@ -518,6 +532,19 @@ class ReceivedCheckDiscountBatchItem(Base):
 
     commission_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
     commission_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    bsiv_rate: Mapped[Decimal] = mapped_column(
+        RATE,
+        nullable=False,
+        default=Decimal("0.300000"),
+        server_default="0.300000",
+    )
+    bsiv_amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
 
     total_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     net_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

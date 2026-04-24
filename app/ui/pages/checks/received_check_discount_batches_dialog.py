@@ -44,9 +44,11 @@ class DiscountBatchSummaryRow:
     annual_interest_rate: Decimal
     day_basis: int
     commission_rate: Decimal
+    bsiv_rate: Decimal
     total_gross_amount: Decimal
     total_interest_expense_amount: Decimal
     total_commission_amount: Decimal
+    total_bsiv_amount: Decimal
     total_discount_expense_amount: Decimal
     net_bank_amount: Decimal
     currency_code: str
@@ -72,6 +74,8 @@ class DiscountBatchItemRow:
     interest_expense_amount: Decimal
     commission_rate: Decimal
     commission_amount: Decimal
+    bsiv_rate: Decimal
+    bsiv_amount: Decimal
     total_expense_amount: Decimal
     net_amount: Decimal
     currency_code: str
@@ -184,8 +188,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         }
 
         self.setWindowTitle("İskonto Paketleri / Kırdırılan Çekler")
-        self.resize(1320, 820)
-        self.setMinimumSize(1080, 690)
+        self.resize(1380, 840)
+        self.setMinimumSize(1120, 700)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(
             BANK_DIALOG_STYLES
@@ -223,7 +227,7 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
 
             QLabel#SummaryValue {
                 color: #ffffff;
-                font-size: 17px;
+                font-size: 16px;
                 font-weight: 900;
             }
 
@@ -278,7 +282,7 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
 
         subtitle = QLabel(
             "Bankaya iskonto/kırdırma amacıyla verilen çek paketlerini ve paket içindeki her çekin "
-            "faiz, komisyon, toplam kesinti ve net banka giriş detayını bu ekranda görebilirsin."
+            "faiz, komisyon, BSİV, toplam kesinti ve net banka giriş detayını bu ekranda görebilirsin."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -293,7 +297,7 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         self.results_info_label.setWordWrap(True)
 
         self.batch_table = QTableWidget()
-        self.batch_table.setColumnCount(11)
+        self.batch_table.setColumnCount(13)
         self.batch_table.setHorizontalHeaderLabels(
             [
                 "Paket ID",
@@ -302,10 +306,12 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 "Brüt",
                 "Faiz",
                 "Komisyon",
+                "BSİV",
                 "Kesinti",
                 "Net Banka",
                 "Faiz %",
                 "Komisyon %",
+                "BSİV %",
                 "Referans",
             ]
         )
@@ -332,6 +338,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         batch_header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         batch_header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
         batch_header.setSectionResizeMode(10, QHeaderView.ResizeToContents)
+        batch_header.setSectionResizeMode(11, QHeaderView.ResizeToContents)
+        batch_header.setSectionResizeMode(12, QHeaderView.ResizeToContents)
 
         summary_layout = self._build_summary_layout()
 
@@ -340,7 +348,7 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         self.item_info_label.setWordWrap(True)
 
         self.item_table = QTableWidget()
-        self.item_table.setColumnCount(14)
+        self.item_table.setColumnCount(16)
         self.item_table.setHorizontalHeaderLabels(
             [
                 "Satır ID",
@@ -355,6 +363,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 "Faiz",
                 "Komisyon %",
                 "Komisyon",
+                "BSİV %",
+                "BSİV",
                 "Net",
                 "Durum",
             ]
@@ -384,6 +394,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         item_header.setSectionResizeMode(11, QHeaderView.ResizeToContents)
         item_header.setSectionResizeMode(12, QHeaderView.ResizeToContents)
         item_header.setSectionResizeMode(13, QHeaderView.ResizeToContents)
+        item_header.setSectionResizeMode(14, QHeaderView.ResizeToContents)
+        item_header.setSectionResizeMode(15, QHeaderView.ResizeToContents)
 
         button_layout = QHBoxLayout()
         button_layout.addStretch(1)
@@ -418,12 +430,14 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         summary_layout.setColumnStretch(3, 1)
         summary_layout.setColumnStretch(4, 1)
         summary_layout.setColumnStretch(5, 1)
+        summary_layout.setColumnStretch(6, 1)
 
         self.summary_check_count_card = self._build_summary_card("ÇEK SAYISI", "-", "", False)
         self.summary_gross_card = self._build_summary_card("BRÜT TOPLAM", "-", "", False)
         self.summary_average_days_card = self._build_summary_card("ORT. VADE", "-", "", False)
         self.summary_interest_card = self._build_summary_card("FAİZ", "-", "", False)
         self.summary_commission_card = self._build_summary_card("KOMİSYON", "-", "", False)
+        self.summary_bsiv_card = self._build_summary_card("BSİV", "-", "", False)
         self.summary_net_card = self._build_summary_card("NET BANKA", "-", "", True)
 
         summary_layout.addWidget(self.summary_check_count_card, 0, 0)
@@ -431,7 +445,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         summary_layout.addWidget(self.summary_average_days_card, 0, 2)
         summary_layout.addWidget(self.summary_interest_card, 0, 3)
         summary_layout.addWidget(self.summary_commission_card, 0, 4)
-        summary_layout.addWidget(self.summary_net_card, 0, 5)
+        summary_layout.addWidget(self.summary_bsiv_card, 0, 5)
+        summary_layout.addWidget(self.summary_net_card, 0, 6)
 
         return summary_layout
 
@@ -505,9 +520,11 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                         annual_interest_rate=Decimal(str(batch.annual_interest_rate)),
                         day_basis=int(batch.day_basis),
                         commission_rate=Decimal(str(batch.commission_rate)),
+                        bsiv_rate=Decimal(str(batch.bsiv_rate)),
                         total_gross_amount=Decimal(str(batch.total_gross_amount)),
                         total_interest_expense_amount=Decimal(str(batch.total_interest_expense_amount)),
                         total_commission_amount=Decimal(str(batch.total_commission_amount)),
+                        total_bsiv_amount=Decimal(str(batch.total_bsiv_amount)),
                         total_discount_expense_amount=Decimal(str(batch.total_discount_expense_amount)),
                         net_bank_amount=Decimal(str(batch.net_bank_amount)),
                         currency_code=currency_code,
@@ -558,6 +575,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                         interest_expense_amount=Decimal(str(item.interest_expense_amount)),
                         commission_rate=Decimal(str(item.commission_rate)),
                         commission_amount=Decimal(str(item.commission_amount)),
+                        bsiv_rate=Decimal(str(item.bsiv_rate)),
+                        bsiv_amount=Decimal(str(item.bsiv_amount)),
                         total_expense_amount=Decimal(str(item.total_expense_amount)),
                         net_amount=Decimal(str(item.net_amount)),
                         currency_code=_enum_value(item.currency_code),
@@ -599,7 +618,11 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 _format_date(row.discount_date),
                 _format_rate(row.annual_interest_rate),
                 _format_rate(row.commission_rate),
+                _format_rate(row.bsiv_rate),
                 format_currency_amount(row.total_gross_amount, row.currency_code),
+                format_currency_amount(row.total_interest_expense_amount, row.currency_code),
+                format_currency_amount(row.total_commission_amount, row.currency_code),
+                format_currency_amount(row.total_bsiv_amount, row.currency_code),
                 format_currency_amount(row.net_bank_amount, row.currency_code),
                 row.reference_no or "",
                 row.description or "",
@@ -618,10 +641,12 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 format_currency_amount(row.total_gross_amount, row.currency_code),
                 format_currency_amount(row.total_interest_expense_amount, row.currency_code),
                 format_currency_amount(row.total_commission_amount, row.currency_code),
+                format_currency_amount(row.total_bsiv_amount, row.currency_code),
                 format_currency_amount(row.total_discount_expense_amount, row.currency_code),
                 format_currency_amount(row.net_bank_amount, row.currency_code),
                 _format_rate(row.annual_interest_rate),
                 _format_rate(row.commission_rate),
+                _format_rate(row.bsiv_rate),
                 row.reference_no or "-",
             ]
 
@@ -633,9 +658,11 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 f"Yıllık Faiz: {_format_rate(row.annual_interest_rate)}",
                 f"Gün Bazı: {row.day_basis}",
                 f"Komisyon: {_format_rate(row.commission_rate)}",
+                f"BSİV: {_format_rate(row.bsiv_rate)}",
                 f"Brüt Toplam: {format_currency_amount(row.total_gross_amount, row.currency_code)}",
                 f"Toplam Faiz: {format_currency_amount(row.total_interest_expense_amount, row.currency_code)}",
                 f"Toplam Komisyon: {format_currency_amount(row.total_commission_amount, row.currency_code)}",
+                f"Toplam BSİV: {format_currency_amount(row.total_bsiv_amount, row.currency_code)}",
                 f"Toplam Kesinti: {format_currency_amount(row.total_discount_expense_amount, row.currency_code)}",
                 f"Net Banka: {format_currency_amount(row.net_bank_amount, row.currency_code)}",
                 f"Referans: {_format_optional_text(row.reference_no)}",
@@ -649,13 +676,15 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 item.setData(Qt.UserRole, row.batch_id)
                 item.setToolTip("\n".join(tooltip_lines))
 
-                if column_index in {3, 4, 5, 6, 7, 8, 9}:
+                if column_index in {3, 4, 5, 6, 7, 8, 9, 10, 11}:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-                if column_index == 7:
+                if column_index == 8:
                     item.setForeground(QColor("#34d399"))
+                elif column_index in {4, 5, 6, 7}:
+                    item.setForeground(QColor("#fbbf24"))
                 else:
                     item.setForeground(QColor("#e5e7eb"))
 
@@ -748,6 +777,11 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
         )
         self.summary_commission_card.hint_label.setText(f"Komisyon: {_format_rate(batch.commission_rate)}")
 
+        self.summary_bsiv_card.value_label.setText(
+            format_currency_amount(batch.total_bsiv_amount, batch.currency_code)
+        )
+        self.summary_bsiv_card.hint_label.setText(f"BSİV: {_format_rate(batch.bsiv_rate)}")
+
         self.summary_net_card.value_label.setText(
             format_currency_amount(batch.net_bank_amount, batch.currency_code)
         )
@@ -767,6 +801,7 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
             self.summary_average_days_card,
             self.summary_interest_card,
             self.summary_commission_card,
+            self.summary_bsiv_card,
             self.summary_net_card,
         ]:
             card.value_label.setText("-")
@@ -791,6 +826,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 format_currency_amount(row.interest_expense_amount, row.currency_code),
                 _format_rate(row.commission_rate),
                 format_currency_amount(row.commission_amount, row.currency_code),
+                _format_rate(row.bsiv_rate),
+                format_currency_amount(row.bsiv_amount, row.currency_code),
                 format_currency_amount(row.net_amount, row.currency_code),
                 received_status_text(row.check_status),
             ]
@@ -809,6 +846,8 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 f"Faiz kesintisi: {format_currency_amount(row.interest_expense_amount, row.currency_code)}",
                 f"Komisyon oranı: {_format_rate(row.commission_rate)}",
                 f"Komisyon: {format_currency_amount(row.commission_amount, row.currency_code)}",
+                f"BSİV oranı: {_format_rate(row.bsiv_rate)}",
+                f"BSİV: {format_currency_amount(row.bsiv_amount, row.currency_code)}",
                 f"Toplam kesinti: {format_currency_amount(row.total_expense_amount, row.currency_code)}",
                 f"Net tutar: {format_currency_amount(row.net_amount, row.currency_code)}",
                 f"Çek durumu: {received_status_text(row.check_status)}",
@@ -818,14 +857,14 @@ class ReceivedCheckDiscountBatchesDialog(QDialog):
                 item = QTableWidgetItem(value)
                 item.setToolTip("\n".join(tooltip_lines))
 
-                if column_index in {6, 7, 8, 9, 10, 11, 12}:
+                if column_index in {6, 7, 8, 9, 10, 11, 12, 13, 14}:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-                if column_index == 12:
+                if column_index == 14:
                     item.setForeground(QColor("#34d399"))
-                elif column_index in {9, 11}:
+                elif column_index in {9, 11, 13}:
                     item.setForeground(QColor("#fbbf24"))
                 else:
                     item.setForeground(QColor("#e5e7eb"))
