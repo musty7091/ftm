@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -378,4 +378,181 @@ class ReceivedCheckMovement(Base):
             f"received_check_id={self.received_check_id} "
             f"movement_type={self.movement_type} "
             f"to_status={self.to_status}>"
+        )
+    
+class ReceivedCheckDiscountBatch(Base):
+    __tablename__ = "received_check_discount_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    bank_account_id: Mapped[int] = mapped_column(
+        ForeignKey("bank_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    bank_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bank_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+
+    discount_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    annual_interest_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+
+    day_basis: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=365,
+        server_default="365",
+    )
+
+    commission_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+
+    total_gross_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    total_interest_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    total_commission_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    total_discount_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    net_bank_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    currency_code: Mapped[CurrencyCode] = mapped_column(
+        Enum(
+            CurrencyCode,
+            native_enum=False,
+            validate_strings=True,
+            length=10,
+            name="received_check_currency_code",
+        ),
+        nullable=False,
+        default=CurrencyCode.TRY,
+        server_default=CurrencyCode.TRY.value,
+    )
+
+    reference_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    bank_account = relationship(
+        "BankAccount",
+        foreign_keys=[bank_account_id],
+    )
+
+    bank_transaction = relationship(
+        "BankTransaction",
+        foreign_keys=[bank_transaction_id],
+    )
+
+    created_by_user = relationship(
+        "User",
+        foreign_keys=[created_by_user_id],
+    )
+
+    items: Mapped[List["ReceivedCheckDiscountBatchItem"]] = relationship(
+        "ReceivedCheckDiscountBatchItem",
+        back_populates="batch",
+        cascade="save-update, merge",
+        order_by="ReceivedCheckDiscountBatchItem.id",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ReceivedCheckDiscountBatch id={self.id} "
+            f"discount_date={self.discount_date} "
+            f"total_gross_amount={self.total_gross_amount} "
+            f"net_bank_amount={self.net_bank_amount}>"
+        )
+
+
+class ReceivedCheckDiscountBatchItem(Base):
+    __tablename__ = "received_check_discount_batch_items"
+
+    __table_args__ = (
+        UniqueConstraint("received_check_id", name="uq_received_check_discount_batch_items_received_check_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("received_check_discount_batches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    received_check_id: Mapped[int] = mapped_column(
+        ForeignKey("received_checks.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    gross_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    days_to_due: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    annual_interest_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+
+    day_basis: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=365,
+        server_default="365",
+    )
+
+    interest_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    commission_rate: Mapped[Decimal] = mapped_column(RATE, nullable=False)
+    commission_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    total_expense_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+
+    currency_code: Mapped[CurrencyCode] = mapped_column(
+        Enum(
+            CurrencyCode,
+            native_enum=False,
+            validate_strings=True,
+            length=10,
+            name="received_check_currency_code",
+        ),
+        nullable=False,
+        default=CurrencyCode.TRY,
+        server_default=CurrencyCode.TRY.value,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    batch = relationship(
+        "ReceivedCheckDiscountBatch",
+        foreign_keys=[batch_id],
+        back_populates="items",
+    )
+
+    received_check = relationship(
+        "ReceivedCheck",
+        foreign_keys=[received_check_id],
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ReceivedCheckDiscountBatchItem id={self.id} "
+            f"batch_id={self.batch_id} "
+            f"received_check_id={self.received_check_id} "
+            f"gross_amount={self.gross_amount} "
+            f"net_amount={self.net_amount}>"
         )

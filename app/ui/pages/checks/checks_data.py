@@ -30,7 +30,6 @@ RECEIVED_PENDING_STATUSES = {
 
 RECEIVED_PROBLEM_STATUSES = {
     ReceivedCheckStatus.BOUNCED.value,
-    ReceivedCheckStatus.RETURNED.value,
 }
 
 

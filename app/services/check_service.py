@@ -723,6 +723,66 @@ def pay_issued_check(
 
     return check
 
+def cancel_issued_check(
+    session: Session,
+    *,
+    issued_check_id: int,
+    cancel_reason: str,
+    cancelled_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> IssuedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.ISSUED_CHECK_CANCEL,
+        attempted_action="ISSUED_CHECK_CANCEL",
+        entity_type="IssuedCheck",
+        details={
+            "issued_check_id": issued_check_id,
+            "cancel_reason": cancel_reason,
+        },
+    )
+
+    effective_cancelled_by_user_id = (
+        permission_user_id if permission_user_id is not None else cancelled_by_user_id
+    )
+
+    cleaned_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+
+    check = session.get(IssuedCheck, issued_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Yazılan çek bulunamadı. Çek ID: {issued_check_id}")
+
+    if check.status == IssuedCheckStatus.CANCELLED:
+        raise CheckServiceError("Bu çek zaten iptal edilmiş.")
+
+    if check.status == IssuedCheckStatus.PAID:
+        raise CheckServiceError("Ödenmiş çek iptal edilemez.")
+
+    if check.paid_transaction_id is not None:
+        raise CheckServiceError("Banka ödeme hareketi oluşmuş çek iptal edilemez.")
+
+    old_values = _issued_check_to_dict(check)
+
+    check.status = IssuedCheckStatus.CANCELLED
+    check.cancelled_by_user_id = effective_cancelled_by_user_id
+    check.cancelled_at = datetime.now(timezone.utc)
+    check.cancel_reason = cleaned_cancel_reason
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=effective_cancelled_by_user_id,
+        action="ISSUED_CHECK_CANCELLED",
+        entity_type="IssuedCheck",
+        entity_id=check.id,
+        description=f"Yazılan çek iptal edildi: {check.check_number}",
+        old_values=old_values,
+        new_values=_issued_check_to_dict(check),
+    )
+
+    return check
 
 def collect_received_check(
     session: Session,
@@ -1020,6 +1080,183 @@ def discount_received_check(
 
     return check
 
+def mark_received_check_bounced(
+    session: Session,
+    *,
+    received_check_id: int,
+    bounce_date: date,
+    reference_no: Optional[str],
+    description: Optional[str],
+    bounced_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CANCEL,
+        attempted_action="RECEIVED_CHECK_MARK_BOUNCED",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "bounce_date": bounce_date.isoformat(),
+            "reference_no": reference_no,
+            "description": description,
+        },
+    )
+
+    effective_bounced_by_user_id = (
+        permission_user_id if permission_user_id is not None else bounced_by_user_id
+    )
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status == ReceivedCheckStatus.BOUNCED:
+        raise CheckServiceError("Bu çek zaten karşılıksız olarak işaretlenmiş.")
+
+    if check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+    }:
+        raise CheckServiceError(
+            "Karşılıksız işaretleme sadece PORTFOLIO, GIVEN_TO_BANK veya IN_COLLECTION durumundaki çeklerde yapılabilir."
+        )
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek karşılıksız işaretlenemez.")
+
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_required_text(description or "", "Açıklama")
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    check.status = ReceivedCheckStatus.BOUNCED
+
+    session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.BOUNCED,
+        movement_date=bounce_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.BOUNCED,
+        bank_account_id=check.collection_bank_account_id,
+        counterparty_text=None,
+        purpose_text="Alınan çek karşılıksız olarak işaretlendi.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_bounced_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_bounced_by_user_id,
+        action="RECEIVED_CHECK_BOUNCED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek karşılıksız işaretlendi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+def mark_received_check_returned(
+    session: Session,
+    *,
+    received_check_id: int,
+    return_date: date,
+    counterparty_text: str,
+    reference_no: Optional[str],
+    description: Optional[str],
+    returned_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CANCEL,
+        attempted_action="RECEIVED_CHECK_MARK_RETURNED",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "return_date": return_date.isoformat(),
+            "counterparty_text": counterparty_text,
+            "reference_no": reference_no,
+            "description": description,
+        },
+    )
+
+    effective_returned_by_user_id = (
+        permission_user_id if permission_user_id is not None else returned_by_user_id
+    )
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status == ReceivedCheckStatus.RETURNED:
+        raise CheckServiceError("Bu çek zaten iade olarak işaretlenmiş.")
+
+    if check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+        ReceivedCheckStatus.BOUNCED,
+    }:
+        raise CheckServiceError(
+            "İade işaretleme sadece PORTFOLIO, GIVEN_TO_BANK, IN_COLLECTION veya BOUNCED durumundaki çeklerde yapılabilir."
+        )
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek iade işaretlenemez.")
+
+    cleaned_counterparty_text = _clean_required_text(counterparty_text, "İade edilen taraf")
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_required_text(description or "", "Açıklama")
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    check.status = ReceivedCheckStatus.RETURNED
+
+    session.flush()
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.RETURNED,
+        movement_date=return_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.RETURNED,
+        bank_account_id=check.collection_bank_account_id,
+        counterparty_text=cleaned_counterparty_text,
+        purpose_text="Alınan çek iade olarak işaretlendi.",
+        reference_no=cleaned_reference_no,
+        description=cleaned_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        created_by_user_id=effective_returned_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_returned_by_user_id,
+        action="RECEIVED_CHECK_RETURNED",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=f"Alınan çek iade işaretlendi: {check.check_number} / {check.amount} {check.currency_code.value}",
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
 
 def endorse_received_check(
     session: Session,

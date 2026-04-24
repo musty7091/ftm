@@ -3,7 +3,13 @@ from app.models.bank import Bank, BankAccount
 from app.models.bank_transaction import BankTransaction
 from app.models.bank_transfer import BankTransfer
 from app.models.business_partner import BusinessPartner
-from app.models.check import IssuedCheck, ReceivedCheck, ReceivedCheckMovement
+from app.models.check import (
+    IssuedCheck,
+    ReceivedCheck,
+    ReceivedCheckDiscountBatch,
+    ReceivedCheckDiscountBatchItem,
+    ReceivedCheckMovement,
+)
 from app.models.enums import (
     BankAccountType,
     BankTransactionStatus,
@@ -31,6 +37,8 @@ __all__ = [
     "BusinessPartner",
     "IssuedCheck",
     "ReceivedCheck",
+    "ReceivedCheckDiscountBatch",
+    "ReceivedCheckDiscountBatchItem",
     "ReceivedCheckMovement",
     "PosDevice",
     "PosSettlement",

@@ -22,12 +22,20 @@ from PySide6.QtWidgets import (
 from app.db.session import session_scope
 from app.services.check_service import (
     CheckServiceError,
+    cancel_issued_check,
     collect_received_check,
     create_issued_check,
     create_received_check,
     discount_received_check,
+    mark_received_check_bounced,
+    mark_received_check_returned,
     pay_issued_check,
     send_received_check_to_bank,
+)
+
+from app.services.received_check_discount_batch_service import (
+    ReceivedCheckDiscountBatchServiceError,
+    create_received_check_discount_batch,
 )
 
 try:
@@ -43,10 +51,18 @@ from app.ui.pages.checks.checks_data import (
     received_status_text as base_received_status_text,
 )
 from app.ui.pages.checks.issued_check_create_dialog import IssuedCheckCreateDialog
+from app.ui.pages.checks.issued_check_detail_dialog import IssuedCheckDetailDialog
+from app.ui.pages.checks.issued_check_cancel_dialog import IssuedCheckCancelDialog
 from app.ui.pages.checks.issued_check_pay_dialog import IssuedCheckPayDialog
 from app.ui.pages.checks.received_check_collect_dialog import ReceivedCheckCollectDialog
 from app.ui.pages.checks.received_check_create_dialog import ReceivedCheckCreateDialog
+from app.ui.pages.checks.received_check_bounce_dialog import ReceivedCheckBounceDialog
+from app.ui.pages.checks.received_check_return_dialog import ReceivedCheckReturnDialog
+from app.ui.pages.checks.checks_report_dialog import ChecksReportDialog
+from app.ui.pages.checks.received_check_detail_dialog import ReceivedCheckDetailDialog
 from app.ui.pages.checks.received_check_discount_dialog import ReceivedCheckDiscountDialog
+from app.ui.pages.checks.received_check_discount_batch_dialog import ReceivedCheckDiscountBatchDialog
+from app.ui.pages.checks.received_check_discount_batches_dialog import ReceivedCheckDiscountBatchesDialog
 from app.ui.pages.checks.received_check_send_to_bank_dialog import ReceivedCheckSendToBankDialog
 
 try:
@@ -82,13 +98,13 @@ RECEIVED_OPEN_STATUSES = {
 
 RECEIVED_PROBLEM_STATUSES = {
     "BOUNCED",
-    "RETURNED",
 }
 
 RECEIVED_CLOSED_STATUSES = {
     "COLLECTED",
     "ENDORSED",
     "DISCOUNTED",
+    "RETURNED",
     "CANCELLED",
 }
 
@@ -886,6 +902,7 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.doubleClicked.connect(lambda _index: self._open_issued_check_detail_from_table(table))
         table.setMinimumHeight(260)
 
         self._configure_table_for_compact_view(table)
@@ -1012,6 +1029,9 @@ class ChecksPage(QWidget):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
 
+                if column_index == 0:
+                    item.setData(Qt.UserRole, issued_check.issued_check_id)
+
                 if issued_check.status == "RISK":
                     item.setForeground(QColor("#fbbf24"))
                 elif issued_check.status == "CANCELLED":
@@ -1086,6 +1106,7 @@ class ChecksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.doubleClicked.connect(lambda _index: self._open_received_check_detail_from_table(table))
         table.setMinimumHeight(260)
 
         self._configure_table_for_compact_view(table)
@@ -1211,6 +1232,9 @@ class ChecksPage(QWidget):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
 
+                if column_index == 0:
+                    item.setData(Qt.UserRole, received_check.received_check_id)
+
                 if received_check.status in {"BOUNCED", "RETURNED"}:
                     item.setForeground(QColor("#fbbf24"))
                 elif received_check.status == "CANCELLED":
@@ -1234,6 +1258,92 @@ class ChecksPage(QWidget):
 
         table.resizeRowsToContents()
 
+    def _selected_issued_check_id_from_table(self, table: QTableWidget) -> int | None:
+        current_row = table.currentRow()
+
+        if current_row < 0:
+            return None
+
+        id_item = table.item(current_row, 0)
+
+        if id_item is None:
+            return None
+
+        issued_check_id = id_item.data(Qt.UserRole)
+
+        if issued_check_id in {None, ""}:
+            issued_check_id = id_item.text()
+
+        try:
+            return int(issued_check_id)
+        except (TypeError, ValueError):
+            return None
+
+
+    def _open_issued_check_detail_from_table(self, table: QTableWidget) -> None:
+        issued_check_id = self._selected_issued_check_id_from_table(table)
+
+        if issued_check_id is None:
+            QMessageBox.warning(
+                self,
+                "Çek seçilemedi",
+                "Detayını görüntülemek için geçerli bir yazılan çek satırı seçmelisin.",
+            )
+            return
+
+        dialog = IssuedCheckDetailDialog(
+            issued_check_id=issued_check_id,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _selected_received_check_id_from_table(self, table: QTableWidget) -> int | None:
+        current_row = table.currentRow()
+
+        if current_row < 0:
+            return None
+
+        id_item = table.item(current_row, 0)
+
+        if id_item is None:
+            return None
+
+        received_check_id = id_item.data(Qt.UserRole)
+
+        if received_check_id in {None, ""}:
+            received_check_id = id_item.text()
+
+        try:
+            return int(received_check_id)
+        except (TypeError, ValueError):
+            return None
+
+
+    def _open_received_check_detail_from_table(self, table: QTableWidget) -> None:
+        received_check_id = self._selected_received_check_id_from_table(table)
+
+        if received_check_id is None:
+            QMessageBox.warning(
+                self,
+                "Çek seçilemedi",
+                "Detayını görüntülemek için geçerli bir alınan çek satırı seçmelisin.",
+            )
+            return
+
+        dialog = ReceivedCheckDetailDialog(
+            received_check_id=received_check_id,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _open_checks_report_dialog(self) -> None:
+        dialog = ChecksReportDialog(parent=self)
+        dialog.exec()
+    
+    def _open_discount_batches_dialog(self) -> None:
+        dialog = ReceivedCheckDiscountBatchesDialog(parent=self)
+        dialog.exec()
+
     def _build_operation_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
@@ -1252,6 +1362,14 @@ class ChecksPage(QWidget):
         description.setObjectName("MutedText")
         description.setWordWrap(True)
 
+        report_summary_button = QPushButton("Çek Rapor Özeti")
+        report_summary_button.setEnabled(True)
+        report_summary_button.clicked.connect(self._open_checks_report_dialog)
+
+        discount_batches_button = QPushButton("İskonto Paketleri")
+        discount_batches_button.setEnabled(True)
+        discount_batches_button.clicked.connect(self._open_discount_batches_dialog)
+
         create_issued_button = QPushButton("Yazılan Çek Oluştur")
         create_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
         create_issued_button.clicked.connect(self._open_create_issued_check_dialog)
@@ -1259,6 +1377,10 @@ class ChecksPage(QWidget):
         pay_issued_button = QPushButton("Yazılan Çek Ödendi")
         pay_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         pay_issued_button.clicked.connect(self._open_pay_issued_check_dialog)
+
+        cancel_issued_button = QPushButton("Yazılan Çek İptal Et")
+        cancel_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        cancel_issued_button.clicked.connect(self._open_cancel_issued_check_dialog)
 
         create_received_button = QPushButton("Alınan Çek Oluştur")
         create_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
@@ -1272,7 +1394,7 @@ class ChecksPage(QWidget):
         endorse_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         endorse_received_button.clicked.connect(self._open_endorse_received_check_dialog)
 
-        discount_received_button = QPushButton("Alınan Çeki İskontoya Ver / Kırdır")
+        discount_received_button = QPushButton("Alınan Çekleri İskontoya Ver / Kırdır")
         discount_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         discount_received_button.clicked.connect(self._open_discount_received_check_dialog)
 
@@ -1280,16 +1402,29 @@ class ChecksPage(QWidget):
         collect_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         collect_received_button.clicked.connect(self._open_collect_received_check_dialog)
 
+        bounce_received_button = QPushButton("Alınan Çeki Karşılıksız İşaretle")
+        bounce_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        bounce_received_button.clicked.connect(self._open_bounce_received_check_dialog)
+
+        return_received_button = QPushButton("Alınan Çeki İade İşaretle")
+        return_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
+        return_received_button.clicked.connect(self._open_return_received_check_dialog)
+
         layout.addWidget(title)
         layout.addWidget(description)
         layout.addSpacing(6)
+        layout.addWidget(report_summary_button)
+        layout.addWidget(discount_batches_button)
         layout.addWidget(create_issued_button)
         layout.addWidget(pay_issued_button)
+        layout.addWidget(cancel_issued_button)
         layout.addWidget(create_received_button)
         layout.addWidget(send_received_to_bank_button)
         layout.addWidget(endorse_received_button)
         layout.addWidget(discount_received_button)
         layout.addWidget(collect_received_button)
+        layout.addWidget(bounce_received_button)
+        layout.addWidget(return_received_button)
         layout.addStretch()
 
         return card
@@ -1415,6 +1550,62 @@ class ChecksPage(QWidget):
                 self,
                 "Beklenmeyen hata",
                 f"Yazılan çek ödenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+    def _open_cancel_issued_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = IssuedCheckCancelDialog(parent=self)
+
+        if not dialog.has_cancellable_checks():
+            QMessageBox.information(
+                self,
+                "İptal edilecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                issued_check = cancel_issued_check(
+                    session,
+                    issued_check_id=payload["issued_check_id"],
+                    cancel_reason=payload["cancel_reason"],
+                    cancelled_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                cancelled_issued_check_id = issued_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Yazılan çek iptal edildi",
+                f"Yazılan çek başarıyla iptal edildi. Çek ID: {cancelled_issued_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Yazılan çek iptal edilemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Yazılan çek iptal edilirken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _open_create_received_check_dialog(self) -> None:
@@ -1623,7 +1814,7 @@ class ChecksPage(QWidget):
             )
             return
 
-        dialog = ReceivedCheckDiscountDialog(parent=self)
+        dialog = ReceivedCheckDiscountBatchDialog(parent=self)
 
         if not dialog.has_discountable_checks():
             QMessageBox.information(
@@ -1640,39 +1831,50 @@ class ChecksPage(QWidget):
 
         try:
             with session_scope() as session:
-                received_check = discount_received_check(
+                batch = create_received_check_discount_batch(
                     session,
-                    received_check_id=payload["received_check_id"],
                     bank_account_id=payload["bank_account_id"],
+                    received_check_ids=payload["received_check_ids"],
                     discount_date=payload["discount_date"],
-                    discount_rate=payload["discount_rate"],
+                    annual_interest_rate=payload["annual_interest_rate"],
+                    commission_rate=payload["commission_rate"],
+                    day_basis=payload["day_basis"],
                     reference_no=payload["reference_no"],
                     description=payload["description"],
-                    discounted_by_user_id=getattr(self.current_user, "id", None),
+                    created_by_user_id=getattr(self.current_user, "id", None),
                     acting_user=self.current_user,
                 )
 
-                discounted_received_check_id = received_check.id
+                created_batch_id = batch.id
+                selected_check_count = len(payload["received_check_ids"])
 
             self._reload_page_data()
 
             QMessageBox.information(
                 self,
-                "Alınan çek iskonto edildi",
-                f"Alınan çek iskonto/kırdırma işlemi başarıyla tamamlandı. Çek ID: {discounted_received_check_id}",
+                "İskonto paketi oluşturuldu",
+                f"Çoklu çek iskonto paketi başarıyla oluşturuldu.\n"
+                f"Paket ID: {created_batch_id}\n"
+                f"Çek sayısı: {selected_check_count}",
             )
 
+        except ReceivedCheckDiscountBatchServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "İskonto paketi oluşturulamadı",
+                str(exc),
+            )
         except CheckServiceError as exc:
             QMessageBox.warning(
                 self,
-                "Alınan çek iskonto edilemedi",
+                "İskonto işlemi tamamlanamadı",
                 str(exc),
             )
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Beklenmeyen hata",
-                f"Alınan çek iskonto/kırdırma işleminde beklenmeyen bir hata oluştu:\n{exc}",
+                f"Çoklu çek iskonto paketi oluşturulurken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _open_collect_received_check_dialog(self) -> None:
@@ -1733,4 +1935,123 @@ class ChecksPage(QWidget):
                 self,
                 "Beklenmeyen hata",
                 f"Alınan çek tahsil edilirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
+    def _open_bounce_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckBounceDialog(parent=self)
+
+        if not dialog.has_bounceable_checks():
+            QMessageBox.information(
+                self,
+                "Karşılıksız işaretlenecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = mark_received_check_bounced(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    bounce_date=payload["bounce_date"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    bounced_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                bounced_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek karşılıksız işaretlendi",
+                f"Alınan çek başarıyla karşılıksız işaretlendi. Çek ID: {bounced_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek karşılıksız işaretlenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek karşılıksız işaretlenirken beklenmeyen bir hata oluştu:\n{exc}",
+            )
+    
+    def _open_return_received_check_dialog(self) -> None:
+        if self.current_role not in {"ADMIN", "FINANCE"}:
+            QMessageBox.warning(
+                self,
+                "Yetkisiz işlem",
+                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
+            )
+            return
+
+        dialog = ReceivedCheckReturnDialog(parent=self)
+
+        if not dialog.has_returnable_checks():
+            QMessageBox.information(
+                self,
+                "İade işaretlenecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+
+        try:
+            with session_scope() as session:
+                received_check = mark_received_check_returned(
+                    session,
+                    received_check_id=payload["received_check_id"],
+                    return_date=payload["return_date"],
+                    counterparty_text=payload["counterparty_text"],
+                    reference_no=payload["reference_no"],
+                    description=payload["description"],
+                    returned_by_user_id=getattr(self.current_user, "id", None),
+                    acting_user=self.current_user,
+                )
+
+                returned_received_check_id = received_check.id
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                "Alınan çek iade işaretlendi",
+                f"Alınan çek başarıyla iade işaretlendi. Çek ID: {returned_received_check_id}",
+            )
+
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Alınan çek iade işaretlenemedi",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Alınan çek iade işaretlenirken beklenmeyen bir hata oluştu:\n{exc}",
             )
