@@ -1,6 +1,7 @@
-﻿# FTM Genel Bakış sayfası
+﻿# FTM Genel Bakış sayfası - Finansal Radar
+from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
@@ -15,13 +16,43 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
-from app.ui.dashboard_data import DashboardData
+from app.ui.dashboard_data import DashboardData, DashboardDueItem
 from app.ui.ui_helpers import decimal_or_zero, tr_money, tr_number
 
 
 CURRENCY_DISPLAY_ORDER = ["TRY", "USD", "EUR", "GBP"]
+
+
+class ClickableSummaryCard(SummaryCard):
+    def __init__(
+        self,
+        title: str,
+        value: str,
+        hint: str,
+        card_type: str,
+        target_page: str,
+        navigate_to_page: Callable[[str], None] | None,
+    ) -> None:
+        super().__init__(
+            title=title,
+            value=value,
+            hint=hint,
+            card_type=card_type,
+        )
+
+        self.target_page = target_page
+        self.navigate_to_page = navigate_to_page
+
+        self.setMinimumHeight(128)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"{target_page} ekranına gitmek için tıkla.")
+
+    def mousePressEvent(self, event: Any) -> None:
+        if self.navigate_to_page is not None and self.target_page:
+            self.navigate_to_page(self.target_page)
+
+        super().mousePressEvent(event)
 
 
 def _format_decimal_tr(value: Any) -> str:
@@ -51,19 +82,121 @@ def _currency_sort_key(currency_code: str) -> tuple[int, str]:
     return (999, normalized_currency_code)
 
 
+def _format_currency_totals(currency_totals: dict[str, Decimal]) -> str:
+    if not currency_totals:
+        return "0,00 TL"
+
+    lines: list[str] = []
+
+    for currency_code in sorted(currency_totals.keys(), key=_currency_sort_key):
+        lines.append(
+            _format_currency_amount(currency_totals[currency_code], currency_code)
+        )
+
+    return "\n".join(lines)
+
+
+def _format_currency_totals_inline(currency_totals: dict[str, Decimal]) -> str:
+    if not currency_totals:
+        return "0,00 TL"
+
+    parts: list[str] = []
+
+    for currency_code in sorted(currency_totals.keys(), key=_currency_sort_key):
+        parts.append(
+            _format_currency_amount(currency_totals[currency_code], currency_code)
+        )
+
+    return " / ".join(parts)
+
+
+def _format_date_tr(value: date) -> str:
+    return value.strftime("%d.%m.%Y")
+
+
+def _days_text(target_date: date) -> str:
+    today = date.today()
+    difference = (target_date - today).days
+
+    if difference == 0:
+        return "Bugün"
+    if difference > 0:
+        return f"{difference} gün"
+    return f"{abs(difference)} gün geçti"
+
+
+def _check_type_text(value: str) -> str:
+    if value == "RECEIVED":
+        return "Alınan"
+
+    if value == "ISSUED":
+        return "Yazılan"
+
+    return value or "-"
+
+
+def _urgency_text(value: str) -> str:
+    if value == "PROBLEM":
+        return "Problem"
+    if value == "OVERDUE":
+        return "Vadesi Geçmiş"
+    if value == "TODAY":
+        return "Bugün"
+    if value == "WEEK":
+        return "7 Gün"
+
+    return value or "-"
+
+
+def _urgency_color(value: str) -> QColor:
+    if value == "PROBLEM":
+        return QColor("#fbbf24")
+    if value == "OVERDUE":
+        return QColor("#f87171")
+    if value == "TODAY":
+        return QColor("#bfdbfe")
+    if value == "WEEK":
+        return QColor("#a7f3d0")
+
+    return QColor("#e5e7eb")
+
+
 class DashboardPage(QWidget):
-    def __init__(self, dashboard_data: DashboardData) -> None:
+    def __init__(
+        self,
+        dashboard_data: DashboardData,
+        navigate_to_page: Callable[[str], None] | None = None,
+    ) -> None:
         super().__init__()
 
         self.dashboard_data = dashboard_data
+        self.navigate_to_page = navigate_to_page
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
 
-        layout.addLayout(self._build_summary_cards())
-        layout.addWidget(self._build_bank_table_card(), 1)
-        layout.addLayout(self._build_bottom_cards())
+        layout.addLayout(self._build_due_radar_cards())
+        layout.addLayout(self._build_money_radar_cards())
+        layout.addWidget(self._build_action_items_card(), 1)
+
+    def _build_dashboard_card(
+        self,
+        *,
+        title: str,
+        value: str,
+        hint: str,
+        card_type: str,
+        target_page: str,
+    ) -> ClickableSummaryCard:
+        return ClickableSummaryCard(
+            title=title,
+            value=value,
+            hint=hint,
+            card_type=card_type,
+            target_page=target_page,
+            navigate_to_page=self.navigate_to_page,
+        )
 
     def _calculate_bank_currency_totals(self) -> dict[str, Decimal]:
         currency_totals: dict[str, Decimal] = {}
@@ -81,21 +214,6 @@ class DashboardPage(QWidget):
 
         return currency_totals
 
-    def _build_currency_totals_text(self) -> str:
-        currency_totals = self._calculate_bank_currency_totals()
-
-        if not currency_totals:
-            return "Kayıt yok"
-
-        lines: list[str] = []
-
-        for currency_code in sorted(currency_totals.keys(), key=_currency_sort_key):
-            lines.append(
-                f"{currency_code}: {_format_currency_amount(currency_totals[currency_code], currency_code)}"
-            )
-
-        return "\n".join(lines)
-
     def _build_pending_pos_text(self) -> str:
         lines = [f"{tr_number(self.dashboard_data.pending_pos_count)} kayıt"]
 
@@ -112,175 +230,271 @@ class DashboardPage(QWidget):
 
         return "\n".join(lines)
 
-    def _build_summary_cards(self) -> QGridLayout:
+    def _build_due_radar_cards(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(16)
 
-        health_hint = (
-            f"OK: {self.dashboard_data.health_ok_count} | "
-            f"WARN: {self.dashboard_data.health_warn_count} | "
-            f"FAIL: {self.dashboard_data.health_fail_count}"
+        overdue_and_problem_count = (
+            self.dashboard_data.overdue_pending_count
+            + self.dashboard_data.problem_count
         )
 
-        bank_currency_totals_text = self._build_currency_totals_text()
-        pending_pos_text = self._build_pending_pos_text()
+        overdue_and_problem_hint_parts: list[str] = []
+
+        if self.dashboard_data.overdue_pending_count > 0:
+            overdue_and_problem_hint_parts.append(
+                f"Vadesi geçmiş: {_format_currency_totals_inline(self.dashboard_data.overdue_pending_currency_totals)}"
+            )
+
+        if self.dashboard_data.problem_count > 0:
+            overdue_and_problem_hint_parts.append(
+                f"Problem: {_format_currency_totals_inline(self.dashboard_data.problem_currency_totals)}"
+            )
+
+        overdue_and_problem_hint = (
+            " | ".join(overdue_and_problem_hint_parts)
+            if overdue_and_problem_hint_parts
+            else "Vadesi geçmiş veya problemli çek görünmüyor"
+        )
 
         cards = [
-            SummaryCard(
-                "SİSTEM SAĞLIĞI",
-                self.dashboard_data.health_status,
-                health_hint,
-                "success" if self.dashboard_data.health_status == "OK" else "risk",
+            self._build_dashboard_card(
+                title="BUGÜN VADELİ",
+                value=f"{tr_number(self.dashboard_data.due_today_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.due_today_currency_totals),
+                card_type="risk" if self.dashboard_data.due_today_count > 0 else "normal",
+                target_page="Vade Takvimi",
             ),
-            SummaryCard(
-                "BANKA BAKİYELERİ",
-                bank_currency_totals_text,
-                "Aktif banka hesaplarının para birimi bazlı güncel toplamı",
-                "highlight",
+            self._build_dashboard_card(
+                title="7 GÜN İÇİNDE ALINACAK",
+                value=f"{tr_number(self.dashboard_data.next_7_received_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.next_7_received_currency_totals),
+                card_type="success",
+                target_page="Vade Takvimi",
             ),
-            SummaryCard(
-                "BEKLEYEN POS",
-                pending_pos_text,
-                "Henüz gerçekleşmemiş POS yatış kaydı ve beklenen net tutar",
-                "normal",
+            self._build_dashboard_card(
+                title="7 GÜN İÇİNDE ÖDENECEK",
+                value=f"{tr_number(self.dashboard_data.next_7_issued_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.next_7_issued_currency_totals),
+                card_type="risk" if self.dashboard_data.next_7_issued_count > 0 else "normal",
+                target_page="Vade Takvimi",
             ),
-            SummaryCard(
-                "YAZILAN ÇEK RİSKİ",
-                tr_money(self.dashboard_data.pending_issued_check_amount),
-                "Ödenmemiş yazılan çek toplamı",
-                "risk",
-            ),
-            SummaryCard(
-                "ALINACAK ÇEK",
-                tr_money(self.dashboard_data.pending_received_check_amount),
-                "Portföy / bankada / tahsilde bekleyen çekler",
-                "success",
-            ),
-            SummaryCard(
-                "YETKİSİZ DENEME",
-                tr_number(self.dashboard_data.permission_denied_count),
-                "Toplam PERMISSION_DENIED audit kaydı",
-                "normal",
+            self._build_dashboard_card(
+                title="RİSK / GECİKME",
+                value=f"{tr_number(overdue_and_problem_count)} kayıt",
+                hint=overdue_and_problem_hint,
+                card_type="risk" if overdue_and_problem_count > 0 else "success",
+                target_page="Vade Takvimi",
             ),
         ]
 
-        positions = [
-            (0, 0),
-            (0, 1),
-            (0, 2),
-            (1, 0),
-            (1, 1),
-            (1, 2),
-        ]
-
-        for card, position in zip(cards, positions):
-            row, column = position
-            grid.addWidget(card, row, column)
+        for column, card in enumerate(cards):
+            grid.addWidget(card, 0, column)
 
         return grid
 
-    def _build_bank_table_card(self) -> QWidget:
+    def _build_money_radar_cards(self) -> QGridLayout:
+        grid = QGridLayout()
+        grid.setSpacing(16)
+
+        bank_currency_totals = self._calculate_bank_currency_totals()
+
+        cards = [
+            self._build_dashboard_card(
+                title="BANKA BAKİYESİ",
+                value=_format_currency_totals(bank_currency_totals),
+                hint="Aktif banka hesaplarının para birimi bazlı güncel toplamı",
+                card_type="highlight",
+                target_page="Bankalar",
+            ),
+            self._build_dashboard_card(
+                title="BEKLEYEN POS",
+                value=self._build_pending_pos_text(),
+                hint="Henüz gerçekleşmemiş POS yatışları",
+                card_type="normal",
+                target_page="POS Mutabakat",
+            ),
+            self._build_dashboard_card(
+                title="BU AY ALINAN ÇEK",
+                value=f"{tr_number(self.dashboard_data.month_received_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.month_received_currency_totals),
+                card_type="success",
+                target_page="Vade Takvimi",
+            ),
+            self._build_dashboard_card(
+                title="BU AY YAZILAN ÇEK",
+                value=f"{tr_number(self.dashboard_data.month_issued_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.month_issued_currency_totals),
+                card_type="risk" if self.dashboard_data.month_issued_count > 0 else "normal",
+                target_page="Vade Takvimi",
+            ),
+        ]
+
+        for column, card in enumerate(cards):
+            grid.addWidget(card, 0, column)
+
+        return grid
+
+    def _build_action_items_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
+        card.setCursor(Qt.PointingHandCursor)
+        card.setToolTip("Vade Takvimi ekranına gitmek için çift tıkla.")
+
+        original_mouse_double_click_event = card.mouseDoubleClickEvent
+
+        def open_due_calendar(event: Any) -> None:
+            if self.navigate_to_page is not None:
+                self.navigate_to_page("Vade Takvimi")
+
+            original_mouse_double_click_event(event)
+
+        card.mouseDoubleClickEvent = open_due_calendar
 
         layout = QVBoxLayout(card)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        title = QLabel("Banka Hesapları")
+        title = QLabel("Aksiyon Gerektiren Çekler")
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Açılış bakiyesi, giriş, çıkış ve güncel bakiye özeti. "
-            "Her hesap kendi para birimiyle gösterilir."
+            "Vadesi geçmiş, bugün vadeli, 7 gün içinde vadeli ve problemli/riskli çeklerin öncelikli listesi."
         )
         subtitle.setObjectName("MutedText")
+        subtitle.setWordWrap(True)
 
-        bank_table = QTableWidget()
-        bank_table.setColumnCount(7)
-        bank_table.setHorizontalHeaderLabels(
+        table = QTableWidget()
+        table.setColumnCount(8)
+        table.setHorizontalHeaderLabels(
             [
-                "Banka",
-                "Hesap",
-                "Para Birimi",
-                "Açılış",
-                "Giriş",
-                "Çıkış",
-                "Güncel",
+                "Öncelik",
+                "Tür",
+                "Taraf",
+                "Çek No",
+                "Vade",
+                "Kalan",
+                "Tutar",
+                "Durum",
             ]
         )
-        bank_table.verticalHeader().setVisible(False)
-        bank_table.setAlternatingRowColors(False)
-        bank_table.setSelectionBehavior(QTableWidget.SelectRows)
-        bank_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        bank_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(False)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.setMinimumHeight(320)
+        table.cellDoubleClicked.connect(lambda row, column: self._open_due_calendar_from_table())
 
-        self._fill_bank_table(bank_table)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+
+        self._fill_action_items_table(table)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addWidget(bank_table, 1)
+        layout.addWidget(table, 1)
 
         return card
 
-    def _fill_bank_table(self, bank_table: QTableWidget) -> None:
-        bank_table.setRowCount(len(self.dashboard_data.bank_accounts))
+    def _open_due_calendar_from_table(self) -> None:
+        if self.navigate_to_page is not None:
+            self.navigate_to_page("Vade Takvimi")
 
-        for row_index, account in enumerate(self.dashboard_data.bank_accounts):
-            currency_code = str(account["currency_code"] or "").strip().upper()
+    def _fill_action_items_table(self, table: QTableWidget) -> None:
+        action_items = self.dashboard_data.due_action_items
 
-            values = [
-                account["bank_name"],
-                account["account_name"],
-                currency_code,
-                _format_currency_amount(account["opening_balance"], currency_code),
-                _format_currency_amount(account["incoming_total"], currency_code),
-                _format_currency_amount(account["outgoing_total"], currency_code),
-                _format_currency_amount(account["current_balance"], currency_code),
-            ]
+        if not action_items:
+            table.setRowCount(1)
 
-            for column_index, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setForeground(QColor("#e5e7eb"))
+            item = QTableWidgetItem(
+                "Aksiyon gerektiren çek bulunmuyor. Bugün radar temiz görünüyor."
+            )
+            item.setForeground(QColor("#a7f3d0"))
+            item.setTextAlignment(Qt.AlignCenter)
 
-                if column_index in {3, 4, 5, 6}:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                else:
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            table.setItem(0, 0, item)
+            table.setSpan(0, 0, 1, 8)
+            table.resizeRowsToContents()
+            return
 
-                if column_index == 6:
-                    font = QFont()
-                    font.setBold(True)
-                    item.setFont(font)
+        table.setRowCount(len(action_items))
 
-                bank_table.setItem(row_index, column_index, item)
+        for row_index, action_item in enumerate(action_items):
+            self._fill_action_item_row(
+                table=table,
+                row_index=row_index,
+                action_item=action_item,
+            )
 
-        bank_table.resizeRowsToContents()
+        table.resizeRowsToContents()
 
-    def _build_bottom_cards(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setSpacing(16)
-
-        security_card = InfoCard(
-            "Güvenlik",
-            "Yetkisiz işlem denemeleri audit log’a düşüyor. Güvenlik özeti mail sistemi aktif.",
-            "Kilit kapıda, kamera kayıtta.",
+    def _fill_action_item_row(
+        self,
+        *,
+        table: QTableWidget,
+        row_index: int,
+        action_item: DashboardDueItem,
+    ) -> None:
+        type_text = _check_type_text(action_item.check_type)
+        urgency_text = _urgency_text(action_item.urgency)
+        amount_text = _format_currency_amount(
+            action_item.amount,
+            action_item.currency_code,
         )
+        due_date_text = _format_date_tr(action_item.due_date)
+        days_text = _days_text(action_item.due_date)
 
-        backup_card = InfoCard(
-            "Yedekleme",
-            "Günlük PostgreSQL yedeği, mail eki ve haftalık restore testi hazır.",
-            "Yedek var, restore var; panik yok.",
-        )
+        values = [
+            urgency_text,
+            type_text,
+            action_item.party_name,
+            action_item.check_number,
+            due_date_text,
+            days_text,
+            amount_text,
+            action_item.status_text,
+        ]
 
-        report_card = InfoCard(
-            "Raporlar",
-            "Excel finans raporu, POS mutabakatı, risk ve sağlık raporları bu omurgaya bağlanacak.",
-            "Rakamlar artık sahneye çıkacak.",
-        )
+        foreground = _urgency_color(action_item.urgency)
 
-        grid.addWidget(security_card, 0, 0)
-        grid.addWidget(backup_card, 0, 1)
-        grid.addWidget(report_card, 0, 2)
+        for column_index, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setForeground(foreground)
 
-        return grid
+            if column_index == 6:
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            else:
+                item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+            if column_index in {0, 6}:
+                font = QFont()
+                font.setBold(True)
+                item.setFont(font)
+
+            item.setToolTip(
+                "\n".join(
+                    [
+                        f"Öncelik: {urgency_text}",
+                        f"Tür: {type_text}",
+                        f"Taraf: {action_item.party_name}",
+                        f"Çek No: {action_item.check_number}",
+                        f"Vade: {due_date_text}",
+                        f"Kalan: {days_text}",
+                        f"Tutar: {amount_text}",
+                        f"Durum: {action_item.status_text}",
+                        f"Referans: {action_item.reference_no or '-'}",
+                        f"Açıklama: {action_item.description or '-'}",
+                    ]
+                )
+            )
+
+            table.setItem(row_index, column_index, item)

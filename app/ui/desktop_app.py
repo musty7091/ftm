@@ -30,6 +30,7 @@ from app.ui.pages.checks_page import ChecksPage
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.placeholder_page import AccessDeniedPage, PlaceholderPage
 from app.ui.pages.pos_page import PosPage
+from app.ui.pages.reports_page import ReportsPage
 from app.ui.styles import APP_STYLE
 from app.ui.ui_helpers import clear_layout
 
@@ -41,7 +42,7 @@ PAGE_SUBTITLES = {
     "Çek Yönetimi": "Yazılan çekler, alınan çekler, vade takvimi ve çek riskleri burada yönetilecek.",
     "Vade Takvimi": "Gelen ve giden çeklerin vade tarihlerini masaüstü takvim görünümünde takip et.",
     "Müşteri / Tedarikçi Kartları": "Çek aldığın müşteriler, çek verdiğin tedarikçiler ve nadir işlem yapılan taraflar burada yönetilecek.",
-    "Raporlar": "Finansal Excel, POS mutabakat, risk ve transfer öneri raporları burada olacak.",
+    "Raporlar": "A4 baskı düzenine uygun profesyonel PDF ve Excel raporları oluştur.",
     "Güvenlik": "Kullanıcılar, roller, audit log ve yetkisiz işlem denemeleri burada izlenecek.",
     "Sistem": "Yedekleme, restore testi, sağlık kontrolü ve mail durumları burada yönetilecek.",
     "Erişim Yok": "Bu ekran için mevcut rolün yetkili değil.",
@@ -236,6 +237,9 @@ class FtmDesktopWindow(QMainWindow):
         self.update_selected_nav_button()
         self.render_current_page()
 
+    def navigate_from_dashboard(self, page_title: str) -> None:
+        self.set_page(page_title)
+
     def render_current_page(self) -> None:
         clear_layout(self.content_layout)
 
@@ -259,6 +263,7 @@ class FtmDesktopWindow(QMainWindow):
             self.content_layout.addWidget(
                 DashboardPage(
                     dashboard_data=self.dashboard_data,
+                    navigate_to_page=self.navigate_from_dashboard,
                 ),
                 1,
             )
@@ -308,6 +313,16 @@ class FtmDesktopWindow(QMainWindow):
         if self.current_page == "Müşteri / Tedarikçi Kartları":
             self.content_layout.addWidget(
                 BusinessPartnersPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if self.current_page == "Raporlar":
+            self.content_layout.addWidget(
+                ReportsPage(
                     current_user=self.current_user,
                 ),
                 1,

@@ -519,15 +519,9 @@ class ChecksPage(QWidget):
     def _build_overview_action_area(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(10)
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 2)
+        grid.setColumnStretch(0, 1)
 
         grid.addWidget(self._build_operation_card(), 0, 0)
-
-        if self.current_role == "ADMIN":
-            grid.addWidget(self._build_admin_hint_card(), 0, 1)
-        else:
-            grid.addWidget(self._build_role_hint_card(), 0, 1)
 
         return grid
 
@@ -1350,82 +1344,335 @@ class ChecksPage(QWidget):
 
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
 
         title = QLabel("Operasyon Alanı")
         title.setObjectName("SectionTitle")
 
-        description = QLabel(
-            "Yazılan ve alınan çek operasyonları bu alandan yürütülecek. "
-            "Ana ekranda liste kalabalığı yok; operasyon odakta."
+        subtitle = QLabel(
+            "Çek işlemleri burada gruplandırılmıştır. Önce işlem türünü seç, ardından açılan pencerede ilgili çeki veya bilgileri tamamla."
         )
-        description.setObjectName("MutedText")
-        description.setWordWrap(True)
-
-        report_summary_button = QPushButton("Çek Rapor Özeti")
-        report_summary_button.setEnabled(True)
-        report_summary_button.clicked.connect(self._open_checks_report_dialog)
-
-        discount_batches_button = QPushButton("İskonto Paketleri")
-        discount_batches_button.setEnabled(True)
-        discount_batches_button.clicked.connect(self._open_discount_batches_dialog)
-
-        create_issued_button = QPushButton("Yazılan Çek Oluştur")
-        create_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
-        create_issued_button.clicked.connect(self._open_create_issued_check_dialog)
-
-        pay_issued_button = QPushButton("Yazılan Çek Ödendi")
-        pay_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        pay_issued_button.clicked.connect(self._open_pay_issued_check_dialog)
-
-        cancel_issued_button = QPushButton("Yazılan Çek İptal Et")
-        cancel_issued_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        cancel_issued_button.clicked.connect(self._open_cancel_issued_check_dialog)
-
-        create_received_button = QPushButton("Alınan Çek Oluştur")
-        create_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE", "DATA_ENTRY"})
-        create_received_button.clicked.connect(self._open_create_received_check_dialog)
-
-        send_received_to_bank_button = QPushButton("Alınan Çeki Bankaya Tahsile Ver")
-        send_received_to_bank_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        send_received_to_bank_button.clicked.connect(self._open_send_received_check_to_bank_dialog)
-
-        endorse_received_button = QPushButton("Alınan Çeki Kullan / Ciro Et")
-        endorse_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        endorse_received_button.clicked.connect(self._open_endorse_received_check_dialog)
-
-        discount_received_button = QPushButton("Alınan Çekleri İskontoya Ver / Kırdır")
-        discount_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        discount_received_button.clicked.connect(self._open_discount_received_check_dialog)
-
-        collect_received_button = QPushButton("Alınan Çek Tahsil Et")
-        collect_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        collect_received_button.clicked.connect(self._open_collect_received_check_dialog)
-
-        bounce_received_button = QPushButton("Alınan Çeki Karşılıksız İşaretle")
-        bounce_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        bounce_received_button.clicked.connect(self._open_bounce_received_check_dialog)
-
-        return_received_button = QPushButton("Alınan Çeki İade İşaretle")
-        return_received_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
-        return_received_button.clicked.connect(self._open_return_received_check_dialog)
+        subtitle.setObjectName("MutedText")
+        subtitle.setWordWrap(True)
 
         layout.addWidget(title)
-        layout.addWidget(description)
-        layout.addSpacing(6)
-        layout.addWidget(report_summary_button)
-        layout.addWidget(discount_batches_button)
-        layout.addWidget(create_issued_button)
-        layout.addWidget(pay_issued_button)
-        layout.addWidget(cancel_issued_button)
-        layout.addWidget(create_received_button)
-        layout.addWidget(send_received_to_bank_button)
-        layout.addWidget(endorse_received_button)
-        layout.addWidget(discount_received_button)
-        layout.addWidget(collect_received_button)
-        layout.addWidget(bounce_received_button)
-        layout.addWidget(return_received_button)
-        layout.addStretch()
+        layout.addWidget(subtitle)
+
+        groups_grid = QGridLayout()
+        groups_grid.setSpacing(12)
+        groups_grid.setColumnStretch(0, 1)
+        groups_grid.setColumnStretch(1, 1)
+        groups_grid.setColumnStretch(2, 1)
+
+        def run_first_available_action(
+            action_title: str,
+            candidate_method_names: list[str],
+        ) -> None:
+            for method_name in candidate_method_names:
+                method = getattr(self, method_name, None)
+
+                if callable(method):
+                    method()
+                    return
+
+            QMessageBox.warning(
+                self,
+                "İşlem bulunamadı",
+                (
+                    f"'{action_title}' işlemi için mevcut bir ekran fonksiyonu bulunamadı.\n\n"
+                    "Bu durum genellikle fonksiyon adının farklı olmasından kaynaklanır. "
+                    "Mevcut çek işlem fonksiyonları korunmuştur; sadece bu butonun bağlantı adı kontrol edilmelidir."
+                ),
+            )
+
+        def build_operation_button(
+            button_text: str,
+            candidate_method_names: list[str],
+            *,
+            button_type: str = "normal",
+        ) -> QPushButton:
+            button = QPushButton(button_text)
+            button.setMinimumHeight(36)
+            button.setCursor(Qt.PointingHandCursor)
+
+            if button_type == "risk":
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: rgba(127, 29, 29, 0.44);
+                        color: #fee2e2;
+                        border: 1px solid rgba(239, 68, 68, 0.55);
+                        border-radius: 10px;
+                        padding: 8px 12px;
+                        text-align: left;
+                        font-weight: 700;
+                    }
+
+                    QPushButton:hover {
+                        background-color: rgba(153, 27, 27, 0.70);
+                        color: #ffffff;
+                    }
+                    """
+                )
+            elif button_type == "success":
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: rgba(6, 78, 59, 0.42);
+                        color: #d1fae5;
+                        border: 1px solid rgba(16, 185, 129, 0.50);
+                        border-radius: 10px;
+                        padding: 8px 12px;
+                        text-align: left;
+                        font-weight: 700;
+                    }
+
+                    QPushButton:hover {
+                        background-color: rgba(5, 150, 105, 0.62);
+                        color: #ffffff;
+                    }
+                    """
+                )
+            elif button_type == "primary":
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: #2563eb;
+                        color: #ffffff;
+                        border: 1px solid #3b82f6;
+                        border-radius: 10px;
+                        padding: 8px 12px;
+                        text-align: left;
+                        font-weight: 800;
+                    }
+
+                    QPushButton:hover {
+                        background-color: #1d4ed8;
+                    }
+                    """
+                )
+            else:
+                button.setStyleSheet(
+                    """
+                    QPushButton {
+                        background-color: #172033;
+                        color: #cbd5e1;
+                        border: 1px solid #24324a;
+                        border-radius: 10px;
+                        padding: 8px 12px;
+                        text-align: left;
+                        font-weight: 650;
+                    }
+
+                    QPushButton:hover {
+                        background-color: #1e293b;
+                        color: #ffffff;
+                    }
+                    """
+                )
+
+            button.clicked.connect(
+                lambda checked=False, current_button_text=button_text, current_candidate_method_names=candidate_method_names: run_first_available_action(
+                    current_button_text,
+                    current_candidate_method_names,
+                )
+            )
+
+            return button
+
+        def build_operation_group(
+            group_title: str,
+            group_subtitle: str,
+            buttons: list[QPushButton],
+        ) -> QWidget:
+            group_card = QFrame()
+            group_card.setObjectName("Card")
+
+            group_card.setStyleSheet(
+                """
+                QFrame#Card {
+                    background-color: rgba(15, 23, 42, 0.58);
+                    border: 1px solid #24324a;
+                    border-radius: 14px;
+                }
+                """
+            )
+
+            group_layout = QVBoxLayout(group_card)
+            group_layout.setContentsMargins(14, 12, 14, 12)
+            group_layout.setSpacing(8)
+
+            title_label = QLabel(group_title)
+            title_label.setObjectName("SectionTitle")
+
+            subtitle_label = QLabel(group_subtitle)
+            subtitle_label.setObjectName("MutedText")
+            subtitle_label.setWordWrap(True)
+
+            group_layout.addWidget(title_label)
+            group_layout.addWidget(subtitle_label)
+            group_layout.addSpacing(4)
+
+            for button in buttons:
+                group_layout.addWidget(button)
+
+            group_layout.addStretch(1)
+
+            return group_card
+
+        report_group = build_operation_group(
+            "Rapor & Paketler",
+            "Çek raporları ve iskonto paketleri bu bölümden yönetilir.",
+            [
+                build_operation_button(
+                    "Çek Rapor Özeti",
+                    [
+                        "_open_checks_report_dialog",
+                        "_open_check_report_dialog",
+                        "_show_checks_report_dialog",
+                        "_show_check_report_dialog",
+                        "_open_checks_report",
+                        "_show_checks_report",
+                    ],
+                    button_type="primary",
+                ),
+                build_operation_button(
+                    "İskonto Paketleri",
+                    [
+                        "_open_received_check_discount_batches_dialog",
+                        "_open_discount_batches_dialog",
+                        "_show_received_check_discount_batches_dialog",
+                        "_show_discount_batches_dialog",
+                        "_open_discount_batches",
+                        "_show_discount_batches",
+                    ],
+                    button_type="primary",
+                ),
+            ],
+        )
+
+        issued_group = build_operation_group(
+            "Yazılan Çek İşlemleri",
+            "Tedarikçilere verilen çeklerin oluşturma, ödeme ve iptal işlemleri.",
+            [
+                build_operation_button(
+                    "Yazılan Çek Oluştur",
+                    [
+                        "_open_issued_check_create_dialog",
+                        "_show_issued_check_create_dialog",
+                        "_create_issued_check",
+                        "_open_create_issued_check_dialog",
+                    ],
+                    button_type="risk",
+                ),
+                build_operation_button(
+                    "Yazılan Çek Ödendi",
+                    [
+                        "_open_issued_check_pay_dialog",
+                        "_show_issued_check_pay_dialog",
+                        "_pay_issued_check",
+                        "_open_pay_issued_check_dialog",
+                    ],
+                    button_type="risk",
+                ),
+                build_operation_button(
+                    "Yazılan Çek İptal Et",
+                    [
+                        "_open_issued_check_cancel_dialog",
+                        "_show_issued_check_cancel_dialog",
+                        "_cancel_issued_check",
+                        "_open_cancel_issued_check_dialog",
+                    ],
+                    button_type="normal",
+                ),
+            ],
+        )
+
+        received_group = build_operation_group(
+            "Alınan Çek İşlemleri",
+            "Müşterilerden alınan çeklerin tahsil, banka, ciro, iskonto ve problem işlemleri.",
+            [
+                build_operation_button(
+                    "Alınan Çek Oluştur",
+                    [
+                        "_open_received_check_create_dialog",
+                        "_show_received_check_create_dialog",
+                        "_create_received_check",
+                        "_open_create_received_check_dialog",
+                    ],
+                    button_type="success",
+                ),
+                build_operation_button(
+                    "Alınan Çeki Bankaya Tahsile Ver",
+                    [
+                        "_open_received_check_send_to_bank_dialog",
+                        "_show_received_check_send_to_bank_dialog",
+                        "_send_received_check_to_bank",
+                        "_open_send_received_check_to_bank_dialog",
+                    ],
+                    button_type="success",
+                ),
+                build_operation_button(
+                    "Alınan Çeki Kullan / Ciro Et",
+                    [
+                        "_open_received_check_endorse_dialog",
+                        "_show_received_check_endorse_dialog",
+                        "_endorse_received_check",
+                        "_open_endorse_received_check_dialog",
+                    ],
+                    button_type="success",
+                ),
+                build_operation_button(
+                    "Alınan Çekleri İskontoya Ver / Kırdır",
+                    [
+                        "_open_received_check_discount_batch_dialog",
+                        "_show_received_check_discount_batch_dialog",
+                        "_discount_received_checks_batch",
+                        "_open_discount_received_checks_batch_dialog",
+                        "_open_received_check_discount_dialog",
+                        "_show_received_check_discount_dialog",
+                        "_discount_received_check",
+                    ],
+                    button_type="success",
+                ),
+                build_operation_button(
+                    "Alınan Çek Tahsil Et",
+                    [
+                        "_open_received_check_collect_dialog",
+                        "_show_received_check_collect_dialog",
+                        "_collect_received_check",
+                        "_open_collect_received_check_dialog",
+                    ],
+                    button_type="success",
+                ),
+                build_operation_button(
+                    "Alınan Çeki Karşılıksız İşaretle",
+                    [
+                        "_open_received_check_bounce_dialog",
+                        "_show_received_check_bounce_dialog",
+                        "_mark_received_check_bounced",
+                        "_open_bounce_received_check_dialog",
+                    ],
+                    button_type="risk",
+                ),
+                build_operation_button(
+                    "Alınan Çeki İade İşaretle",
+                    [
+                        "_open_received_check_return_dialog",
+                        "_show_received_check_return_dialog",
+                        "_mark_received_check_returned",
+                        "_open_return_received_check_dialog",
+                    ],
+                    button_type="normal",
+                ),
+            ],
+        )
+
+        groups_grid.addWidget(received_group, 0, 0)
+        groups_grid.addWidget(issued_group, 0, 1)
+        groups_grid.addWidget(report_group, 0, 2)
+
+        layout.addLayout(groups_grid)
 
         return card
 
