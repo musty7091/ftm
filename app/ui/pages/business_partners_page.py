@@ -1,5 +1,6 @@
 ﻿from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -17,16 +18,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableWidget,
+    QTabWidget,
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from app.db.session import session_scope
 from app.models.business_partner import BusinessPartner
+from app.models.check import IssuedCheck, ReceivedCheck
 from app.models.enums import BusinessPartnerType
 from app.services.audit_service import write_audit_log
 
@@ -48,11 +50,71 @@ class BusinessPartnerRow:
     updated_at: datetime | None
 
 
+@dataclass(frozen=True)
+class PartnerPositionBucket:
+    count: int
+    currency_totals: dict[str, Decimal]
+
+
 PARTNER_TYPE_TEXTS = {
     "CUSTOMER": "Müşteri",
     "SUPPLIER": "Tedarikçi",
     "BOTH": "Müşteri & Tedarikçi",
     "OTHER": "Diğer",
+}
+
+
+RECEIVED_OPEN_STATUSES = {
+    "PORTFOLIO",
+    "GIVEN_TO_BANK",
+    "IN_COLLECTION",
+}
+
+RECEIVED_PROBLEM_STATUSES = {
+    "BOUNCED",
+}
+
+RECEIVED_CLOSED_STATUSES = {
+    "COLLECTED",
+    "ENDORSED",
+    "DISCOUNTED",
+    "RETURNED",
+    "CANCELLED",
+}
+
+ISSUED_OPEN_STATUSES = {
+    "PREPARED",
+    "GIVEN",
+}
+
+ISSUED_PROBLEM_STATUSES = {
+    "RISK",
+}
+
+ISSUED_CLOSED_STATUSES = {
+    "PAID",
+    "CANCELLED",
+}
+
+RECEIVED_STATUS_TEXTS = {
+    "PORTFOLIO": "Portföyde",
+    "GIVEN_TO_BANK": "Bankaya Verildi",
+    "IN_COLLECTION": "Tahsilde",
+    "COLLECTED": "Tahsil Edildi",
+    "BOUNCED": "Karşılıksız",
+    "RETURNED": "İade Edildi",
+    "ENDORSED": "Ciro Edildi",
+    "DISCOUNTED": "İskontoya Verildi",
+    "CANCELLED": "İptal Edildi",
+}
+
+
+ISSUED_STATUS_TEXTS = {
+    "PREPARED": "Hazırlandı",
+    "GIVEN": "Verildi",
+    "PAID": "Ödendi",
+    "CANCELLED": "İptal Edildi",
+    "RISK": "Riskli",
 }
 
 
@@ -160,6 +222,58 @@ QPushButton#ActionSecondaryButton:hover {
     background-color: #334155;
     color: #ffffff;
 }
+
+QFrame#FilterPanel {
+    background-color: #101827;
+    border: 1px solid #24324a;
+    border-radius: 18px;
+}
+
+QFrame#FilterPanelAccent {
+    background-color: rgba(37, 99, 235, 0.10);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 14px;
+}
+
+QFrame#PositionPanel {
+    background-color: rgba(6, 78, 59, 0.16);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 16px;
+}
+
+QFrame#PositionMiniCard {
+    background-color: rgba(15, 23, 42, 0.74);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 12px;
+}
+
+QLabel#PositionTitle {
+    color: #f8fafc;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+QLabel#PositionSubtitle {
+    color: #93c5fd;
+    font-size: 12px;
+}
+
+QLabel#PositionCardTitle {
+    color: #bfdbfe;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+QLabel#PositionCardValue {
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 900;
+}
+
+QLabel#PositionCardHint {
+    color: #94a3b8;
+    font-size: 11px;
+}
 """
 
 
@@ -197,11 +311,82 @@ def _clean_optional_text(value: str | None) -> str | None:
     return cleaned_value
 
 
+def _normalize_duplicate_text(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
 def _format_datetime(value: datetime | None) -> str:
     if value is None:
         return "-"
 
     return value.strftime("%d.%m.%Y %H:%M")
+
+def _format_date(value: Any) -> str:
+    if value is None:
+        return "-"
+
+    if hasattr(value, "strftime"):
+        return value.strftime("%d.%m.%Y")
+
+    return str(value)
+
+def _format_decimal_tr(value: Decimal) -> str:
+    formatted = f"{value:,.2f}"
+    return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _format_currency_amount(amount: Decimal, currency_code: str) -> str:
+    return f"{_format_decimal_tr(Decimal(str(amount)))} {currency_code}"
+
+
+def _format_currency_totals(currency_totals: dict[str, Decimal]) -> str:
+    if not currency_totals:
+        return "-"
+
+    formatted_parts: list[str] = []
+
+    for currency_code in sorted(currency_totals):
+        amount = currency_totals[currency_code]
+        formatted_parts.append(_format_currency_amount(amount, currency_code))
+
+    return " / ".join(formatted_parts)
+
+
+def _format_position_bucket(bucket: PartnerPositionBucket) -> tuple[str, str]:
+    if bucket.count <= 0:
+        return "0 kayıt", "-"
+
+    return f"{bucket.count} kayıt", _format_currency_totals(bucket.currency_totals)
+
+def _received_status_text(value: Any) -> str:
+    status = _enum_value(value)
+
+    return RECEIVED_STATUS_TEXTS.get(status, status or "-")
+
+
+def _issued_status_text(value: Any) -> str:
+    status = _enum_value(value)
+
+    return ISSUED_STATUS_TEXTS.get(status, status or "-")
+
+def _empty_position_bucket() -> PartnerPositionBucket:
+    return PartnerPositionBucket(count=0, currency_totals={})
+
+
+def _add_amount_to_bucket(
+    buckets: dict[str, PartnerPositionBucket],
+    bucket_key: str,
+    amount: Decimal,
+    currency_code: str,
+) -> None:
+    current_bucket = buckets.get(bucket_key, _empty_position_bucket())
+    new_totals = dict(current_bucket.currency_totals)
+    new_totals[currency_code] = (new_totals.get(currency_code, Decimal("0.00")) + amount).quantize(Decimal("0.01"))
+
+    buckets[bucket_key] = PartnerPositionBucket(
+        count=current_bucket.count + 1,
+        currency_totals=new_totals,
+    )
 
 
 def _current_role_text(current_user: Any | None) -> str:
@@ -251,6 +436,385 @@ def _business_partner_to_dict(partner: BusinessPartner) -> dict[str, Any]:
         "updated_at": partner.updated_at.isoformat() if partner.updated_at else None,
     }
 
+class BusinessPartnerChecksDetailDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        parent: QWidget | None,
+        partner_row: BusinessPartnerRow,
+    ) -> None:
+        super().__init__(parent)
+
+        self.partner_row = partner_row
+        self.received_rows = self._load_received_checks()
+        self.issued_rows = self._load_issued_checks()
+
+        self.setWindowTitle(f"Çek Detayları - {partner_row.name}")
+        self.resize(1180, 720)
+        self.setMinimumSize(980, 620)
+        self.setModal(True)
+        self.setStyleSheet(
+            PAGE_STYLE
+            + """
+            QDialog {
+                background-color: #0f172a;
+            }
+
+            QFrame#DialogCard {
+                background-color: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 18px;
+            }
+
+            QLabel#DialogTitle {
+                color: #f8fafc;
+                font-size: 20px;
+                font-weight: 800;
+            }
+
+            QLabel#DialogSubtitle {
+                color: #94a3b8;
+                font-size: 12px;
+            }
+
+            QTabWidget::pane {
+                border: 1px solid #1e293b;
+                background-color: #0b1220;
+                border-radius: 12px;
+                top: -1px;
+            }
+
+            QTabBar::tab {
+                background-color: #172033;
+                color: #94a3b8;
+                border: 1px solid #24324a;
+                border-bottom: none;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                padding: 8px 16px;
+                margin-right: 5px;
+                min-width: 128px;
+                font-weight: 600;
+            }
+
+            QTabBar::tab:selected {
+                background-color: #2563eb;
+                color: #ffffff;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background-color: #1e293b;
+                color: #e5e7eb;
+            }
+            """
+        )
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(22, 22, 22, 22)
+        root_layout.setSpacing(0)
+
+        card = QFrame()
+        card.setObjectName("DialogCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        title = QLabel(f"Çek Detayları: {self.partner_row.name}")
+        title.setObjectName("DialogTitle")
+
+        subtitle = QLabel(
+            f"Tip: {business_partner_type_text(self.partner_row.partner_type)} | "
+            f"Durum: {'Aktif' if self.partner_row.is_active else 'Pasif'} | "
+            "Bu ekran cari hesap hareketi değil, seçili karta bağlı gelen ve giden çek listesidir."
+        )
+        subtitle.setObjectName("DialogSubtitle")
+        subtitle.setWordWrap(True)
+
+        tabs = QTabWidget()
+        tabs.addTab(self._build_received_tab(), f"Alınan Çekler ({len(self.received_rows)})")
+        tabs.addTab(self._build_issued_tab(), f"Yazılan Çekler ({len(self.issued_rows)})")
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+
+        close_button = QPushButton("Kapat")
+        close_button.setObjectName("ActionSecondaryButton")
+        close_button.setMinimumHeight(40)
+        close_button.clicked.connect(self.accept)
+
+        button_row.addWidget(close_button)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(tabs, 1)
+        layout.addLayout(button_row)
+
+        root_layout.addWidget(card)
+
+    def _load_received_checks(self) -> list[ReceivedCheck]:
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(ReceivedCheck)
+                    .where(ReceivedCheck.customer_id == self.partner_row.id)
+                    .order_by(
+                        ReceivedCheck.due_date.asc(),
+                        ReceivedCheck.id.asc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            for row in rows:
+                session.expunge(row)
+
+            return rows
+
+    def _load_issued_checks(self) -> list[IssuedCheck]:
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(IssuedCheck)
+                    .where(IssuedCheck.supplier_id == self.partner_row.id)
+                    .order_by(
+                        IssuedCheck.due_date.asc(),
+                        IssuedCheck.id.asc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            for row in rows:
+                session.expunge(row)
+
+            return rows
+
+    def _build_received_tab(self) -> QWidget:
+        page = QWidget()
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        info_label = QLabel(
+            "Bu listede seçili karttan alınan çekler görünür."
+            if self.received_rows
+            else "Bu karta ait alınan çek bulunmuyor."
+        )
+        info_label.setObjectName("MutedText")
+        info_label.setWordWrap(True)
+
+        table = QTableWidget()
+        table.setColumnCount(9)
+        table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Çek No",
+                "Keşideci Banka",
+                "Alınış",
+                "Vade",
+                "Tutar",
+                "Durum",
+                "Referans",
+                "Açıklama",
+            ]
+        )
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.verticalHeader().setDefaultSectionSize(32)
+        table.verticalHeader().setMinimumSectionSize(28)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+
+        self._fill_received_table(table)
+
+        layout.addWidget(info_label)
+        layout.addWidget(table, 1)
+
+        return page
+
+    def _build_issued_tab(self) -> QWidget:
+        page = QWidget()
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        info_label = QLabel(
+            "Bu listede seçili karta yazılan çekler görünür."
+            if self.issued_rows
+            else "Bu karta ait yazılan çek bulunmuyor."
+        )
+        info_label.setObjectName("MutedText")
+        info_label.setWordWrap(True)
+
+        table = QTableWidget()
+        table.setColumnCount(9)
+        table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Çek No",
+                "Keşide",
+                "Vade",
+                "Tutar",
+                "Durum",
+                "Referans",
+                "Açıklama",
+                "Banka Hesap ID",
+            ]
+        )
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.verticalHeader().setDefaultSectionSize(32)
+        table.verticalHeader().setMinimumSectionSize(28)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+
+        self._fill_issued_table(table)
+
+        layout.addWidget(info_label)
+        layout.addWidget(table, 1)
+
+        return page
+
+    def _fill_received_table(self, table: QTableWidget) -> None:
+        table.setRowCount(len(self.received_rows))
+
+        for row_index, received_check in enumerate(self.received_rows):
+            currency_code = _enum_value(received_check.currency_code) or "TRY"
+
+            values = [
+                str(received_check.id),
+                received_check.check_number,
+                received_check.drawer_bank_name,
+                _format_date(received_check.received_date),
+                _format_date(received_check.due_date),
+                _format_currency_amount(
+                    Decimal(str(received_check.amount or "0.00")),
+                    currency_code,
+                ),
+                _received_status_text(received_check.status),
+                received_check.reference_no or "-",
+                received_check.description or "-",
+            ]
+
+            status = _enum_value(received_check.status)
+
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+
+                if status in RECEIVED_OPEN_STATUSES:
+                    item.setForeground(QColor("#e5e7eb"))
+                elif status in RECEIVED_PROBLEM_STATUSES:
+                    item.setForeground(QColor("#fbbf24"))
+                elif status in RECEIVED_CLOSED_STATUSES:
+                    item.setForeground(QColor("#22c55e"))
+                else:
+                    item.setForeground(QColor("#e5e7eb"))
+
+                if column_index == 5:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                item.setToolTip("\n".join([
+                    f"ID: {received_check.id}",
+                    f"Çek No: {received_check.check_number}",
+                    f"Keşideci Banka: {received_check.drawer_bank_name}",
+                    f"Alınış: {_format_date(received_check.received_date)}",
+                    f"Vade: {_format_date(received_check.due_date)}",
+                    f"Tutar: {values[5]}",
+                    f"Durum: {values[6]}",
+                    f"Referans: {received_check.reference_no or '-'}",
+                    f"Açıklama: {received_check.description or '-'}",
+                ]))
+
+                table.setItem(row_index, column_index, item)
+
+        table.resizeRowsToContents()
+
+    def _fill_issued_table(self, table: QTableWidget) -> None:
+        table.setRowCount(len(self.issued_rows))
+
+        for row_index, issued_check in enumerate(self.issued_rows):
+            currency_code = _enum_value(issued_check.currency_code) or "TRY"
+
+            values = [
+                str(issued_check.id),
+                issued_check.check_number,
+                _format_date(issued_check.issue_date),
+                _format_date(issued_check.due_date),
+                _format_currency_amount(
+                    Decimal(str(issued_check.amount or "0.00")),
+                    currency_code,
+                ),
+                _issued_status_text(issued_check.status),
+                issued_check.reference_no or "-",
+                issued_check.description or "-",
+                str(issued_check.bank_account_id),
+            ]
+
+            status = _enum_value(issued_check.status)
+
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+
+                if status in ISSUED_OPEN_STATUSES:
+                    item.setForeground(QColor("#e5e7eb"))
+                elif status in ISSUED_PROBLEM_STATUSES:
+                    item.setForeground(QColor("#fbbf24"))
+                elif status in ISSUED_CLOSED_STATUSES:
+                    item.setForeground(QColor("#22c55e"))
+                else:
+                    item.setForeground(QColor("#e5e7eb"))
+
+                if column_index == 4:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                item.setToolTip("\n".join([
+                    f"ID: {issued_check.id}",
+                    f"Çek No: {issued_check.check_number}",
+                    f"Keşide: {_format_date(issued_check.issue_date)}",
+                    f"Vade: {_format_date(issued_check.due_date)}",
+                    f"Tutar: {values[4]}",
+                    f"Durum: {values[5]}",
+                    f"Referans: {issued_check.reference_no or '-'}",
+                    f"Açıklama: {issued_check.description or '-'}",
+                    f"Banka Hesap ID: {issued_check.bank_account_id}",
+                ]))
+
+                table.setItem(row_index, column_index, item)
+
+        table.resizeRowsToContents()
 
 class BusinessPartnerDialog(QDialog):
     def __init__(
@@ -515,55 +1079,87 @@ class BusinessPartnersPage(QWidget):
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(14)
+        root_layout.setSpacing(10)
 
-        header_card = self._build_header_card()
         filter_card = self._build_filter_card()
         summary_layout = self._build_summary_layout()
         table_card = self._build_table_card()
 
-        root_layout.addWidget(header_card)
         root_layout.addWidget(filter_card)
         root_layout.addLayout(summary_layout)
         root_layout.addWidget(table_card, 1)
 
         self._reload_data(reset_page=True)
 
-    def _build_header_card(self) -> QWidget:
+    def _build_filter_card(self) -> QWidget:
         card = QFrame()
-        card.setObjectName("Card")
+        card.setObjectName("FilterPanel")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(6)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
 
         title = QLabel("Müşteri / Tedarikçi Kartları")
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Gelen ve giden çeklerde kullanılan taraf kartlarını bu ekranda yönetebilirsin. "
-            "Bu ekran cari borç/alacak defteri değildir; çekin kimden alındığını veya kime verildiğini düzenli takip etmek için kullanılır."
+            "Çeklerde kullanılan taraf kartlarını yönet. Bu ekran cari borç/alacak defteri değil, çek muhatabı takip merkezidir."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
 
-        return card
+        self.new_button = QPushButton("Yeni Kart")
+        self.new_button.setObjectName("ActionPrimaryButton")
+        self.new_button.setMinimumHeight(38)
+        self.new_button.clicked.connect(self._open_create_dialog)
 
-    def _build_filter_card(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("Card")
+        self.edit_button = QPushButton("Düzenle")
+        self.edit_button.setObjectName("ActionSecondaryButton")
+        self.edit_button.setMinimumHeight(38)
+        self.edit_button.clicked.connect(self._open_edit_dialog)
 
-        layout = QGridLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setHorizontalSpacing(12)
-        layout.setVerticalSpacing(8)
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 1)
-        layout.setColumnStretch(2, 1)
-        layout.setColumnStretch(3, 1)
+        self.toggle_active_button = QPushButton("Pasife Al")
+        self.toggle_active_button.setObjectName("ActionDangerButton")
+        self.toggle_active_button.setMinimumHeight(38)
+        self.toggle_active_button.clicked.connect(self._toggle_selected_partner_active_state)
+
+        self.check_details_button = QPushButton("Çek Detayları")
+        self.check_details_button.setObjectName("ActionSuccessButton")
+        self.check_details_button.setMinimumHeight(38)
+        self.check_details_button.clicked.connect(self._open_selected_partner_check_details)
+
+        self.refresh_button = QPushButton("Yenile")
+        self.refresh_button.setObjectName("ActionSecondaryButton")
+        self.refresh_button.setMinimumHeight(38)
+        self.refresh_button.clicked.connect(lambda: self._reload_data(reset_page=False))
+
+        top_row.addLayout(title_box, 1)
+        top_row.addWidget(self.new_button)
+        top_row.addWidget(self.edit_button)
+        top_row.addWidget(self.toggle_active_button)
+        top_row.addWidget(self.check_details_button)
+        top_row.addWidget(self.refresh_button)
+
+        filter_inner = QFrame()
+        filter_inner.setObjectName("FilterPanelAccent")
+
+        filter_layout = QGridLayout(filter_inner)
+        filter_layout.setContentsMargins(14, 12, 14, 12)
+        filter_layout.setHorizontalSpacing(12)
+        filter_layout.setVerticalSpacing(8)
+        filter_layout.setColumnStretch(0, 2)
+        filter_layout.setColumnStretch(1, 1)
+        filter_layout.setColumnStretch(2, 1)
+        filter_layout.setColumnStretch(3, 1)
 
         search_label = QLabel("Arama")
         search_label.setObjectName("MutedText")
@@ -605,15 +1201,23 @@ class BusinessPartnersPage(QWidget):
         self.page_size_combo.addItem("100 kayıt", 100)
         self.page_size_combo.currentIndexChanged.connect(self._page_size_changed)
 
-        layout.addWidget(search_label, 0, 0)
-        layout.addWidget(type_label, 0, 1)
-        layout.addWidget(status_label, 0, 2)
-        layout.addWidget(page_size_label, 0, 3)
+        filter_layout.addWidget(search_label, 0, 0)
+        filter_layout.addWidget(type_label, 0, 1)
+        filter_layout.addWidget(status_label, 0, 2)
+        filter_layout.addWidget(page_size_label, 0, 3)
 
-        layout.addWidget(self.search_input, 1, 0)
-        layout.addWidget(self.type_filter_combo, 1, 1)
-        layout.addWidget(self.status_filter_combo, 1, 2)
-        layout.addWidget(self.page_size_combo, 1, 3)
+        filter_layout.addWidget(self.search_input, 1, 0)
+        filter_layout.addWidget(self.type_filter_combo, 1, 1)
+        filter_layout.addWidget(self.status_filter_combo, 1, 2)
+        filter_layout.addWidget(self.page_size_combo, 1, 3)
+
+        self.permission_label = QLabel("")
+        self.permission_label.setObjectName("MutedText")
+        self.permission_label.setWordWrap(True)
+
+        layout.addLayout(top_row)
+        layout.addWidget(filter_inner)
+        layout.addWidget(self.permission_label)
 
         return card
 
@@ -643,7 +1247,8 @@ class BusinessPartnersPage(QWidget):
     def _build_summary_card(self, title_text: str, value_text: str, hint_text: str) -> QFrame:
         card = QFrame()
         card.setObjectName("Card")
-        card.setMinimumHeight(92)
+        card.setMinimumHeight(84)
+        card.setMaximumHeight(92)
 
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 10, 14, 10)
@@ -675,41 +1280,8 @@ class BusinessPartnersPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(10)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-
-        self.new_button = QPushButton("Yeni Kart")
-        self.new_button.setObjectName("ActionPrimaryButton")
-        self.new_button.setMinimumHeight(38)
-        self.new_button.clicked.connect(self._open_create_dialog)
-
-        self.edit_button = QPushButton("Düzenle")
-        self.edit_button.setObjectName("ActionSecondaryButton")
-        self.edit_button.setMinimumHeight(38)
-        self.edit_button.clicked.connect(self._open_edit_dialog)
-
-        self.toggle_active_button = QPushButton("Pasife Al")
-        self.toggle_active_button.setObjectName("ActionDangerButton")
-        self.toggle_active_button.setMinimumHeight(38)
-        self.toggle_active_button.clicked.connect(self._toggle_selected_partner_active_state)
-
-        self.refresh_button = QPushButton("Yenile")
-        self.refresh_button.setObjectName("ActionSecondaryButton")
-        self.refresh_button.setMinimumHeight(38)
-        self.refresh_button.clicked.connect(lambda: self._reload_data(reset_page=False))
-
-        action_row.addWidget(self.new_button)
-        action_row.addWidget(self.edit_button)
-        action_row.addWidget(self.toggle_active_button)
-        action_row.addWidget(self.refresh_button)
-        action_row.addStretch(1)
-
-        self.permission_label = QLabel("")
-        self.permission_label.setObjectName("MutedText")
-        self.permission_label.setWordWrap(True)
 
         self.results_info_label = QLabel("")
         self.results_info_label.setObjectName("MutedText")
@@ -737,9 +1309,9 @@ class BusinessPartnersPage(QWidget):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.ElideRight)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.verticalHeader().setMinimumSectionSize(30)
-        self.table.setMinimumHeight(420)
+        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setMinimumSectionSize(28)
+        self.table.setMinimumHeight(300)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda item: self._open_edit_dialog())
 
@@ -754,6 +1326,8 @@ class BusinessPartnersPage(QWidget):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
+
+        position_panel = self._build_position_panel()
 
         pagination_row = QHBoxLayout()
         pagination_row.setSpacing(10)
@@ -777,13 +1351,97 @@ class BusinessPartnersPage(QWidget):
         pagination_row.addWidget(self.page_info_label)
         pagination_row.addWidget(self.next_page_button)
 
-        layout.addLayout(action_row)
-        layout.addWidget(self.permission_label)
         layout.addWidget(self.results_info_label)
         layout.addWidget(self.table, 1)
+        layout.addWidget(position_panel)
         layout.addLayout(pagination_row)
 
         self._update_permission_state()
+
+        return card
+
+    def _build_position_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("PositionPanel")
+        panel.setMinimumHeight(132)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+
+        self.position_title_label = QLabel("Seçili Kart Çek Pozisyonu")
+        self.position_title_label.setObjectName("PositionTitle")
+
+        self.position_subtitle_label = QLabel("Bir müşteri / tedarikçi seçildiğinde bu alanda çek pozisyonu görünür.")
+        self.position_subtitle_label.setObjectName("PositionSubtitle")
+        self.position_subtitle_label.setWordWrap(True)
+
+        title_box.addWidget(self.position_title_label)
+        title_box.addWidget(self.position_subtitle_label)
+
+        header_row.addLayout(title_box, 1)
+
+        position_grid = QGridLayout()
+        position_grid.setSpacing(8)
+        position_grid.setColumnStretch(0, 1)
+        position_grid.setColumnStretch(1, 1)
+        position_grid.setColumnStretch(2, 1)
+        position_grid.setColumnStretch(3, 1)
+        position_grid.setColumnStretch(4, 1)
+        position_grid.setColumnStretch(5, 1)
+
+        self.received_open_card = self._build_position_mini_card("ALINAN AÇIK", "0 kayıt", "-")
+        self.received_closed_card = self._build_position_mini_card("ALINAN SONUÇ", "0 kayıt", "-")
+        self.received_problem_card = self._build_position_mini_card("ALINAN PROBLEM", "0 kayıt", "-")
+        self.issued_open_card = self._build_position_mini_card("YAZILAN AÇIK", "0 kayıt", "-")
+        self.issued_closed_card = self._build_position_mini_card("YAZILAN SONUÇ", "0 kayıt", "-")
+        self.issued_problem_card = self._build_position_mini_card("YAZILAN RİSK", "0 kayıt", "-")
+
+        position_grid.addWidget(self.received_open_card, 0, 0)
+        position_grid.addWidget(self.received_closed_card, 0, 1)
+        position_grid.addWidget(self.received_problem_card, 0, 2)
+        position_grid.addWidget(self.issued_open_card, 0, 3)
+        position_grid.addWidget(self.issued_closed_card, 0, 4)
+        position_grid.addWidget(self.issued_problem_card, 0, 5)
+
+        layout.addLayout(header_row)
+        layout.addLayout(position_grid)
+
+        return panel
+
+    def _build_position_mini_card(self, title_text: str, value_text: str, hint_text: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName("PositionMiniCard")
+        card.setMinimumHeight(76)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
+
+        title = QLabel(title_text)
+        title.setObjectName("PositionCardTitle")
+
+        value = QLabel(value_text)
+        value.setObjectName("PositionCardValue")
+        value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        hint = QLabel(hint_text)
+        hint.setObjectName("PositionCardHint")
+        hint.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addStretch(1)
+        layout.addWidget(value)
+        layout.addWidget(hint)
+
+        card.value_label = value
+        card.hint_label = hint
 
         return card
 
@@ -791,10 +1449,12 @@ class BusinessPartnersPage(QWidget):
         self.new_button.setEnabled(self.can_modify)
         self.edit_button.setEnabled(False)
         self.toggle_active_button.setEnabled(False)
+        self.check_details_button.setEnabled(False)
 
         if self.can_modify:
             self.permission_label.setText(
-                "Bu rol müşteri / tedarikçi kartı ekleme, düzenleme ve aktif/pasif işlemi yapabilir."
+                "Bu rol kart ekleme, düzenleme ve aktif/pasif işlemi yapabilir. "
+                "Aynı ad veya vergi no engellenir; aynı telefon/e-posta için uyarı verilir."
             )
         else:
             self.permission_label.setText(
@@ -1148,6 +1808,7 @@ class BusinessPartnersPage(QWidget):
 
         self.edit_button.setEnabled(self.can_modify and has_selection)
         self.toggle_active_button.setEnabled(self.can_modify and has_selection)
+        self.check_details_button.setEnabled(has_selection)
 
         if not has_selection:
             self.toggle_active_button.setText("Pasife Al")
@@ -1163,6 +1824,115 @@ class BusinessPartnersPage(QWidget):
         self.toggle_active_button.style().polish(self.toggle_active_button)
         self.toggle_active_button.update()
 
+        self._update_selected_partner_position_summary(selected_row)
+
+    def _open_selected_partner_check_details(self) -> None:
+        selected_row = self._selected_partner_row()
+
+        if selected_row is None:
+            QMessageBox.information(
+                self,
+                "Seçim gerekli",
+                "Çek detaylarını görmek için bir müşteri / tedarikçi kartı seçmelisin.",
+            )
+            return
+
+        dialog = BusinessPartnerChecksDetailDialog(
+            parent=self,
+            partner_row=selected_row,
+        )
+        dialog.exec()
+
+    def _clear_position_summary(self) -> None:
+        self.position_title_label.setText("Seçili Kart Çek Pozisyonu")
+        self.position_subtitle_label.setText("Bir müşteri / tedarikçi seçildiğinde bu alanda çek pozisyonu görünür.")
+
+        for card in [
+            self.received_open_card,
+            self.received_closed_card,
+            self.received_problem_card,
+            self.issued_open_card,
+            self.issued_closed_card,
+            self.issued_problem_card,
+        ]:
+            card.value_label.setText("0 kayıt")
+            card.hint_label.setText("-")
+
+    def _update_selected_partner_position_summary(self, selected_row: BusinessPartnerRow | None) -> None:
+        if selected_row is None:
+            self._clear_position_summary()
+            return
+
+        position = self._load_partner_position_summary(selected_row.id)
+
+        self.position_title_label.setText(f"Seçili Kart: {selected_row.name}")
+        self.position_subtitle_label.setText(
+            f"Tip: {business_partner_type_text(selected_row.partner_type)} | "
+            f"Durum: {'Aktif' if selected_row.is_active else 'Pasif'} | "
+            "Aşağıdaki değerler cari bakiye değil, çek pozisyonu özetidir."
+        )
+
+        self._set_position_card(self.received_open_card, position["received_open"])
+        self._set_position_card(self.received_closed_card, position["received_closed"])
+        self._set_position_card(self.received_problem_card, position["received_problem"])
+        self._set_position_card(self.issued_open_card, position["issued_open"])
+        self._set_position_card(self.issued_closed_card, position["issued_closed"])
+        self._set_position_card(self.issued_problem_card, position["issued_problem"])
+
+    def _set_position_card(self, card: QFrame, bucket: PartnerPositionBucket) -> None:
+        value_text, hint_text = _format_position_bucket(bucket)
+        card.value_label.setText(value_text)
+        card.hint_label.setText(hint_text)
+
+    def _load_partner_position_summary(self, partner_id: int) -> dict[str, PartnerPositionBucket]:
+        buckets: dict[str, PartnerPositionBucket] = {
+            "received_open": _empty_position_bucket(),
+            "received_closed": _empty_position_bucket(),
+            "received_problem": _empty_position_bucket(),
+            "issued_open": _empty_position_bucket(),
+            "issued_closed": _empty_position_bucket(),
+            "issued_problem": _empty_position_bucket(),
+        }
+
+        with session_scope() as session:
+            received_checks = list(
+                session.execute(
+                    select(ReceivedCheck).where(ReceivedCheck.customer_id == partner_id)
+                ).scalars().all()
+            )
+
+            issued_checks = list(
+                session.execute(
+                    select(IssuedCheck).where(IssuedCheck.supplier_id == partner_id)
+                ).scalars().all()
+            )
+
+            for received_check in received_checks:
+                status = _enum_value(received_check.status)
+                currency_code = _enum_value(received_check.currency_code) or "TRY"
+                amount = Decimal(str(received_check.amount or "0.00")).quantize(Decimal("0.01"))
+
+                if status in RECEIVED_OPEN_STATUSES:
+                    _add_amount_to_bucket(buckets, "received_open", amount, currency_code)
+                elif status in RECEIVED_PROBLEM_STATUSES:
+                    _add_amount_to_bucket(buckets, "received_problem", amount, currency_code)
+                elif status in RECEIVED_CLOSED_STATUSES:
+                    _add_amount_to_bucket(buckets, "received_closed", amount, currency_code)
+
+            for issued_check in issued_checks:
+                status = _enum_value(issued_check.status)
+                currency_code = _enum_value(issued_check.currency_code) or "TRY"
+                amount = Decimal(str(issued_check.amount or "0.00")).quantize(Decimal("0.01"))
+
+                if status in ISSUED_OPEN_STATUSES:
+                    _add_amount_to_bucket(buckets, "issued_open", amount, currency_code)
+                elif status in ISSUED_PROBLEM_STATUSES:
+                    _add_amount_to_bucket(buckets, "issued_problem", amount, currency_code)
+                elif status in ISSUED_CLOSED_STATUSES:
+                    _add_amount_to_bucket(buckets, "issued_closed", amount, currency_code)
+
+        return buckets
+
     def _find_duplicate_name(
         self,
         *,
@@ -1170,14 +1940,174 @@ class BusinessPartnersPage(QWidget):
         name: str,
         exclude_partner_id: int | None,
     ) -> BusinessPartner | None:
+        normalized_name = _normalize_duplicate_text(name)
+
         statement = select(BusinessPartner).where(
-            func.lower(BusinessPartner.name) == name.lower()
+            func.lower(func.trim(BusinessPartner.name)) == normalized_name
         )
 
         if exclude_partner_id is not None:
             statement = statement.where(BusinessPartner.id != exclude_partner_id)
 
         return session.execute(statement).scalar_one_or_none()
+
+    def _find_duplicate_tax_number(
+        self,
+        *,
+        session,
+        tax_number: str | None,
+        exclude_partner_id: int | None,
+    ) -> BusinessPartner | None:
+        normalized_tax_number = _normalize_duplicate_text(tax_number)
+
+        if not normalized_tax_number:
+            return None
+
+        statement = select(BusinessPartner).where(
+            func.lower(func.trim(BusinessPartner.tax_number)) == normalized_tax_number
+        )
+
+        if exclude_partner_id is not None:
+            statement = statement.where(BusinessPartner.id != exclude_partner_id)
+
+        return session.execute(statement).scalar_one_or_none()
+
+    def _validate_hard_duplicates(
+        self,
+        *,
+        payload: dict[str, Any],
+        exclude_partner_id: int | None,
+    ) -> None:
+        with session_scope() as session:
+            duplicate_name = self._find_duplicate_name(
+                session=session,
+                name=payload["name"],
+                exclude_partner_id=exclude_partner_id,
+            )
+
+            if duplicate_name is not None:
+                raise ValueError(
+                    f"Bu ad / ünvan ile zaten bir kart var. Mevcut Kart ID: {duplicate_name.id}"
+                )
+
+            duplicate_tax_number = self._find_duplicate_tax_number(
+                session=session,
+                tax_number=payload["tax_number"],
+                exclude_partner_id=exclude_partner_id,
+            )
+
+            if duplicate_tax_number is not None:
+                raise ValueError(
+                    f"Bu vergi no / kimlik no başka bir kartta kullanılmış. "
+                    f"Kayıt yapılamaz. Mevcut Kart ID: {duplicate_tax_number.id}"
+                )
+
+    def _find_soft_duplicate_rows(
+        self,
+        *,
+        payload: dict[str, Any],
+        exclude_partner_id: int | None,
+    ) -> list[dict[str, Any]]:
+        warnings: list[dict[str, Any]] = []
+
+        normalized_phone = _normalize_duplicate_text(payload.get("phone"))
+        normalized_email = _normalize_duplicate_text(payload.get("email"))
+
+        if not normalized_phone and not normalized_email:
+            return warnings
+
+        with session_scope() as session:
+            if normalized_phone:
+                phone_statement = select(BusinessPartner).where(
+                    func.lower(func.trim(BusinessPartner.phone)) == normalized_phone
+                )
+
+                if exclude_partner_id is not None:
+                    phone_statement = phone_statement.where(BusinessPartner.id != exclude_partner_id)
+
+                phone_matches = list(session.execute(phone_statement).scalars().all())
+
+                for partner in phone_matches:
+                    warnings.append(
+                        {
+                            "field": "Telefon",
+                            "value": payload.get("phone"),
+                            "partner_id": partner.id,
+                            "partner_name": partner.name,
+                            "partner_type": business_partner_type_text(partner.partner_type),
+                            "is_active": bool(partner.is_active),
+                        }
+                    )
+
+            if normalized_email:
+                email_statement = select(BusinessPartner).where(
+                    func.lower(func.trim(BusinessPartner.email)) == normalized_email
+                )
+
+                if exclude_partner_id is not None:
+                    email_statement = email_statement.where(BusinessPartner.id != exclude_partner_id)
+
+                email_matches = list(session.execute(email_statement).scalars().all())
+
+                for partner in email_matches:
+                    warnings.append(
+                        {
+                            "field": "E-posta",
+                            "value": payload.get("email"),
+                            "partner_id": partner.id,
+                            "partner_name": partner.name,
+                            "partner_type": business_partner_type_text(partner.partner_type),
+                            "is_active": bool(partner.is_active),
+                        }
+                    )
+
+        return warnings
+
+    def _confirm_soft_duplicates(
+        self,
+        *,
+        payload: dict[str, Any],
+        exclude_partner_id: int | None,
+    ) -> bool:
+        warnings = self._find_soft_duplicate_rows(
+            payload=payload,
+            exclude_partner_id=exclude_partner_id,
+        )
+
+        if not warnings:
+            return True
+
+        warning_lines = [
+            "Bu kayıt bazı bilgiler açısından mevcut kartlara benziyor:",
+            "",
+        ]
+
+        for warning in warnings:
+            warning_lines.append(
+                f"- {warning['field']}: {warning['value']} | "
+                f"Kart ID: {warning['partner_id']} | "
+                f"{warning['partner_name']} | "
+                f"{warning['partner_type']} | "
+                f"{'Aktif' if warning['is_active'] else 'Pasif'}"
+            )
+
+        warning_lines.extend(
+            [
+                "",
+                "Bu bir mükerrer kayıt olabilir.",
+                "Yine de devam etmek istiyor musun?",
+            ]
+        )
+
+        answer = QMessageBox.question(
+            self,
+            "Benzer kayıt uyarısı",
+            "\n".join(warning_lines),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        return answer == QMessageBox.Yes
 
     def _open_create_dialog(self) -> None:
         if not self.can_modify:
@@ -1194,6 +2124,19 @@ class BusinessPartnersPage(QWidget):
             return
 
         payload = dialog.get_payload()
+
+        try:
+            self._validate_hard_duplicates(payload=payload, exclude_partner_id=None)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Mükerrer kayıt engellendi",
+                str(exc),
+            )
+            return
+
+        if not self._confirm_soft_duplicates(payload=payload, exclude_partner_id=None):
+            return
 
         try:
             self._create_partner(payload)
@@ -1239,6 +2182,19 @@ class BusinessPartnersPage(QWidget):
         payload = dialog.get_payload()
 
         try:
+            self._validate_hard_duplicates(payload=payload, exclude_partner_id=selected_row.id)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Mükerrer kayıt engellendi",
+                str(exc),
+            )
+            return
+
+        if not self._confirm_soft_duplicates(payload=payload, exclude_partner_id=selected_row.id):
+            return
+
+        try:
             self._update_partner(selected_row.id, payload)
             self._reload_data(reset_page=False)
 
@@ -1257,15 +2213,27 @@ class BusinessPartnersPage(QWidget):
 
     def _create_partner(self, payload: dict[str, Any]) -> None:
         with session_scope() as session:
-            duplicate = self._find_duplicate_name(
+            duplicate_name = self._find_duplicate_name(
                 session=session,
                 name=payload["name"],
                 exclude_partner_id=None,
             )
 
-            if duplicate is not None:
+            if duplicate_name is not None:
                 raise ValueError(
-                    f"Bu ad / ünvan ile zaten bir kart var. Mevcut Kart ID: {duplicate.id}"
+                    f"Bu ad / ünvan ile zaten bir kart var. Mevcut Kart ID: {duplicate_name.id}"
+                )
+
+            duplicate_tax_number = self._find_duplicate_tax_number(
+                session=session,
+                tax_number=payload["tax_number"],
+                exclude_partner_id=None,
+            )
+
+            if duplicate_tax_number is not None:
+                raise ValueError(
+                    f"Bu vergi no / kimlik no başka bir kartta kullanılmış. "
+                    f"Kayıt yapılamaz. Mevcut Kart ID: {duplicate_tax_number.id}"
                 )
 
             partner = BusinessPartner(
@@ -1302,15 +2270,27 @@ class BusinessPartnersPage(QWidget):
             if partner is None:
                 raise ValueError(f"Kart bulunamadı. Kart ID: {partner_id}")
 
-            duplicate = self._find_duplicate_name(
+            duplicate_name = self._find_duplicate_name(
                 session=session,
                 name=payload["name"],
                 exclude_partner_id=partner_id,
             )
 
-            if duplicate is not None:
+            if duplicate_name is not None:
                 raise ValueError(
-                    f"Bu ad / ünvan ile başka bir kart var. Mevcut Kart ID: {duplicate.id}"
+                    f"Bu ad / ünvan ile başka bir kart var. Mevcut Kart ID: {duplicate_name.id}"
+                )
+
+            duplicate_tax_number = self._find_duplicate_tax_number(
+                session=session,
+                tax_number=payload["tax_number"],
+                exclude_partner_id=partner_id,
+            )
+
+            if duplicate_tax_number is not None:
+                raise ValueError(
+                    f"Bu vergi no / kimlik no başka bir kartta kullanılmış. "
+                    f"Kayıt yapılamaz. Mevcut Kart ID: {duplicate_tax_number.id}"
                 )
 
             old_values = _business_partner_to_dict(partner)
