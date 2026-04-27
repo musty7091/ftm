@@ -26,6 +26,7 @@ from app.reports.bank_movement_report_data import BankMovementReportFilter
 from app.reports.bank_movement_report_pdf import create_bank_movement_report_pdf
 from app.reports.check_due_report_data import CheckDueReportFilter
 from app.reports.check_due_report_pdf import create_check_due_report_pdf
+from app.reports.check_due_report_excel import create_check_due_report_excel
 from app.reports.pos_settlement_report_data import PosSettlementReportFilter
 from app.reports.discount_batch_report_data import (
     DiscountBatchReportFilter,
@@ -34,6 +35,7 @@ from app.reports.discount_batch_report_data import (
 from app.reports.discount_batch_report_pdf import create_discount_batch_report_pdf
 from app.reports.financing_cost_report_data import FinancingCostReportFilter
 from app.reports.financing_cost_report_pdf import create_financing_cost_report_pdf
+from app.reports.financing_cost_report_excel import create_financing_cost_report_excel
 from app.reports.pos_settlement_report_pdf import create_pos_settlement_report_pdf
 from app.reports.risk_check_report_data import RiskCheckReportFilter
 from app.reports.risk_check_report_pdf import create_risk_check_report_pdf
@@ -41,6 +43,7 @@ from app.ui.pages.reports import (
     build_discount_reports_tab,
     build_excel_reports_tab,
 )
+from app.ui.pages.reports.check_excel_filter_dialog import get_check_excel_filter_selection
 
 REPORTS_PAGE_STYLE = """
 QFrame#ReportsInfoStrip {
@@ -493,6 +496,210 @@ class ReportsPage(QWidget):
 
         self._build_page()
 
+    def _create_next_30_days_check_due_report_excel(self) -> None:
+        try:
+            default_start_date, default_end_date = _current_month_range()
+
+            selected_filters = get_check_excel_filter_selection(
+                self,
+                default_start_date=default_start_date,
+                default_end_date=default_end_date,
+            )
+
+            if selected_filters is None:
+                return
+
+            default_folder = _default_reports_folder()
+            default_file_name = (
+                f"{_safe_file_name_text('Cek_Listesi_Raporu')}_"
+                f"{selected_filters.start_date.strftime('%Y%m%d')}_"
+                f"{selected_filters.end_date.strftime('%Y%m%d')}_"
+                f"{selected_filters.check_type}_"
+                f"{selected_filters.status_group}_"
+                f"{selected_filters.currency_code}.xlsx"
+            )
+            default_file_path = default_folder / default_file_name
+
+            selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Çek Listesi Excel Dosyasını Kaydet",
+                str(default_file_path),
+                "Excel Dosyası (*.xlsx)",
+            )
+
+            if not selected_file_path:
+                return
+
+            output_path = Path(selected_file_path)
+
+            if output_path.suffix.lower() != ".xlsx":
+                output_path = output_path.with_suffix(".xlsx")
+
+            created_excel_path = create_check_due_report_excel(
+                output_path=output_path,
+                report_filter=CheckDueReportFilter(
+                    start_date=selected_filters.start_date,
+                    end_date=selected_filters.end_date,
+                    check_type=selected_filters.check_type,
+                    status_group=selected_filters.status_group,
+                    currency_code=selected_filters.currency_code,
+                ),
+                created_by=_created_by_text(self.current_user),
+            )
+
+            QMessageBox.information(
+                self,
+                "Excel Oluşturuldu",
+                f"Çek Listesi Excel dosyası başarıyla oluşturuldu:\n\n"
+                f"Dönem: {selected_filters.start_date.strftime('%d.%m.%Y')} - "
+                f"{selected_filters.end_date.strftime('%d.%m.%Y')}\n"
+                f"Çek Türü: {selected_filters.check_type}\n"
+                f"Durum: {selected_filters.status_group}\n"
+                f"Para Birimi: {selected_filters.currency_code}\n\n"
+                f"{created_excel_path}",
+            )
+
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(created_excel_path))
+            )
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Excel Oluşturulamadı",
+                f"Çek Listesi Excel dosyası oluşturulurken hata oluştu:\n\n{exc}",
+            )
+
+    def _create_discount_cost_report_excel(self) -> None:
+        try:
+            report_type = self._select_discount_cost_report_type()
+
+            if report_type is None:
+                return
+
+            if report_type == "PACKAGE":
+                self._create_package_based_discount_cost_report_excel()
+                return
+
+            if report_type == "CURRENT_MONTH":
+                self._create_current_month_discount_cost_report_excel()
+                return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Excel Oluşturulamadı",
+                f"İskonto Maliyet Excel dosyası oluşturulurken hata oluştu:\n\n{exc}",
+            )
+
+    def _create_package_based_discount_cost_report_excel(self) -> None:
+        selected_batch_option = self._select_current_month_discount_batch_option()
+
+        if selected_batch_option is None:
+            return
+
+        start_date = selected_batch_option.discount_date
+        end_date = selected_batch_option.discount_date
+
+        default_folder = _default_reports_folder()
+        default_file_name = (
+            f"{_safe_file_name_text('Iskonto_Maliyet_Raporu')}_"
+            f"Paket_{selected_batch_option.batch_id}_"
+            f"{selected_batch_option.discount_date.strftime('%Y%m%d')}.xlsx"
+        )
+        default_file_path = default_folder / default_file_name
+
+        selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "İskonto Maliyet Excel Dosyasını Kaydet",
+            str(default_file_path),
+            "Excel Dosyası (*.xlsx)",
+        )
+
+        if not selected_file_path:
+            return
+
+        output_path = Path(selected_file_path)
+
+        if output_path.suffix.lower() != ".xlsx":
+            output_path = output_path.with_suffix(".xlsx")
+
+        created_excel_path = create_financing_cost_report_excel(
+            output_path=output_path,
+            report_filter=FinancingCostReportFilter(
+                start_date=start_date,
+                end_date=end_date,
+                bank_id=None,
+                bank_account_id=None,
+                discount_batch_id=selected_batch_option.batch_id,
+                currency_code="ALL",
+            ),
+            created_by=_created_by_text(self.current_user),
+        )
+
+        QMessageBox.information(
+            self,
+            "Excel Oluşturuldu",
+            f"İskonto Maliyet Excel dosyası başarıyla oluşturuldu:\n\n"
+            f"Paket No: {selected_batch_option.batch_id}\n"
+            f"{created_excel_path}",
+        )
+
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(created_excel_path))
+        )
+
+    def _create_current_month_discount_cost_report_excel(self) -> None:
+        start_date, end_date = _current_month_range()
+
+        default_folder = _default_reports_folder()
+        default_file_name = (
+            f"{_safe_file_name_text('Aylik_Iskonto_Maliyet_Raporu')}_"
+            f"{start_date.strftime('%Y%m%d')}_"
+            f"{end_date.strftime('%Y%m%d')}.xlsx"
+        )
+        default_file_path = default_folder / default_file_name
+
+        selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Aylık İskonto Maliyet Excel Dosyasını Kaydet",
+            str(default_file_path),
+            "Excel Dosyası (*.xlsx)",
+        )
+
+        if not selected_file_path:
+            return
+
+        output_path = Path(selected_file_path)
+
+        if output_path.suffix.lower() != ".xlsx":
+            output_path = output_path.with_suffix(".xlsx")
+
+        created_excel_path = create_financing_cost_report_excel(
+            output_path=output_path,
+            report_filter=FinancingCostReportFilter(
+                start_date=start_date,
+                end_date=end_date,
+                bank_id=None,
+                bank_account_id=None,
+                discount_batch_id=None,
+                currency_code="ALL",
+            ),
+            created_by=_created_by_text(self.current_user),
+        )
+
+        QMessageBox.information(
+            self,
+            "Excel Oluşturuldu",
+            f"Aylık İskonto Maliyet Excel dosyası başarıyla oluşturuldu:\n\n"
+            f"Dönem: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            f"{created_excel_path}",
+        )
+
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(created_excel_path))
+        )
+
     def _create_current_month_discount_cost_report_pdf(self) -> None:
         start_date, end_date = _current_month_range()
 
@@ -721,7 +928,10 @@ class ReportsPage(QWidget):
         )
 
     def _build_excel_reports_tab(self) -> QWidget:
-        return build_excel_reports_tab()
+        return build_excel_reports_tab(
+            on_financing_cost_excel_click=self._create_discount_cost_report_excel,
+            on_check_due_excel_click=self._create_next_30_days_check_due_report_excel,
+        )
 
     def _build_quick_check_reports_card(self) -> QWidget:
         card = QFrame()

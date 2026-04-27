@@ -40,35 +40,52 @@ def build_discount_reports_tab(
     )
 
 
-def build_excel_reports_tab() -> QWidget:
+def build_excel_reports_tab(
+    *,
+    on_financing_cost_excel_click: Callable[[], None] | None = None,
+    on_check_due_excel_click: Callable[[], None] | None = None,
+    on_bank_movement_excel_click: Callable[[], None] | None = None,
+) -> QWidget:
     return build_planned_reports_tab(
         title_text="Excel Aktarım",
-        subtitle_text="PDF raporların yanında ham verilerin Excel olarak dışa aktarılması burada yönetilecek.",
+        subtitle_text=(
+            "PDF raporların yanında formüllü, filtrelenebilir, tasarımlı ve çalışabilir "
+            "Excel raporları burada yönetilir."
+        ),
         reports=[
             (
+                "İskonto Maliyet Excel",
+                (
+                    "İskonto maliyetlerini özet, paket detayı ve çek detayı sayfalarıyla; "
+                    "formüllü, filtrelenebilir ve tasarımlı Excel dosyası olarak verir."
+                ),
+                "Excel Al",
+                "Aktif",
+                on_financing_cost_excel_click,
+            ),
+            (
                 "Çek Listesi Excel",
-                "Alınan ve yazılan çekleri filtreli Excel dosyasına aktarır.",
-                "Yakında",
-                "Planlandı",
-                None,
+                (
+                    "Alınan ve yazılan çekleri; vade, durum, taraf, tutar ve nakit etkisiyle "
+                    "formüllü, filtrelenebilir ve renkli Excel dosyası olarak aktarır."
+                ),
+                "Excel Al",
+                "Aktif",
+                on_check_due_excel_click,
             ),
             (
                 "Banka Hareketleri Excel",
-                "Banka giriş/çıkış hareketlerini Excel olarak dışa aktarır.",
-                "Yakında",
-                "Planlandı",
-                None,
+                (
+                    "Banka giriş/çıkış hareketlerini; hesap, yön, durum, kaynak türü, tutar "
+                    "ve net nakit etkisiyle formüllü Excel dosyası olarak aktarır."
+                ),
+                "Excel Al",
+                "Aktif",
+                on_bank_movement_excel_click,
             ),
             (
                 "POS Mutabakat Excel",
                 "POS mutabakat kayıtlarını Excel olarak dışa aktarır.",
-                "Yakında",
-                "Planlandı",
-                None,
-            ),
-            (
-                "İskonto Maliyet Excel",
-                "İskonto maliyetlerini, faiz, komisyon, BSMV ve net banka tutarlarını Excel olarak verir.",
                 "Yakında",
                 "Planlandı",
                 None,
