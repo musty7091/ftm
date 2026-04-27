@@ -45,6 +45,7 @@ def build_excel_reports_tab(
     on_financing_cost_excel_click: Callable[[], None] | None = None,
     on_check_due_excel_click: Callable[[], None] | None = None,
     on_bank_movement_excel_click: Callable[[], None] | None = None,
+    on_pos_settlement_excel_click: Callable[[], None] | None = None,
 ) -> QWidget:
     return build_planned_reports_tab(
         title_text="Excel Aktarım",
@@ -85,10 +86,13 @@ def build_excel_reports_tab(
             ),
             (
                 "POS Mutabakat Excel",
-                "POS mutabakat kayıtlarını Excel olarak dışa aktarır.",
-                "Yakında",
-                "Planlandı",
-                None,
+                (
+                    "POS mutabakat kayıtlarını; tarih, banka, hesap, POS terminali, komisyon, "
+                    "beklenen net, gerçekleşen net ve fark analiziyle formüllü Excel dosyası olarak aktarır."
+                ),
+                "Excel Al",
+                "Aktif",
+                on_pos_settlement_excel_click,
             ),
         ],
     )

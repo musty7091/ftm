@@ -38,11 +38,15 @@ from app.reports.financing_cost_report_data import FinancingCostReportFilter
 from app.reports.financing_cost_report_pdf import create_financing_cost_report_pdf
 from app.reports.financing_cost_report_excel import create_financing_cost_report_excel
 from app.reports.pos_settlement_report_pdf import create_pos_settlement_report_pdf
+from app.reports.pos_settlement_report_excel import create_pos_settlement_report_excel
 from app.reports.risk_check_report_data import RiskCheckReportFilter
 from app.reports.risk_check_report_pdf import create_risk_check_report_pdf
 from app.ui.pages.reports import (
     build_discount_reports_tab,
     build_excel_reports_tab,
+)
+from app.ui.pages.reports.pos_settlement_excel_filter_dialog import (
+    get_pos_settlement_excel_filter_selection,
 )
 from app.ui.pages.reports.check_excel_filter_dialog import get_check_excel_filter_selection
 from app.ui.pages.reports.bank_movement_excel_filter_dialog import (
@@ -499,6 +503,86 @@ class ReportsPage(QWidget):
         self.main_layout.setSpacing(12)
 
         self._build_page()
+
+    def _create_pos_settlement_report_excel(self) -> None:
+        try:
+            default_start_date, default_end_date = _current_month_range()
+
+            selected_filters = get_pos_settlement_excel_filter_selection(
+                self,
+                default_start_date=default_start_date,
+                default_end_date=default_end_date,
+            )
+
+            if selected_filters is None:
+                return
+
+            default_folder = _default_reports_folder()
+            default_file_name = (
+                f"{_safe_file_name_text('POS_Mutabakat_Raporu')}_"
+                f"{selected_filters.start_date.strftime('%Y%m%d')}_"
+                f"{selected_filters.end_date.strftime('%Y%m%d')}_"
+                f"BANKA_{selected_filters.bank_id or 'ALL'}_"
+                f"HESAP_{selected_filters.bank_account_id or 'ALL'}_"
+                f"POS_{selected_filters.pos_device_id or 'ALL'}_"
+                f"{selected_filters.status}_"
+                f"{selected_filters.currency_code}.xlsx"
+            )
+            default_file_path = default_folder / default_file_name
+
+            selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "POS Mutabakat Excel Dosyasını Kaydet",
+                str(default_file_path),
+                "Excel Dosyası (*.xlsx)",
+            )
+
+            if not selected_file_path:
+                return
+
+            output_path = Path(selected_file_path)
+
+            if output_path.suffix.lower() != ".xlsx":
+                output_path = output_path.with_suffix(".xlsx")
+
+            created_excel_path = create_pos_settlement_report_excel(
+                output_path=output_path,
+                report_filter=PosSettlementReportFilter(
+                    start_date=selected_filters.start_date,
+                    end_date=selected_filters.end_date,
+                    pos_device_id=selected_filters.pos_device_id,
+                    bank_id=selected_filters.bank_id,
+                    bank_account_id=selected_filters.bank_account_id,
+                    status=selected_filters.status,
+                    currency_code=selected_filters.currency_code,
+                ),
+                created_by=_created_by_text(self.current_user),
+            )
+
+            QMessageBox.information(
+                self,
+                "Excel Oluşturuldu",
+                f"POS Mutabakat Excel dosyası başarıyla oluşturuldu:\n\n"
+                f"Dönem: {selected_filters.start_date.strftime('%d.%m.%Y')} - "
+                f"{selected_filters.end_date.strftime('%d.%m.%Y')}\n"
+                f"Banka ID: {selected_filters.bank_id or 'Tümü'}\n"
+                f"Hesap ID: {selected_filters.bank_account_id or 'Tümü'}\n"
+                f"POS ID: {selected_filters.pos_device_id or 'Tümü'}\n"
+                f"Durum: {selected_filters.status}\n"
+                f"Para Birimi: {selected_filters.currency_code}\n\n"
+                f"{created_excel_path}",
+            )
+
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(created_excel_path))
+            )
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Excel Oluşturulamadı",
+                f"POS Mutabakat Excel dosyası oluşturulurken hata oluştu:\n\n{exc}",
+            )
 
     def _create_bank_movement_report_excel(self) -> None:
         try:
@@ -1015,6 +1099,7 @@ class ReportsPage(QWidget):
             on_financing_cost_excel_click=self._create_discount_cost_report_excel,
             on_check_due_excel_click=self._create_next_30_days_check_due_report_excel,
             on_bank_movement_excel_click=self._create_bank_movement_report_excel,
+            on_pos_settlement_excel_click=self._create_pos_settlement_report_excel,
         )
 
     def _build_quick_check_reports_card(self) -> QWidget:
