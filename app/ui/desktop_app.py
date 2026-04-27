@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -31,6 +32,7 @@ from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.placeholder_page import AccessDeniedPage, PlaceholderPage
 from app.ui.pages.pos_page import PosPage
 from app.ui.pages.reports_page import ReportsPage
+from app.ui.pages.security_system_page import SecuritySystemPage
 from app.ui.styles import APP_STYLE
 from app.ui.ui_helpers import clear_layout
 
@@ -43,8 +45,7 @@ PAGE_SUBTITLES = {
     "Vade Takvimi": "Gelen ve giden çeklerin vade tarihlerini masaüstü takvim görünümünde takip et.",
     "Müşteri / Tedarikçi Kartları": "Çek aldığın müşteriler, çek verdiğin tedarikçiler ve nadir işlem yapılan taraflar burada yönetilecek.",
     "Raporlar": "A4 baskı düzenine uygun profesyonel PDF ve Excel raporları oluştur.",
-    "Güvenlik": "Kullanıcılar, roller, audit log ve yetkisiz işlem denemeleri burada izlenecek.",
-    "Sistem": "Yedekleme, restore testi, sağlık kontrolü ve mail durumları burada yönetilecek.",
+    "Güvenlik ve Sistem": "Kullanıcılar, roller, yetkiler, audit log, yedekleme ve sistem ayarları burada yönetilecek.",
     "Erişim Yok": "Bu ekran için mevcut rolün yetkili değil.",
 }
 
@@ -176,6 +177,36 @@ class FtmDesktopWindow(QMainWindow):
             layout.addWidget(button)
 
         layout.addStretch()
+
+        logout_button = QPushButton("Oturumu Kapat")
+        logout_button.setMinimumHeight(42)
+        logout_button.setCursor(Qt.PointingHandCursor)
+        logout_button.clicked.connect(self.confirm_exit)
+        logout_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #7f1d1d;
+                color: #ffffff;
+                border: 1px solid #f87171;
+                border-radius: 12px;
+                padding: 10px 14px;
+                font-weight: 900;
+                text-align: center;
+            }
+
+            QPushButton:hover {
+                background-color: #991b1b;
+                border: 1px solid #fca5a5;
+            }
+
+            QPushButton:pressed {
+                background-color: #5b0f0f;
+                border: 1px solid #fecaca;
+            }
+            """
+        )
+
+        layout.addWidget(logout_button)
 
         hidden_count = count_hidden_pages_for_role(self.current_role)
 
@@ -330,6 +361,16 @@ class FtmDesktopWindow(QMainWindow):
             self.content_scroll_area.verticalScrollBar().setValue(0)
             return
 
+        if self.current_page == "Güvenlik ve Sistem":
+            self.content_layout.addWidget(
+                SecuritySystemPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
         self.content_layout.addWidget(
             PlaceholderPage(
                 page_title=self.current_page,
@@ -390,6 +431,20 @@ class FtmDesktopWindow(QMainWindow):
     def refresh_dashboard(self) -> None:
         self.dashboard_data = load_dashboard_data()
         self.render_current_page()
+
+    def confirm_exit(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "FTM Çıkış",
+            "Oturumu kapatıp uygulamadan çıkmak istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        QApplication.quit()
 
 
 def main() -> None:

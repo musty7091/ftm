@@ -11,8 +11,7 @@ ALL_NAV_ITEMS = [
     "Vade Takvimi",
     "Müşteri / Tedarikçi Kartları",
     "Raporlar",
-    "Güvenlik",
-    "Sistem",
+    "Güvenlik ve Sistem",
 ]
 
 
@@ -25,8 +24,7 @@ ROLE_PAGE_MAP: dict[str, list[str]] = {
         "Vade Takvimi",
         "Müşteri / Tedarikçi Kartları",
         "Raporlar",
-        "Güvenlik",
-        "Sistem",
+        "Güvenlik ve Sistem",
     ],
     "FINANCE": [
         "Genel Bakış",
