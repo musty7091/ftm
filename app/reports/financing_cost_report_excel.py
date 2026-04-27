@@ -233,14 +233,14 @@ def _write_summary_sheet(
         ),
         FtmExcelSummaryCard(
             title="Maliyet Oranı",
-            value=_summary_ratio_formula(numerator_cell="B18", denominator_cell="B14"),
+            value=_summary_ratio_formula(numerator_cell="B19", denominator_cell="B18"),
             hint="Toplam maliyet / brüt tutar",
             card_type="risk",
             number_format=builder.percent_format,
         ),
         FtmExcelSummaryCard(
             title="Net Oran",
-            value=_summary_ratio_formula(numerator_cell="B19", denominator_cell="B14"),
+            value=_summary_ratio_formula(numerator_cell="B20", denominator_cell="B18"),
             hint="Net banka tutarı / brüt tutar",
             card_type="success",
             number_format=builder.percent_format,
