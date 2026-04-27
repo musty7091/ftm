@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -26,10 +27,20 @@ from app.reports.bank_movement_report_pdf import create_bank_movement_report_pdf
 from app.reports.check_due_report_data import CheckDueReportFilter
 from app.reports.check_due_report_pdf import create_check_due_report_pdf
 from app.reports.pos_settlement_report_data import PosSettlementReportFilter
+from app.reports.discount_batch_report_data import (
+    DiscountBatchReportFilter,
+    list_discount_batch_options,
+)
+from app.reports.discount_batch_report_pdf import create_discount_batch_report_pdf
+from app.reports.financing_cost_report_data import FinancingCostReportFilter
+from app.reports.financing_cost_report_pdf import create_financing_cost_report_pdf
 from app.reports.pos_settlement_report_pdf import create_pos_settlement_report_pdf
 from app.reports.risk_check_report_data import RiskCheckReportFilter
 from app.reports.risk_check_report_pdf import create_risk_check_report_pdf
-
+from app.ui.pages.reports import (
+    build_discount_reports_tab,
+    build_excel_reports_tab,
+)
 
 REPORTS_PAGE_STYLE = """
 QFrame#ReportsInfoStrip {
@@ -482,6 +493,140 @@ class ReportsPage(QWidget):
 
         self._build_page()
 
+    def _create_current_month_discount_cost_report_pdf(self) -> None:
+        start_date, end_date = _current_month_range()
+
+        default_folder = _default_reports_folder()
+        default_file_name = (
+            f"{_safe_file_name_text('Aylik_Iskonto_Maliyet_Raporu')}_"
+            f"{start_date.strftime('%Y%m%d')}_"
+            f"{end_date.strftime('%Y%m%d')}.pdf"
+        )
+        default_file_path = default_folder / default_file_name
+
+        selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Aylık İskonto Maliyet Raporunu Kaydet",
+            str(default_file_path),
+            "PDF Dosyası (*.pdf)",
+        )
+
+        if not selected_file_path:
+            return
+
+        output_path = Path(selected_file_path)
+
+        if output_path.suffix.lower() != ".pdf":
+            output_path = output_path.with_suffix(".pdf")
+
+        created_pdf_path = create_financing_cost_report_pdf(
+            output_path=output_path,
+            report_filter=FinancingCostReportFilter(
+                start_date=start_date,
+                end_date=end_date,
+                bank_id=None,
+                bank_account_id=None,
+                discount_batch_id=None,
+                currency_code="ALL",
+            ),
+            created_by=_created_by_text(self.current_user),
+        )
+
+        QMessageBox.information(
+            self,
+            "Rapor Oluşturuldu",
+            f"Aylık İskonto Maliyet Raporu başarıyla oluşturuldu:\n\n"
+            f"Dönem: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            f"{created_pdf_path}",
+        )
+
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(created_pdf_path))
+        )
+
+    def _create_package_based_discount_cost_report_pdf(self) -> None:
+        selected_batch_option = self._select_current_month_discount_batch_option()
+
+        if selected_batch_option is None:
+            return
+
+        start_date = selected_batch_option.discount_date
+        end_date = selected_batch_option.discount_date
+
+        default_folder = _default_reports_folder()
+        default_file_name = (
+            f"{_safe_file_name_text('Iskonto_Maliyet_Raporu')}_"
+            f"Paket_{selected_batch_option.batch_id}_"
+            f"{selected_batch_option.discount_date.strftime('%Y%m%d')}.pdf"
+        )
+        default_file_path = default_folder / default_file_name
+
+        selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "İskonto Maliyet Raporunu Kaydet",
+            str(default_file_path),
+            "PDF Dosyası (*.pdf)",
+        )
+
+        if not selected_file_path:
+            return
+
+        output_path = Path(selected_file_path)
+
+        if output_path.suffix.lower() != ".pdf":
+            output_path = output_path.with_suffix(".pdf")
+
+        created_pdf_path = create_financing_cost_report_pdf(
+            output_path=output_path,
+            report_filter=FinancingCostReportFilter(
+                start_date=start_date,
+                end_date=end_date,
+                bank_id=None,
+                bank_account_id=None,
+                discount_batch_id=selected_batch_option.batch_id,
+                currency_code="ALL",
+            ),
+            created_by=_created_by_text(self.current_user),
+        )
+
+        QMessageBox.information(
+            self,
+            "Rapor Oluşturuldu",
+            f"İskonto Maliyet Raporu başarıyla oluşturuldu:\n\n"
+            f"Paket No: {selected_batch_option.batch_id}\n"
+            f"{created_pdf_path}",
+        )
+
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(created_pdf_path))
+        )
+
+    def _select_discount_cost_report_type(self) -> str | None:
+        report_types = [
+            "Paket Bazlı Rapor",
+            "Bu Ayın Toplam Maliyet Raporu",
+        ]
+
+        selected_text, is_selected = QInputDialog.getItem(
+            self,
+            "İskonto Maliyet Raporu",
+            "Almak istediğin rapor tipini seç:",
+            report_types,
+            0,
+            False,
+        )
+
+        if not is_selected or not selected_text:
+            return None
+
+        if selected_text == "Paket Bazlı Rapor":
+            return "PACKAGE"
+
+        if selected_text == "Bu Ayın Toplam Maliyet Raporu":
+            return "CURRENT_MONTH"
+
+        return None
+
     def _build_page(self) -> None:
         self.main_layout.addWidget(self._build_info_strip())
         self.main_layout.addWidget(self._build_tabs(), 1)
@@ -570,28 +715,13 @@ class ReportsPage(QWidget):
         return tab
 
     def _build_discount_reports_tab(self) -> QWidget:
-        return self._build_planned_tab(
-            title_text="İskonto / Finansman Raporları",
-            subtitle_text="İskonto paketleri, faiz, komisyon, BSMV, toplam kesinti ve net ele geçen tutar raporları burada olacak.",
-            reports=[
-                ("İskonto Paketleri Raporu", "Banka bazlı iskonto paketlerini ve paket detaylarını listeler."),
-                ("Finansman Maliyeti Raporu", "Faiz, komisyon, BSMV ve toplam kesinti analizini verir."),
-                ("Net Ele Geçen Tutar Raporu", "Kırdırılan çeklerden elde edilen net tutarları gösterir."),
-                ("Ortalama Vade / Maliyet Raporu", "Ortalama vade, efektif maliyet ve banka bazlı karşılaştırma."),
-            ],
+        return build_discount_reports_tab(
+            on_discount_batch_report_click=self._create_current_month_discount_batch_report_pdf,
+            on_financing_cost_report_click=self._create_current_month_financing_cost_report_pdf,
         )
 
     def _build_excel_reports_tab(self) -> QWidget:
-        return self._build_planned_tab(
-            title_text="Excel Aktarım",
-            subtitle_text="PDF raporların yanında ham verilerin Excel olarak dışa aktarılması burada yönetilecek.",
-            reports=[
-                ("Çek Listesi Excel", "Alınan ve yazılan çekleri filtreli Excel dosyasına aktarır."),
-                ("Banka Hareketleri Excel", "Banka giriş/çıkış hareketlerini Excel olarak dışa aktarır."),
-                ("POS Mutabakat Excel", "POS mutabakat kayıtlarını Excel dosyasına aktarır."),
-                ("İskonto Paketleri Excel", "İskonto paketlerini ve maliyet detaylarını Excel olarak verir."),
-            ],
-        )
+        return build_excel_reports_tab()
 
     def _build_quick_check_reports_card(self) -> QWidget:
         card = QFrame()
@@ -661,6 +791,54 @@ class ReportsPage(QWidget):
         layout.addLayout(grid)
 
         return card
+
+    def _select_current_month_discount_batch_option(self):
+        start_date, end_date = _current_month_range()
+
+        options = list_discount_batch_options(
+            start_date=start_date,
+            end_date=end_date,
+            bank_id=None,
+            bank_account_id=None,
+            currency_code="ALL",
+        )
+
+        if not options:
+            QMessageBox.information(
+                self,
+                "İskonto Paketi Bulunamadı",
+                "Bu ay için kayıtlı iskonto paketi bulunamadı.\n\n"
+                "Finansman Maliyeti Raporu alabilmek için önce iskonto paketi oluşturulmuş olmalı.",
+            )
+            return None
+
+        option_texts = [
+            option.display_text
+            for option in options
+        ]
+
+        selected_text, is_selected = QInputDialog.getItem(
+            self,
+            "İskonto Paketi Seç",
+            "Finansman maliyeti raporu almak istediğin iskonto paketini seç:",
+            option_texts,
+            0,
+            False,
+        )
+
+        if not is_selected or not selected_text:
+            return None
+
+        for option in options:
+            if option.display_text == selected_text:
+                return option
+
+        QMessageBox.warning(
+            self,
+            "Paket Seçilemedi",
+            "Seçilen iskonto paketi bulunamadı. Lütfen tekrar deneyin.",
+        )
+        return None
 
     def _build_quick_bank_reports_card(self) -> QWidget:
         card = QFrame()
@@ -807,6 +985,84 @@ class ReportsPage(QWidget):
                 source_type=source_type,
             ),
         )
+
+    def _create_current_month_discount_batch_report_pdf(self) -> None:
+        try:
+            start_date, end_date = _current_month_range()
+
+            default_folder = _default_reports_folder()
+            default_file_name = (
+                f"{_safe_file_name_text('Iskonto_Paketleri_Raporu')}_"
+                f"{start_date.strftime('%Y%m%d')}_"
+                f"{end_date.strftime('%Y%m%d')}.pdf"
+            )
+            default_file_path = default_folder / default_file_name
+
+            selected_file_path, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "İskonto Paketleri Raporunu Kaydet",
+                str(default_file_path),
+                "PDF Dosyası (*.pdf)",
+            )
+
+            if not selected_file_path:
+                return
+
+            output_path = Path(selected_file_path)
+
+            if output_path.suffix.lower() != ".pdf":
+                output_path = output_path.with_suffix(".pdf")
+
+            created_pdf_path = create_discount_batch_report_pdf(
+                output_path=output_path,
+                report_filter=DiscountBatchReportFilter(
+                    start_date=start_date,
+                    end_date=end_date,
+                    bank_id=None,
+                    bank_account_id=None,
+                    currency_code="ALL",
+                ),
+                created_by=_created_by_text(self.current_user),
+            )
+
+            QMessageBox.information(
+                self,
+                "Rapor Oluşturuldu",
+                f"İskonto Paketleri Raporu başarıyla oluşturuldu:\n\n{created_pdf_path}",
+            )
+
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(created_pdf_path))
+            )
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Rapor Oluşturulamadı",
+                f"İskonto Paketleri Raporu oluşturulurken hata oluştu:\n\n{exc}",
+            )
+
+    def _create_current_month_financing_cost_report_pdf(self) -> None:
+        try:
+            report_type = self._select_discount_cost_report_type()
+
+            if report_type is None:
+                return
+
+            if report_type == "PACKAGE":
+                self._create_package_based_discount_cost_report_pdf()
+                return
+
+            if report_type == "CURRENT_MONTH":
+                self._create_current_month_discount_cost_report_pdf()
+                return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Rapor Oluşturulamadı",
+                f"İskonto Maliyet Raporu oluşturulurken hata oluştu:\n\n{exc}",
+            )
 
     def _build_quick_pos_report_box(self, *, title_text: str, body_text: str, button_text: str, start_date: date, end_date: date, file_label: str, status: str, currency_code: str) -> QWidget:
         return self._build_report_box(
@@ -1296,77 +1552,6 @@ class ReportsPage(QWidget):
         layout.setColumnStretch(2, 1)
 
         return panel
-
-    def _build_planned_tab(self, *, title_text: str, subtitle_text: str, reports: list[tuple[str, str]]) -> QWidget:
-        tab = QWidget()
-
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 14, 12, 12)
-        layout.setSpacing(12)
-
-        card = QFrame()
-        card.setObjectName("PlannedReportsCard")
-
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(18, 16, 18, 16)
-        card_layout.setSpacing(14)
-
-        title = QLabel(title_text)
-        title.setObjectName("ReportSectionTitle")
-
-        subtitle = QLabel(subtitle_text)
-        subtitle.setObjectName("ReportSubTitle")
-        subtitle.setWordWrap(True)
-
-        grid = QGridLayout()
-        grid.setSpacing(12)
-
-        for index, report in enumerate(reports):
-            grid.addWidget(
-                self._build_planned_report_box(
-                    title_text=report[0],
-                    body_text=report[1],
-                ),
-                index // 2,
-                index % 2,
-            )
-
-        card_layout.addWidget(title)
-        card_layout.addWidget(subtitle)
-        card_layout.addLayout(grid)
-
-        layout.addWidget(card)
-        layout.addStretch(1)
-
-        return tab
-
-    def _build_planned_report_box(self, title_text: str, body_text: str) -> QWidget:
-        box = QFrame()
-        box.setObjectName("PlannedReportBox")
-
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-
-        title = QLabel(title_text)
-        title.setObjectName("ReportPlannedTitle")
-        title.setWordWrap(True)
-
-        body = QLabel(body_text)
-        body.setObjectName("ReportPlannedBody")
-        body.setWordWrap(True)
-
-        button = QPushButton("Planlandı")
-        button.setObjectName("PlannedButton")
-        button.setMinimumHeight(36)
-        button.setEnabled(False)
-
-        layout.addWidget(title)
-        layout.addWidget(body)
-        layout.addStretch(1)
-        layout.addWidget(button)
-
-        return box
 
     def _build_field_label(self, text: str) -> QLabel:
         label = QLabel(text)
