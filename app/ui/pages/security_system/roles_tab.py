@@ -404,6 +404,20 @@ CRITICAL_PERMISSIONS = {
 }
 
 
+ADMIN_ONLY_PERMISSIONS = {
+    Permission.USER_VIEW,
+    Permission.USER_CREATE,
+    Permission.USER_UPDATE_ROLE,
+    Permission.USER_DEACTIVATE,
+    Permission.USER_REACTIVATE,
+    Permission.AUDIT_LOG_VIEW,
+    Permission.BACKUP_RUN,
+    Permission.RESTORE_TEST_RUN,
+    Permission.SYSTEM_SETTINGS_VIEW,
+    Permission.SYSTEM_SETTINGS_UPDATE,
+}
+
+
 class RolesTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -473,7 +487,7 @@ class RolesTab(QWidget):
         editor_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         editor_header.setSectionResizeMode(3, QHeaderView.Fixed)
 
-        self.editor_table.setColumnWidth(2, 80)
+        self.editor_table.setColumnWidth(2, 90)
         self.editor_table.setColumnWidth(3, 80)
 
         self._build_ui()
@@ -496,7 +510,8 @@ class RolesTab(QWidget):
 
         subtitle = QLabel(
             "Rol seç, yetkileri işaretle, kaydet. "
-            "ADMIN rolü sistem güvenliği için korumalıdır."
+            "ADMIN rolü sistem güvenliği için korumalıdır. "
+            "Kullanıcı yönetimi, audit log, yedekleme ve sistem ayarları yalnızca ADMIN tarafından kullanılabilir."
         )
         subtitle.setObjectName("RolesTabSubtitle")
         subtitle.setWordWrap(True)
@@ -509,7 +524,8 @@ class RolesTab(QWidget):
         card_layout.addWidget(self.editor_table, 1)
 
         info_button = QPushButton(
-            "Bu ekran işlem yetkilerini değiştirir. Sol menü görünürlüğü ayrıca navigation yapısından gelir."
+            "Güvenlik ve Sistem modülü sadece ADMIN kullanıcıya açıktır. "
+            "Non-admin rollerde bu alana ait yetkiler kilitli tutulur."
         )
         info_button.setObjectName("RolesTabPassiveButton")
         info_button.setEnabled(False)
@@ -527,7 +543,8 @@ class RolesTab(QWidget):
         layout.setSpacing(10)
 
         info = QLabel(
-            "Yetkiler role_permissions tablosundan okunur ve kaydedilir."
+            "Yetkiler role_permissions tablosundan okunur ve kaydedilir. "
+            "ADMIN'e özel güvenlik yetkileri non-admin rollere verilemez."
         )
         info.setObjectName("RolesTabSubtitle")
         info.setWordWrap(True)
@@ -580,6 +597,11 @@ class RolesTab(QWidget):
                 for permission in Permission
             }
 
+            self.permission_state = self._permission_state_for_role(
+                role=selected_role,
+                permission_state=self.permission_state,
+            )
+
             self.render_editor_table()
             self._update_role_status()
             self._update_summary_labels()
@@ -607,6 +629,8 @@ class RolesTab(QWidget):
                     continue
 
                 for permission in permissions:
+                    is_admin_only_permission = self._is_admin_only_permission(permission)
+
                     self.editor_table.insertRow(row_index)
 
                     group_item = QTableWidgetItem(group_name)
@@ -616,7 +640,7 @@ class RolesTab(QWidget):
                     permission_item.setFlags(permission_item.flags() & ~Qt.ItemIsEditable)
 
                     critical_item = QTableWidgetItem(
-                        "Evet" if permission in CRITICAL_PERMISSIONS else "-"
+                        self._critical_text(permission)
                     )
                     critical_item.setTextAlignment(Qt.AlignCenter)
                     critical_item.setFlags(critical_item.flags() & ~Qt.ItemIsEditable)
@@ -624,14 +648,27 @@ class RolesTab(QWidget):
                     allowed_item = QTableWidgetItem("")
                     allowed_item.setTextAlignment(Qt.AlignCenter)
                     allowed_item.setData(Qt.UserRole, permission.value)
-                    allowed_item.setCheckState(
-                        Qt.Checked
-                        if self.permission_state.get(permission.value, False)
-                        else Qt.Unchecked
-                    )
+
+                    if is_admin_role:
+                        allowed_item.setCheckState(Qt.Checked)
+                    elif is_admin_only_permission:
+                        allowed_item.setCheckState(Qt.Unchecked)
+                    else:
+                        allowed_item.setCheckState(
+                            Qt.Checked
+                            if self.permission_state.get(permission.value, False)
+                            else Qt.Unchecked
+                        )
 
                     if is_admin_role:
                         allowed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                        allowed_item.setToolTip("ADMIN rolü korumalıdır ve tüm yetkilere sahiptir.")
+                    elif is_admin_only_permission:
+                        allowed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                        allowed_item.setToolTip(
+                            "Bu yetki Güvenlik ve Sistem modülüne aittir. "
+                            "Sadece ADMIN kullanıcı tarafından kullanılabilir."
+                        )
                     else:
                         allowed_item.setFlags(
                             Qt.ItemIsEnabled
@@ -663,7 +700,21 @@ class RolesTab(QWidget):
         if not permission_value:
             return
 
-        self.permission_state[str(permission_value)] = item.checkState() == Qt.Checked
+        permission_text = str(permission_value)
+
+        try:
+            permission = Permission(permission_text)
+        except ValueError:
+            return
+
+        selected_role = self._selected_role()
+
+        if selected_role != UserRole.ADMIN and self._is_admin_only_permission(permission):
+            self.permission_state[permission_text] = False
+            item.setCheckState(Qt.Unchecked)
+            return
+
+        self.permission_state[permission_text] = item.checkState() == Qt.Checked
         self._update_summary_labels()
 
     def save_selected_role_permissions(self) -> None:
@@ -678,6 +729,10 @@ class RolesTab(QWidget):
             return
 
         selected_permission_values = self._selected_permission_values()
+        selected_permission_values = self._sanitize_permission_values_for_role(
+            role=selected_role,
+            selected_permission_values=selected_permission_values,
+        )
 
         validation_error = self._validate_role_permissions_before_save(
             role=selected_role,
@@ -697,8 +752,7 @@ class RolesTab(QWidget):
                 self,
                 "Kritik Yetki Onayı",
                 "Seçili role kritik yetkiler veriliyor.\n\n"
-                "Kritik yetkiler kullanıcı yönetimi, audit log, yedekleme veya sistem ayarları gibi "
-                "önemli alanlara erişim sağlayabilir.\n\n"
+                "Kritik yetkiler finansal işlem, rapor veya iptal gibi önemli alanlara erişim sağlayabilir.\n\n"
                 "Devam etmek istiyor musun?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -710,7 +764,8 @@ class RolesTab(QWidget):
         answer = QMessageBox.question(
             self,
             "Yetkiler Kaydedilsin mi?",
-            f"{selected_role.value} rolünün yetkilerini kaydetmek istiyor musun?",
+            f"{selected_role.value} rolünün yetkilerini kaydetmek istiyor musun?\n\n"
+            "Not: Güvenlik ve Sistem modülüne ait yetkiler ADMIN dışındaki roller için kapalı tutulur.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -757,6 +812,11 @@ class RolesTab(QWidget):
     ) -> dict[str, int]:
         updated_count = 0
         unchanged_count = 0
+
+        selected_permission_values = self._sanitize_permission_values_for_role(
+            role=role,
+            selected_permission_values=selected_permission_values,
+        )
 
         with session_scope() as session:
             existing_statement = select(RolePermission).where(
@@ -828,11 +888,18 @@ class RolesTab(QWidget):
         }
 
     def _selected_permission_values(self) -> set[str]:
-        return {
+        selected_role = self._selected_role()
+
+        selected_values = {
             permission_value
             for permission_value, is_allowed in self.permission_state.items()
             if is_allowed
         }
+
+        return self._sanitize_permission_values_for_role(
+            role=selected_role,
+            selected_permission_values=selected_values,
+        )
 
     def _validate_role_permissions_before_save(
         self,
@@ -852,6 +919,7 @@ class RolesTab(QWidget):
         critical_values = {
             permission.value
             for permission in CRITICAL_PERMISSIONS
+            if permission not in ADMIN_ONLY_PERMISSIONS
         }
 
         return bool(selected_permission_values.intersection(critical_values))
@@ -868,7 +936,9 @@ class RolesTab(QWidget):
 
         self.save_role_button.setEnabled(True)
         self.role_status_label.setText(
-            f"{selected_role.value} rolü düzenlenebilir. Yetkileri değiştirip kaydedebilirsin."
+            f"{selected_role.value} rolü düzenlenebilir. "
+            "Ancak Kullanıcı Yönetimi ve Güvenlik / Sistem yetkileri yalnızca ADMIN içindir; "
+            "bu rol için kilitli ve kapalı tutulur."
         )
 
     def _update_summary_labels(self) -> None:
@@ -878,6 +948,7 @@ class RolesTab(QWidget):
         critical_values = {
             permission.value
             for permission in CRITICAL_PERMISSIONS
+            if permission not in ADMIN_ONLY_PERMISSIONS
         }
         critical_count = len(self._selected_permission_values().intersection(critical_values))
 
@@ -893,7 +964,63 @@ class RolesTab(QWidget):
         return str(self.group_filter_combo.currentData() or "ALL")
 
     def _permission_label(self, permission: Permission) -> str:
-        return PERMISSION_LABELS.get(permission, permission.value)
+        label = PERMISSION_LABELS.get(permission, permission.value)
+
+        if self._is_admin_only_permission(permission):
+            return f"{label} (Sadece ADMIN)"
+
+        return label
+
+    def _critical_text(self, permission: Permission) -> str:
+        if self._is_admin_only_permission(permission):
+            return "ADMIN"
+
+        if permission in CRITICAL_PERMISSIONS:
+            return "Evet"
+
+        return "-"
+
+    def _is_admin_only_permission(self, permission: Permission) -> bool:
+        return permission in ADMIN_ONLY_PERMISSIONS
+
+    def _permission_state_for_role(
+        self,
+        *,
+        role: UserRole,
+        permission_state: dict[str, bool],
+    ) -> dict[str, bool]:
+        normalized_state = dict(permission_state)
+
+        if role == UserRole.ADMIN:
+            for permission in Permission:
+                normalized_state[permission.value] = True
+
+            return normalized_state
+
+        for permission in ADMIN_ONLY_PERMISSIONS:
+            normalized_state[permission.value] = False
+
+        return normalized_state
+
+    def _sanitize_permission_values_for_role(
+        self,
+        *,
+        role: UserRole,
+        selected_permission_values: set[str],
+    ) -> set[str]:
+        if role == UserRole.ADMIN:
+            return set(permission.value for permission in Permission)
+
+        admin_only_values = {
+            permission.value
+            for permission in ADMIN_ONLY_PERMISSIONS
+        }
+
+        return {
+            permission_value
+            for permission_value in selected_permission_values
+            if permission_value not in admin_only_values
+        }
 
     def _current_user_id(self) -> int | None:
         current_user = getattr(self.window(), "current_user", None)

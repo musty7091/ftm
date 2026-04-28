@@ -92,6 +92,12 @@ class FtmDesktopWindow(QMainWindow):
     def __init__(self, current_user: Optional[Any] = None) -> None:
         super().__init__()
 
+        if current_user is None:
+            raise ValueError(
+                "FtmDesktopWindow güvenli girişten geçmiş current_user olmadan açılamaz. "
+                "Uygulamayı python -m app.ui.secure_desktop_app komutu ile başlatmalısın."
+            )
+
         self.current_user = current_user
         self.current_role = role_to_text(current_user.role if current_user else None)
         self.current_username = username_to_text(current_user)
@@ -567,13 +573,9 @@ class FtmDesktopWindow(QMainWindow):
 
 
 def main() -> None:
-    app = QApplication(sys.argv)
-    app.setStyleSheet(APP_STYLE)
+    from app.ui.secure_desktop_app import main as secure_main
 
-    window = FtmDesktopWindow()
-    window.show()
-
-    sys.exit(app.exec())
+    secure_main()
 
 
 if __name__ == "__main__":
