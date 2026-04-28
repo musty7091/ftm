@@ -4,20 +4,41 @@ QDialog {
     color: #e5e7eb;
 }
 
+QDialog QWidget {
+    background-color: #0f172a;
+    color: #e5e7eb;
+}
+
+QScrollArea {
+    background-color: #0f172a;
+    border: none;
+}
+
+QScrollArea > QWidget {
+    background-color: #0f172a;
+}
+
+QScrollArea > QWidget > QWidget {
+    background-color: #0f172a;
+}
+
 QLabel {
     color: #e5e7eb;
     font-size: 13px;
+    background-color: transparent;
 }
 
 QLabel#SectionTitle {
     color: #f8fafc;
     font-size: 20px;
     font-weight: 700;
+    background-color: transparent;
 }
 
 QLabel#MutedText {
     color: #94a3b8;
     font-size: 13px;
+    background-color: transparent;
 }
 
 QLineEdit,
@@ -104,6 +125,41 @@ QCalendarWidget QAbstractItemView {
     color: #f8fafc;
     selection-background-color: #2563eb;
     selection-color: #ffffff;
+}
+
+QTableWidget {
+    background-color: #0f172a;
+    color: #e5e7eb;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    gridline-color: #1e293b;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+    alternate-background-color: #111827;
+}
+
+QTableWidget::item {
+    padding: 6px;
+    border: none;
+    background-color: transparent;
+}
+
+QTableWidget::item:selected {
+    background-color: #2563eb;
+    color: #ffffff;
+}
+
+QHeaderView::section {
+    background-color: #1e293b;
+    color: #f8fafc;
+    border: 1px solid #334155;
+    padding: 8px;
+    font-weight: 700;
+}
+
+QTableCornerButton::section {
+    background-color: #1e293b;
+    border: 1px solid #334155;
 }
 
 QPushButton {

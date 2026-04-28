@@ -293,7 +293,7 @@ def parse_mail_recipients(value: Any) -> list[str]:
 
     parts = [
         part.strip()
-        for part in re.split(r"[;,\\s]+", raw_value)
+        for part in re.split(r"[;,\s]+", raw_value)
         if part.strip()
     ]
 
@@ -457,7 +457,7 @@ def _is_valid_email(value: str) -> bool:
         return False
 
     return re.fullmatch(
-        r"[^@\\s]+@[^@\\s]+\\.[^@\\s]+",
+        r"[^@\s]+@[^@\s]+\.[^@\s]+",
         cleaned_value,
     ) is not None
 

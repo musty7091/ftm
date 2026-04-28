@@ -1,6 +1,8 @@
 from traceback import print_exc
 
-from app.services.restore_test_service import test_latest_backup_restore
+from app.services.restore_test_service import (
+    test_latest_backup_restore as run_latest_backup_restore,
+)
 
 
 def main() -> None:
@@ -11,7 +13,7 @@ def main() -> None:
     print("")
 
     try:
-        result = test_latest_backup_restore()
+        result = run_latest_backup_restore()
 
         print("Yedekten geri dönüş testi başarılı.")
         print(f"Kullanılan yedek dosyası : {result.backup_file}")
