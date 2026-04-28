@@ -1,0 +1,12 @@
+{
+  "backup_folder": "backups",
+  "company_address": "",
+  "company_email": "",
+  "company_name": "FTM Finans Takip Merkezi",
+  "company_phone": "",
+  "control_mail_enabled": true,
+  "control_mail_to": "",
+  "export_folder": "exports",
+  "log_folder": "logs",
+  "report_footer_note": "FTM tarafından oluşturulmuştur."
+}

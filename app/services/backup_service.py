@@ -1,12 +1,21 @@
+from __future__ import annotations
+
+import hashlib
+import json
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
+from app.services.app_settings_service import (
+    get_backup_folder_path,
+    get_control_mail_recipients,
+    load_app_settings,
+)
 from app.services.mail_service import MailServiceError, parse_mail_recipients, send_mail
 
 
@@ -23,6 +32,31 @@ class BackupResult:
     mail_sent: bool
     mail_message: str
     mail_recipients: list[str]
+
+
+@dataclass
+class BackupFileInfo:
+    file_name: str
+    file_path: Path
+    backup_size_bytes: int
+    created_at: datetime
+    sha256: str
+    metadata_file: Optional[Path]
+    database_name: str
+    database_user: str
+    docker_container: str
+    status: str
+    status_message: str
+
+
+@dataclass
+class BackupValidationResult:
+    success: bool
+    backup_file: Path
+    backup_size_bytes: int
+    sha256: str
+    is_postgresql_custom_dump: bool
+    message: str
 
 
 class BackupServiceError(RuntimeError):
@@ -45,7 +79,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
 
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return value.strip().lower() in {"1", "true", "yes", "on", "evet", "açık", "acik"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -82,6 +116,34 @@ def _get_folder_from_env(name: str, default_value: str) -> Path:
     return folder_path
 
 
+def _get_backup_folder() -> Path:
+    try:
+        backup_folder = get_backup_folder_path()
+        backup_folder.mkdir(parents=True, exist_ok=True)
+
+        return backup_folder
+
+    except Exception:
+        return _get_folder_from_env("BACKUP_FOLDER", "backups")
+
+
+def _get_log_folder() -> Path:
+    try:
+        app_settings = load_app_settings()
+        project_root = _get_project_root()
+        folder_path = Path(app_settings.log_folder)
+
+        if not folder_path.is_absolute():
+            folder_path = project_root / folder_path
+
+        folder_path.mkdir(parents=True, exist_ok=True)
+
+        return folder_path
+
+    except Exception:
+        return _get_folder_from_env("LOG_FOLDER", "logs")
+
+
 def _format_backup_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} byte"
@@ -101,8 +163,12 @@ def _format_backup_size(size_bytes: int) -> str:
     return f"{size_gb:.2f} GB"
 
 
+def format_backup_size(size_bytes: int) -> str:
+    return _format_backup_size(size_bytes)
+
+
 def _write_backup_log(message: str) -> None:
-    log_folder = _get_folder_from_env("LOG_FOLDER", "logs")
+    log_folder = _get_log_folder()
     log_file = log_folder / "backup_log.txt"
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -125,17 +191,45 @@ def _cleanup_old_backups(backup_folder: Path, keep_days: int) -> int:
         file_modified_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
 
         if file_modified_time < cutoff_time:
+            metadata_file = _metadata_file_for_backup(backup_file)
+
             backup_file.unlink()
             deleted_count += 1
+
+            if metadata_file.exists():
+                try:
+                    metadata_file.unlink()
+                except OSError:
+                    pass
 
     return deleted_count
 
 
 def _create_backup_file_path(backup_folder: Path, database_name: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_database_name = database_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+    safe_database_name = _safe_filename(database_name)
 
     return backup_folder / f"{safe_database_name}_backup_{timestamp}.dump"
+
+
+def _metadata_file_for_backup(backup_file: Path) -> Path:
+    return backup_file.with_suffix(".meta.json")
+
+
+def _safe_filename(value: str) -> str:
+    cleaned_value = str(value or "").strip()
+
+    safe_chars: list[str] = []
+
+    for char in cleaned_value:
+        if char.isalnum() or char in {"_", "-"}:
+            safe_chars.append(char)
+        else:
+            safe_chars.append("_")
+
+    result = "".join(safe_chars).strip("_")
+
+    return result or "database"
 
 
 def _run_docker_pg_dump(
@@ -196,6 +290,7 @@ def _build_backup_success_mail_body(
     deleted_old_backup_count: int,
     started_at: datetime,
     finished_at: datetime,
+    backup_sha256: str,
 ) -> str:
     database_name = os.getenv("DATABASE_NAME", "").strip()
     database_user = os.getenv("DATABASE_USER", "").strip()
@@ -203,16 +298,39 @@ def _build_backup_success_mail_body(
 
     return (
         "FTM PostgreSQL yedekleme işlemi başarıyla tamamlandı.\n\n"
-        f"Veritabanı       : {database_name}\n"
-        f"Kullanıcı        : {database_user}\n"
-        f"Docker container : {docker_container}\n"
-        f"Yedek dosyası    : {backup_file}\n"
-        f"Yedek boyutu     : {_format_backup_size(backup_size_bytes)}\n"
+        f"Veritabanı        : {database_name}\n"
+        f"Kullanıcı         : {database_user}\n"
+        f"Docker container  : {docker_container}\n"
+        f"Yedek dosyası     : {backup_file}\n"
+        f"Yedek boyutu      : {_format_backup_size(backup_size_bytes)}\n"
+        f"SHA256            : {backup_sha256}\n"
         f"Silinen eski yedek: {deleted_old_backup_count}\n"
-        f"Başlangıç zamanı : {started_at}\n"
-        f"Bitiş zamanı     : {finished_at}\n\n"
+        f"Başlangıç zamanı  : {started_at}\n"
+        f"Bitiş zamanı      : {finished_at}\n\n"
         "Bu mail FTM yedekleme sistemi tarafından otomatik oluşturulmuştur."
     )
+
+
+def _get_backup_mail_recipients() -> list[str]:
+    app_setting_recipients = get_control_mail_recipients()
+
+    if app_setting_recipients:
+        return app_setting_recipients
+
+    return parse_mail_recipients(os.getenv("BACKUP_MAIL_TO", ""))
+
+
+def _is_backup_mail_enabled() -> bool:
+    try:
+        app_settings = load_app_settings()
+
+        if not app_settings.control_mail_enabled:
+            return False
+
+    except Exception:
+        pass
+
+    return _env_bool("BACKUP_MAIL_ENABLED", True)
 
 
 def _send_backup_success_mail(
@@ -222,15 +340,18 @@ def _send_backup_success_mail(
     deleted_old_backup_count: int,
     started_at: datetime,
     finished_at: datetime,
+    backup_sha256: str,
 ) -> tuple[bool, str, list[str]]:
-    backup_mail_enabled = _env_bool("BACKUP_MAIL_ENABLED", False)
-    mail_recipients = parse_mail_recipients(os.getenv("BACKUP_MAIL_TO", ""))
+    backup_mail_enabled = _is_backup_mail_enabled()
+    mail_recipients = _get_backup_mail_recipients()
 
     if not backup_mail_enabled:
-        return False, "Yedekleme bilgi maili pasif. BACKUP_MAIL_ENABLED=false", mail_recipients
+        return False, "Yedekleme bilgi maili pasif.", mail_recipients
+
+    if not mail_recipients:
+        return False, "Yedekleme bilgi maili için alıcı tanımlı değil.", mail_recipients
 
     attach_backup = _env_bool("BACKUP_MAIL_ATTACH_BACKUP", True)
-
     attachment_path = backup_file if attach_backup else None
 
     subject = _build_backup_mail_subject(success=True)
@@ -240,6 +361,7 @@ def _send_backup_success_mail(
         deleted_old_backup_count=deleted_old_backup_count,
         started_at=started_at,
         finished_at=finished_at,
+        backup_sha256=backup_sha256,
     )
 
     try:
@@ -257,6 +379,90 @@ def _send_backup_success_mail(
 
     except Exception as exc:
         return False, f"Mail gönderimi sırasında beklenmeyen hata: {exc}", mail_recipients
+
+
+def calculate_file_sha256(file_path: Path) -> str:
+    sha256 = hashlib.sha256()
+
+    with file_path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def _is_postgresql_custom_dump(file_path: Path) -> bool:
+    try:
+        with file_path.open("rb") as file:
+            header = file.read(5)
+
+        return header == b"PGDMP"
+
+    except OSError:
+        return False
+
+
+def _write_backup_metadata(
+    *,
+    backup_file: Path,
+    backup_size_bytes: int,
+    backup_sha256: str,
+    deleted_old_backup_count: int,
+    started_at: datetime,
+    finished_at: datetime,
+    mail_enabled: bool,
+    mail_sent: bool,
+    mail_message: str,
+    mail_recipients: list[str],
+) -> Path:
+    metadata_file = _metadata_file_for_backup(backup_file)
+
+    metadata = {
+        "backup_file": str(backup_file),
+        "backup_size_bytes": backup_size_bytes,
+        "backup_size_text": _format_backup_size(backup_size_bytes),
+        "sha256": backup_sha256,
+        "is_postgresql_custom_dump": _is_postgresql_custom_dump(backup_file),
+        "deleted_old_backup_count": deleted_old_backup_count,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "finished_at": finished_at.isoformat(timespec="seconds"),
+        "database_name": os.getenv("DATABASE_NAME", "").strip(),
+        "database_user": os.getenv("DATABASE_USER", "").strip(),
+        "docker_container": os.getenv("BACKUP_DOCKER_CONTAINER", "").strip(),
+        "mail_enabled": mail_enabled,
+        "mail_sent": mail_sent,
+        "mail_message": mail_message,
+        "mail_recipients": mail_recipients,
+    }
+
+    with metadata_file.open("w", encoding="utf-8") as file:
+        json.dump(
+            metadata,
+            file,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        file.write("\n")
+
+    return metadata_file
+
+
+def _read_backup_metadata(metadata_file: Path) -> dict[str, Any]:
+    if not metadata_file.exists():
+        return {}
+
+    try:
+        with metadata_file.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        if isinstance(data, dict):
+            return data
+
+    except Exception:
+        return {}
+
+    return {}
 
 
 def create_database_backup() -> BackupResult:
@@ -296,7 +502,7 @@ def create_database_backup() -> BackupResult:
     database_user = _get_env_required("DATABASE_USER")
     database_password = _get_env_required("DATABASE_PASSWORD")
 
-    backup_folder = _get_folder_from_env("BACKUP_FOLDER", "backups")
+    backup_folder = _get_backup_folder()
     keep_days = _env_int("BACKUP_KEEP_DAYS", 30)
 
     backup_file = _create_backup_file_path(
@@ -304,15 +510,26 @@ def create_database_backup() -> BackupResult:
         database_name=database_name,
     )
 
-    _run_docker_pg_dump(
-        docker_container=docker_container,
-        database_name=database_name,
-        database_user=database_user,
-        database_password=database_password,
-        output_path=backup_file,
-    )
+    try:
+        _run_docker_pg_dump(
+            docker_container=docker_container,
+            database_name=database_name,
+            database_user=database_user,
+            database_password=database_password,
+            output_path=backup_file,
+        )
+
+    except Exception:
+        if backup_file.exists():
+            try:
+                backup_file.unlink()
+            except OSError:
+                pass
+
+        raise
 
     backup_size_bytes = backup_file.stat().st_size
+    backup_sha256 = calculate_file_sha256(backup_file)
     deleted_old_backup_count = _cleanup_old_backups(backup_folder, keep_days)
 
     finished_at = datetime.now()
@@ -326,7 +543,7 @@ def create_database_backup() -> BackupResult:
 
     _write_backup_log(message)
 
-    mail_enabled = _env_bool("BACKUP_MAIL_ENABLED", False)
+    mail_enabled = _is_backup_mail_enabled()
 
     mail_sent, mail_message, mail_recipients = _send_backup_success_mail(
         backup_file=backup_file,
@@ -334,12 +551,30 @@ def create_database_backup() -> BackupResult:
         deleted_old_backup_count=deleted_old_backup_count,
         started_at=started_at,
         finished_at=finished_at,
+        backup_sha256=backup_sha256,
     )
 
     if mail_sent:
         _write_backup_log(f"Yedekleme bilgi maili gönderildi. Alıcılar: {', '.join(mail_recipients)}")
     else:
         _write_backup_log(mail_message)
+
+    try:
+        _write_backup_metadata(
+            backup_file=backup_file,
+            backup_size_bytes=backup_size_bytes,
+            backup_sha256=backup_sha256,
+            deleted_old_backup_count=deleted_old_backup_count,
+            started_at=started_at,
+            finished_at=finished_at,
+            mail_enabled=mail_enabled,
+            mail_sent=mail_sent,
+            mail_message=mail_message,
+            mail_recipients=mail_recipients,
+        )
+
+    except Exception as exc:
+        _write_backup_log(f"Yedek metadata dosyası yazılamadı: {exc}")
 
     return BackupResult(
         success=True,
@@ -354,3 +589,133 @@ def create_database_backup() -> BackupResult:
         mail_message=mail_message,
         mail_recipients=mail_recipients,
     )
+
+
+def list_database_backups() -> list[BackupFileInfo]:
+    _load_environment()
+
+    backup_folder = _get_backup_folder()
+
+    if not backup_folder.exists():
+        return []
+
+    backup_files = sorted(
+        [
+            backup_file
+            for backup_file in backup_folder.glob("*.dump")
+            if backup_file.is_file()
+        ],
+        key=lambda backup_file: backup_file.stat().st_mtime,
+        reverse=True,
+    )
+
+    results: list[BackupFileInfo] = []
+
+    for backup_file in backup_files:
+        metadata_file = _metadata_file_for_backup(backup_file)
+        metadata = _read_backup_metadata(metadata_file)
+
+        backup_size_bytes = backup_file.stat().st_size
+        created_at = datetime.fromtimestamp(backup_file.stat().st_mtime)
+
+        sha256_value = str(metadata.get("sha256") or "")
+
+        status = "OK"
+        status_message = "Yedek dosyası mevcut."
+
+        if backup_size_bytes <= 0:
+            status = "WARN"
+            status_message = "Yedek dosyası boş görünüyor."
+        elif not _is_postgresql_custom_dump(backup_file):
+            status = "WARN"
+            status_message = "Dosya var ancak PostgreSQL custom dump başlığı doğrulanamadı."
+
+        results.append(
+            BackupFileInfo(
+                file_name=backup_file.name,
+                file_path=backup_file,
+                backup_size_bytes=backup_size_bytes,
+                created_at=created_at,
+                sha256=sha256_value,
+                metadata_file=metadata_file if metadata_file.exists() else None,
+                database_name=str(metadata.get("database_name") or os.getenv("DATABASE_NAME", "")),
+                database_user=str(metadata.get("database_user") or os.getenv("DATABASE_USER", "")),
+                docker_container=str(metadata.get("docker_container") or os.getenv("BACKUP_DOCKER_CONTAINER", "")),
+                status=status,
+                status_message=status_message,
+            )
+        )
+
+    return results
+
+
+def validate_backup_file(backup_file: str | Path) -> BackupValidationResult:
+    backup_path = Path(backup_file)
+
+    if not backup_path.exists():
+        raise BackupServiceError(f"Yedek dosyası bulunamadı: {backup_path}")
+
+    if not backup_path.is_file():
+        raise BackupServiceError(f"Yedek yolu dosya değil: {backup_path}")
+
+    backup_size_bytes = backup_path.stat().st_size
+
+    if backup_size_bytes <= 0:
+        raise BackupServiceError(f"Yedek dosyası boş görünüyor: {backup_path}")
+
+    backup_sha256 = calculate_file_sha256(backup_path)
+    is_custom_dump = _is_postgresql_custom_dump(backup_path)
+
+    if not is_custom_dump:
+        return BackupValidationResult(
+            success=False,
+            backup_file=backup_path,
+            backup_size_bytes=backup_size_bytes,
+            sha256=backup_sha256,
+            is_postgresql_custom_dump=False,
+            message="Yedek dosyası mevcut ancak PostgreSQL custom dump başlığı doğrulanamadı.",
+        )
+
+    return BackupValidationResult(
+        success=True,
+        backup_file=backup_path,
+        backup_size_bytes=backup_size_bytes,
+        sha256=backup_sha256,
+        is_postgresql_custom_dump=True,
+        message="Yedek dosyası mevcut, boş değil ve PostgreSQL custom dump başlığı doğrulandı.",
+    )
+
+
+def backup_result_to_dict(result: BackupResult) -> dict[str, Any]:
+    payload = asdict(result)
+
+    payload["backup_file"] = str(result.backup_file) if result.backup_file else None
+    payload["started_at"] = result.started_at.isoformat(timespec="seconds")
+    payload["finished_at"] = result.finished_at.isoformat(timespec="seconds")
+
+    return payload
+
+
+def backup_file_info_to_dict(info: BackupFileInfo) -> dict[str, Any]:
+    payload = asdict(info)
+
+    payload["file_path"] = str(info.file_path)
+    payload["created_at"] = info.created_at.isoformat(timespec="seconds")
+    payload["metadata_file"] = str(info.metadata_file) if info.metadata_file else None
+
+    return payload
+
+
+__all__ = [
+    "BackupResult",
+    "BackupFileInfo",
+    "BackupValidationResult",
+    "BackupServiceError",
+    "create_database_backup",
+    "list_database_backups",
+    "validate_backup_file",
+    "calculate_file_sha256",
+    "format_backup_size",
+    "backup_result_to_dict",
+    "backup_file_info_to_dict",
+]
