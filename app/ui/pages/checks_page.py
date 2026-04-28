@@ -37,6 +37,7 @@ from app.services.received_check_discount_batch_service import (
     ReceivedCheckDiscountBatchServiceError,
     create_received_check_discount_batch,
 )
+from app.services.permission_service import Permission
 
 try:
     from app.services.check_service import endorse_received_check
@@ -70,6 +71,12 @@ try:
 except ImportError:
     ReceivedCheckEndorseDialog = None
 
+from app.ui.permission_ui import (
+    apply_any_permission_to_button,
+    apply_permission_to_button,
+    user_has_any_permission,
+    user_has_permission,
+)
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
@@ -164,6 +171,48 @@ class ChecksPage(QWidget):
     def _reload_page_data(self) -> None:
         self.data = load_checks_page_data()
         self._render_page()
+
+    def _has_permission(self, permission: Permission) -> bool:
+        return user_has_permission(
+            current_user=self.current_user,
+            permission=permission,
+        )
+
+    def _has_any_permission(self, permissions: tuple[Permission, ...]) -> bool:
+        return user_has_any_permission(
+            current_user=self.current_user,
+            permissions=permissions,
+        )
+
+    def _ensure_permission(
+        self,
+        permission: Permission,
+        message: str,
+    ) -> bool:
+        if self._has_permission(permission):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            message,
+        )
+        return False
+
+    def _ensure_any_permission(
+        self,
+        permissions: tuple[Permission, ...],
+        message: str,
+    ) -> bool:
+        if self._has_any_permission(permissions):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            message,
+        )
+        return False
 
     def _build_error_card(self) -> QWidget:
         card = QFrame()
@@ -562,7 +611,8 @@ class ChecksPage(QWidget):
 
         body = QLabel(
             f"Aktif rol: {self.current_role or '-'}\n"
-            "Butonlar role göre açılır veya pasif kalır. Yetkisiz denemeler servis tarafında da engellenir."
+            "Butonlar role_permissions tablosundaki gerçek yetkilere göre açılır veya pasif kalır. "
+            "Yetkisiz denemeler servis tarafında da engellenir."
         )
         body.setObjectName("MutedText")
         body.setWordWrap(True)
@@ -1331,10 +1381,25 @@ class ChecksPage(QWidget):
         dialog.exec()
 
     def _open_checks_report_dialog(self) -> None:
+        if not self._ensure_any_permission(
+            (
+                Permission.REPORT_VIEW_ALL,
+                Permission.REPORT_VIEW_LIMITED,
+            ),
+            "Çek rapor özetini açmak için rapor görüntüleme yetkisi gerekir.",
+        ):
+            return
+
         dialog = ChecksReportDialog(parent=self)
         dialog.exec()
-    
+
     def _open_discount_batches_dialog(self) -> None:
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_DISCOUNT,
+            "İskonto paketlerini görüntülemek için RECEIVED_CHECK_DISCOUNT yetkisi gerekir.",
+        ):
+            return
+
         dialog = ReceivedCheckDiscountBatchesDialog(parent=self)
         dialog.exec()
 
@@ -1390,6 +1455,9 @@ class ChecksPage(QWidget):
             candidate_method_names: list[str],
             *,
             button_type: str = "normal",
+            required_permission: Permission | None = None,
+            required_permissions: tuple[Permission, ...] | None = None,
+            denied_tooltip: str = "Bu işlem için mevcut rolün yetkili değil.",
         ) -> QPushButton:
             button = QPushButton(button_text)
             button.setMinimumHeight(36)
@@ -1471,6 +1539,21 @@ class ChecksPage(QWidget):
                     """
                 )
 
+            if required_permissions is not None:
+                apply_any_permission_to_button(
+                    button,
+                    current_user=self.current_user,
+                    permissions=required_permissions,
+                    tooltip_when_denied=denied_tooltip,
+                )
+            elif required_permission is not None:
+                apply_permission_to_button(
+                    button,
+                    current_user=self.current_user,
+                    permission=required_permission,
+                    tooltip_when_denied=denied_tooltip,
+                )
+
             button.clicked.connect(
                 lambda checked=False, current_button_text=button_text, current_candidate_method_names=candidate_method_names: run_first_available_action(
                     current_button_text,
@@ -1535,6 +1618,8 @@ class ChecksPage(QWidget):
                         "_show_checks_report",
                     ],
                     button_type="primary",
+                    required_permissions=(Permission.REPORT_VIEW_ALL, Permission.REPORT_VIEW_LIMITED),
+                    denied_tooltip="Çek rapor özetini açmak için rapor görüntüleme yetkin yok.",
                 ),
                 build_operation_button(
                     "İskonto Paketleri",
@@ -1547,6 +1632,8 @@ class ChecksPage(QWidget):
                         "_show_discount_batches",
                     ],
                     button_type="primary",
+                    required_permission=Permission.RECEIVED_CHECK_DISCOUNT,
+                    denied_tooltip="İskonto paketlerini görüntülemek için iskonto yetkin yok.",
                 ),
             ],
         )
@@ -1564,6 +1651,8 @@ class ChecksPage(QWidget):
                         "_open_create_issued_check_dialog",
                     ],
                     button_type="risk",
+                    required_permission=Permission.ISSUED_CHECK_CREATE,
+                    denied_tooltip="Yazılan çek oluşturma yetkin yok.",
                 ),
                 build_operation_button(
                     "Yazılan Çek Ödendi",
@@ -1574,6 +1663,8 @@ class ChecksPage(QWidget):
                         "_open_pay_issued_check_dialog",
                     ],
                     button_type="risk",
+                    required_permission=Permission.ISSUED_CHECK_PAY,
+                    denied_tooltip="Yazılan çek ödeme yetkin yok.",
                 ),
                 build_operation_button(
                     "Yazılan Çek İptal Et",
@@ -1584,6 +1675,8 @@ class ChecksPage(QWidget):
                         "_open_cancel_issued_check_dialog",
                     ],
                     button_type="normal",
+                    required_permission=Permission.ISSUED_CHECK_CANCEL,
+                    denied_tooltip="Yazılan çek iptal etme yetkin yok.",
                 ),
             ],
         )
@@ -1601,6 +1694,8 @@ class ChecksPage(QWidget):
                         "_open_create_received_check_dialog",
                     ],
                     button_type="success",
+                    required_permission=Permission.RECEIVED_CHECK_CREATE,
+                    denied_tooltip="Alınan çek oluşturma yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çeki Bankaya Tahsile Ver",
@@ -1611,6 +1706,8 @@ class ChecksPage(QWidget):
                         "_open_send_received_check_to_bank_dialog",
                     ],
                     button_type="success",
+                    required_permission=Permission.RECEIVED_CHECK_SEND_TO_BANK,
+                    denied_tooltip="Alınan çeki bankaya gönderme yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çeki Kullan / Ciro Et",
@@ -1621,6 +1718,8 @@ class ChecksPage(QWidget):
                         "_open_endorse_received_check_dialog",
                     ],
                     button_type="success",
+                    required_permission=Permission.RECEIVED_CHECK_ENDORSE,
+                    denied_tooltip="Alınan çeki ciro etme yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çekleri İskontoya Ver / Kırdır",
@@ -1634,6 +1733,8 @@ class ChecksPage(QWidget):
                         "_discount_received_check",
                     ],
                     button_type="success",
+                    required_permission=Permission.RECEIVED_CHECK_DISCOUNT,
+                    denied_tooltip="Alınan çeki iskonto etme yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çek Tahsil Et",
@@ -1644,6 +1745,8 @@ class ChecksPage(QWidget):
                         "_open_collect_received_check_dialog",
                     ],
                     button_type="success",
+                    required_permission=Permission.RECEIVED_CHECK_COLLECT,
+                    denied_tooltip="Alınan çek tahsil etme yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çeki Karşılıksız İşaretle",
@@ -1654,6 +1757,8 @@ class ChecksPage(QWidget):
                         "_open_bounce_received_check_dialog",
                     ],
                     button_type="risk",
+                    required_permission=Permission.RECEIVED_CHECK_CANCEL,
+                    denied_tooltip="Alınan çeki problemli/karşılıksız işaretleme yetkin yok.",
                 ),
                 build_operation_button(
                     "Alınan Çeki İade İşaretle",
@@ -1664,6 +1769,8 @@ class ChecksPage(QWidget):
                         "_open_return_received_check_dialog",
                     ],
                     button_type="normal",
+                    required_permission=Permission.RECEIVED_CHECK_CANCEL,
+                    denied_tooltip="Alınan çeki iade işaretleme yetkin yok.",
                 ),
             ],
         )
@@ -1677,12 +1784,10 @@ class ChecksPage(QWidget):
         return card
 
     def _open_create_issued_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE", "DATA_ENTRY"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN, FINANCE veya DATA_ENTRY yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.ISSUED_CHECK_CREATE,
+            "Yazılan çek oluşturmak için ISSUED_CHECK_CREATE yetkisi gerekir.",
+        ):
             return
 
         dialog = IssuedCheckCreateDialog(parent=self)
@@ -1741,12 +1846,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_pay_issued_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.ISSUED_CHECK_PAY,
+            "Yazılan çek ödemek için ISSUED_CHECK_PAY yetkisi gerekir.",
+        ):
             return
 
         dialog = IssuedCheckPayDialog(parent=self)
@@ -1799,12 +1902,10 @@ class ChecksPage(QWidget):
                 f"Yazılan çek ödenirken beklenmeyen bir hata oluştu:\n{exc}",
             )
     def _open_cancel_issued_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.ISSUED_CHECK_CANCEL,
+            "Yazılan çek iptal etmek için ISSUED_CHECK_CANCEL yetkisi gerekir.",
+        ):
             return
 
         dialog = IssuedCheckCancelDialog(parent=self)
@@ -1856,12 +1957,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_create_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE", "DATA_ENTRY"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN, FINANCE veya DATA_ENTRY yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_CREATE,
+            "Alınan çek oluşturmak için RECEIVED_CHECK_CREATE yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckCreateDialog(parent=self)
@@ -1923,12 +2022,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_send_received_check_to_bank_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_SEND_TO_BANK,
+            "Alınan çeki bankaya göndermek için RECEIVED_CHECK_SEND_TO_BANK yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckSendToBankDialog(parent=self)
@@ -1983,12 +2080,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_endorse_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_ENDORSE,
+            "Alınan çeki ciro etmek için RECEIVED_CHECK_ENDORSE yetkisi gerekir.",
+        ):
             return
 
         if ReceivedCheckEndorseDialog is None or endorse_received_check is None:
@@ -2053,12 +2148,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_discount_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_DISCOUNT,
+            "Alınan çeki iskonto etmek için RECEIVED_CHECK_DISCOUNT yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckDiscountBatchDialog(parent=self)
@@ -2126,12 +2219,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_collect_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_COLLECT,
+            "Alınan çek tahsil etmek için RECEIVED_CHECK_COLLECT yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckCollectDialog(parent=self)
@@ -2186,12 +2277,10 @@ class ChecksPage(QWidget):
             )
 
     def _open_bounce_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_CANCEL,
+            "Alınan çeki karşılıksız işaretlemek için RECEIVED_CHECK_CANCEL yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckBounceDialog(parent=self)
@@ -2245,12 +2334,10 @@ class ChecksPage(QWidget):
             )
     
     def _open_return_received_check_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.RECEIVED_CHECK_CANCEL,
+            "Alınan çeki iade işaretlemek için RECEIVED_CHECK_CANCEL yetkisi gerekir.",
+        ):
             return
 
         dialog = ReceivedCheckReturnDialog(parent=self)

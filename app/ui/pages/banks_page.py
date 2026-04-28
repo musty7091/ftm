@@ -37,12 +37,6 @@ from app.services.bank_transfer_service import (
     create_bank_transfer,
 )
 from app.services.permission_service import Permission
-from app.ui.permission_ui import (
-    apply_any_permission_to_button,
-    apply_permission_to_button,
-    user_has_any_permission,
-    user_has_permission,
-)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
 from app.ui.pages.banks.bank_account_deactivate_dialog import BankAccountDeactivateDialog
@@ -56,6 +50,12 @@ from app.ui.pages.banks.bank_transfer_dialog import BankTransferDialog
 from app.ui.pages.banks.banks_data import (
     _format_currency_amount,
     load_banks_page_data,
+)
+from app.ui.permission_ui import (
+    apply_any_permission_to_button,
+    apply_permission_to_button,
+    user_has_any_permission,
+    user_has_permission,
 )
 from app.ui.ui_helpers import clear_layout, tr_number
 
@@ -550,8 +550,8 @@ class BanksPage(QWidget):
         if self.current_role == "FINANCE":
             return InfoCard(
                 "Finans Operasyon Modu",
-                "Bu kullanıcı banka hareketi ve transfer operasyonları yapabilir. "
-                "Ancak banka tanımı veya hesap düzenleme işlemleri ADMIN yetkisindedir.",
+                "Bu kullanıcı sadece kendisine verilen banka işlem yetkilerini kullanabilir. "
+                "Banka tanımı veya hesap düzenleme işlemleri ayrıca yetkilendirilir.",
                 "Operasyon ayrı, sistem tanımı ayrı tutulur.",
             )
 
@@ -759,6 +759,12 @@ class BanksPage(QWidget):
         try:
             with session_scope() as session:
                 if operation_type == "BANK_TRANSACTION":
+                    if not self._ensure_permission(
+                        Permission.BANK_TRANSACTION_CANCEL,
+                        "Banka hareketi iptal etmek için BANK_TRANSACTION_CANCEL yetkisi gerekir.",
+                    ):
+                        return
+
                     cancelled_transaction = cancel_bank_transaction(
                         session,
                         bank_transaction_id=entity_id,
@@ -774,6 +780,12 @@ class BanksPage(QWidget):
                     )
 
                 elif operation_type == "BANK_TRANSFER":
+                    if not self._ensure_permission(
+                        Permission.BANK_TRANSFER_CANCEL,
+                        "Banka transferi iptal etmek için BANK_TRANSFER_CANCEL yetkisi gerekir.",
+                    ):
+                        return
+
                     cancelled_transfer = cancel_bank_transfer(
                         session,
                         transfer_id=entity_id,
@@ -961,6 +973,12 @@ class BanksPage(QWidget):
         try:
             with session_scope() as session:
                 if edit_type == "BANK":
+                    if not self._ensure_permission(
+                        Permission.BANK_UPDATE,
+                        "Banka düzenlemek için BANK_UPDATE yetkisi gerekir.",
+                    ):
+                        return
+
                     bank = update_bank(
                         session,
                         bank_id=data["bank_id"],
@@ -979,6 +997,12 @@ class BanksPage(QWidget):
                     )
 
                 elif edit_type == "BANK_ACCOUNT":
+                    if not self._ensure_permission(
+                        Permission.BANK_ACCOUNT_UPDATE,
+                        "Banka hesabı düzenlemek için BANK_ACCOUNT_UPDATE yetkisi gerekir.",
+                    ):
+                        return
+
                     bank_account = update_bank_account(
                         session,
                         bank_account_id=data["bank_account_id"],
@@ -1029,7 +1053,13 @@ class BanksPage(QWidget):
             )
 
     def _open_deactivate_bank_account_dialog(self) -> None:
-        if not self._ensure_admin_role():
+        if not self._ensure_any_permission(
+            (
+                Permission.BANK_ACCOUNT_DEACTIVATE,
+                Permission.BANK_ACCOUNT_REACTIVATE,
+            ),
+            "Banka hesabı pasifleştirme veya aktifleştirme için ilgili yetki gerekir.",
+        ):
             return
 
         dialog = BankAccountDeactivateDialog(parent=self)
@@ -1046,6 +1076,12 @@ class BanksPage(QWidget):
         try:
             with session_scope() as session:
                 if operation_type == "DEACTIVATE":
+                    if not self._ensure_permission(
+                        Permission.BANK_ACCOUNT_DEACTIVATE,
+                        "Banka hesabı pasifleştirmek için BANK_ACCOUNT_DEACTIVATE yetkisi gerekir.",
+                    ):
+                        return
+
                     bank_account = deactivate_bank_account(
                         session,
                         bank_account_id=bank_account_id,
@@ -1061,6 +1097,12 @@ class BanksPage(QWidget):
                     )
 
                 elif operation_type == "REACTIVATE":
+                    if not self._ensure_permission(
+                        Permission.BANK_ACCOUNT_REACTIVATE,
+                        "Banka hesabı aktifleştirmek için BANK_ACCOUNT_REACTIVATE yetkisi gerekir.",
+                    ):
+                        return
+
                     bank_account = reactivate_bank_account(
                         session,
                         bank_account_id=bank_account_id,
