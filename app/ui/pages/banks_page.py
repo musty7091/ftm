@@ -36,6 +36,13 @@ from app.services.bank_transfer_service import (
     cancel_bank_transfer,
     create_bank_transfer,
 )
+from app.services.permission_service import Permission
+from app.ui.permission_ui import (
+    apply_any_permission_to_button,
+    apply_permission_to_button,
+    user_has_any_permission,
+    user_has_permission,
+)
 from app.ui.components.info_card import InfoCard
 from app.ui.components.summary_card import SummaryCard
 from app.ui.pages.banks.bank_account_deactivate_dialog import BankAccountDeactivateDialog
@@ -337,13 +344,67 @@ class BanksPage(QWidget):
     def _format_money(self, value: Any, currency_code: str) -> str:
         return _format_currency_amount(value, currency_code)
 
+    def _has_permission(self, permission: Permission) -> bool:
+        return user_has_permission(
+            current_user=self.current_user,
+            permission=permission,
+        )
+
+    def _has_any_permission(self, permissions: tuple[Permission, ...]) -> bool:
+        return user_has_any_permission(
+            current_user=self.current_user,
+            permissions=permissions,
+        )
+
+    def _has_bank_definition_management_access(self) -> bool:
+        return self._has_any_permission(
+            (
+                Permission.BANK_CREATE,
+                Permission.BANK_UPDATE,
+                Permission.BANK_ACCOUNT_CREATE,
+                Permission.BANK_ACCOUNT_UPDATE,
+                Permission.BANK_ACCOUNT_DEACTIVATE,
+                Permission.BANK_ACCOUNT_REACTIVATE,
+            )
+        )
+
+    def _ensure_permission(
+        self,
+        permission: Permission,
+        message: str,
+    ) -> bool:
+        if self._has_permission(permission):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            message,
+        )
+        return False
+
+    def _ensure_any_permission(
+        self,
+        permissions: tuple[Permission, ...],
+        message: str,
+    ) -> bool:
+        if self._has_any_permission(permissions):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            message,
+        )
+        return False
+
     def _build_action_area(self) -> QGridLayout:
         grid = QGridLayout()
         grid.setSpacing(16)
 
         grid.addWidget(self._build_operation_card(), 0, 0)
 
-        if self.current_role == "ADMIN":
+        if self._has_bank_definition_management_access():
             grid.addWidget(self._build_admin_management_card(), 0, 1)
         else:
             grid.addWidget(self._build_limited_access_card(), 0, 1)
@@ -363,22 +424,40 @@ class BanksPage(QWidget):
 
         description = QLabel(
             "Banka hareketi, banka transferi ve iptal işlemleri bu alandan yapılır. "
-            "Tüm işlemler servis katmanındaki yetki ve audit kontrollerinden geçer."
+            "Butonlar rol adına göre değil, role_permissions tablosundaki gerçek yetkilere göre açılır."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
 
         add_transaction_button = QPushButton("Banka Hareketi Oluştur")
-        add_transaction_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         add_transaction_button.clicked.connect(self._open_create_bank_transaction_dialog)
+        apply_permission_to_button(
+            add_transaction_button,
+            current_user=self.current_user,
+            permission=Permission.BANK_TRANSACTION_CREATE,
+            tooltip_when_denied="Banka hareketi oluşturma yetkin yok.",
+        )
 
         transfer_button = QPushButton("Banka Transferi Oluştur")
-        transfer_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         transfer_button.clicked.connect(self._open_create_bank_transfer_dialog)
+        apply_permission_to_button(
+            transfer_button,
+            current_user=self.current_user,
+            permission=Permission.BANK_TRANSFER_CREATE,
+            tooltip_when_denied="Banka transferi oluşturma yetkin yok.",
+        )
 
         cancel_button = QPushButton("İptal İşlemleri")
-        cancel_button.setEnabled(self.current_role in {"ADMIN", "FINANCE"})
         cancel_button.clicked.connect(self._open_cancel_bank_operation_dialog)
+        apply_any_permission_to_button(
+            cancel_button,
+            current_user=self.current_user,
+            permissions=(
+                Permission.BANK_TRANSACTION_CANCEL,
+                Permission.BANK_TRANSFER_CANCEL,
+            ),
+            tooltip_when_denied="Banka hareketi veya banka transferi iptal etme yetkin yok.",
+        )
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -401,23 +480,53 @@ class BanksPage(QWidget):
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Bu alan sadece ADMIN rolünde görünür. Banka ve banka hesabı tanımları "
-            "sistemin temel ayarları olduğu için sınırlı erişimle korunur."
+            "Banka ve banka hesabı tanımları bu alandan yönetilir. "
+            "Butonlar artık sadece ADMIN rolüne değil, gerçek yetki tablosuna göre açılır."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
 
         add_bank_button = QPushButton("Banka Ekle")
         add_bank_button.clicked.connect(self._open_create_bank_dialog)
+        apply_permission_to_button(
+            add_bank_button,
+            current_user=self.current_user,
+            permission=Permission.BANK_CREATE,
+            tooltip_when_denied="Banka ekleme yetkin yok.",
+        )
 
         add_account_button = QPushButton("Banka Hesabı Ekle")
         add_account_button.clicked.connect(self._open_create_bank_account_dialog)
+        apply_permission_to_button(
+            add_account_button,
+            current_user=self.current_user,
+            permission=Permission.BANK_ACCOUNT_CREATE,
+            tooltip_when_denied="Banka hesabı ekleme yetkin yok.",
+        )
 
         edit_bank_button = QPushButton("Banka / Hesap Düzenle")
         edit_bank_button.clicked.connect(self._open_manage_bank_dialog)
+        apply_any_permission_to_button(
+            edit_bank_button,
+            current_user=self.current_user,
+            permissions=(
+                Permission.BANK_UPDATE,
+                Permission.BANK_ACCOUNT_UPDATE,
+            ),
+            tooltip_when_denied="Banka veya banka hesabı düzenleme yetkin yok.",
+        )
 
         deactivate_account_button = QPushButton("Hesap Pasifleştir / Aktifleştir")
         deactivate_account_button.clicked.connect(self._open_deactivate_bank_account_dialog)
+        apply_any_permission_to_button(
+            deactivate_account_button,
+            current_user=self.current_user,
+            permissions=(
+                Permission.BANK_ACCOUNT_DEACTIVATE,
+                Permission.BANK_ACCOUNT_REACTIVATE,
+            ),
+            tooltip_when_denied="Banka hesabı pasifleştirme veya aktifleştirme yetkin yok.",
+        )
 
         layout.addWidget(title)
         layout.addWidget(description)
@@ -464,12 +573,10 @@ class BanksPage(QWidget):
         return True
 
     def _open_create_bank_transaction_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.BANK_TRANSACTION_CREATE,
+            "Banka hareketi oluşturmak için BANK_TRANSACTION_CREATE yetkisi gerekir.",
+        ):
             return
 
         active_bank_accounts = [
@@ -539,12 +646,10 @@ class BanksPage(QWidget):
             )
 
     def _open_create_bank_transfer_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_permission(
+            Permission.BANK_TRANSFER_CREATE,
+            "Banka transferi oluşturmak için BANK_TRANSFER_CREATE yetkisi gerekir.",
+        ):
             return
 
         active_bank_accounts = [
@@ -631,12 +736,13 @@ class BanksPage(QWidget):
             )
 
     def _open_cancel_bank_operation_dialog(self) -> None:
-        if self.current_role not in {"ADMIN", "FINANCE"}:
-            QMessageBox.warning(
-                self,
-                "Yetkisiz işlem",
-                "Bu işlem için ADMIN veya FINANCE yetkisi gerekir.",
-            )
+        if not self._ensure_any_permission(
+            (
+                Permission.BANK_TRANSACTION_CANCEL,
+                Permission.BANK_TRANSFER_CANCEL,
+            ),
+            "İptal işlemleri için BANK_TRANSACTION_CANCEL veya BANK_TRANSFER_CANCEL yetkisi gerekir.",
+        ):
             return
 
         dialog = BankCancelDialog(parent=self)
@@ -713,7 +819,10 @@ class BanksPage(QWidget):
             )
 
     def _open_create_bank_dialog(self) -> None:
-        if not self._ensure_admin_role():
+        if not self._ensure_permission(
+            Permission.BANK_CREATE,
+            "Banka oluşturmak için BANK_CREATE yetkisi gerekir.",
+        ):
             return
 
         dialog = BankDefinitionDialog(
@@ -761,7 +870,10 @@ class BanksPage(QWidget):
             )
 
     def _open_create_bank_account_dialog(self) -> None:
-        if not self._ensure_admin_role():
+        if not self._ensure_permission(
+            Permission.BANK_ACCOUNT_CREATE,
+            "Banka hesabı oluşturmak için BANK_ACCOUNT_CREATE yetkisi gerekir.",
+        ):
             return
 
         active_banks = load_admin_banks(include_passive=False)
@@ -828,7 +940,13 @@ class BanksPage(QWidget):
             )
 
     def _open_manage_bank_dialog(self) -> None:
-        if not self._ensure_admin_role():
+        if not self._ensure_any_permission(
+            (
+                Permission.BANK_UPDATE,
+                Permission.BANK_ACCOUNT_UPDATE,
+            ),
+            "Banka veya banka hesabı düzenlemek için BANK_UPDATE veya BANK_ACCOUNT_UPDATE yetkisi gerekir.",
+        ):
             return
 
         dialog = BankManageDialog(parent=self)

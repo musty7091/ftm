@@ -6,7 +6,7 @@ from app.services.permission_service import (
     Permission,
     PermissionServiceError,
     normalize_permission,
-    require_permission,
+    require_permission_from_db,
 )
 
 
@@ -104,11 +104,20 @@ def require_permission_with_audit(
 ) -> int:
     normalized_permission = normalize_permission(permission)
 
+    user_id = _user_id_value(acting_user)
+
+    if user_id is None:
+        raise PermissionServiceError("İşlem yapan kullanıcı bilgisi geçerli değil.")
+
     try:
-        require_permission(
-            getattr(acting_user, "role", None),
-            normalized_permission,
-        )
+        with session_scope() as session:
+            require_permission_from_db(
+                session,
+                getattr(acting_user, "role", None),
+                normalized_permission,
+                fallback_to_code_defaults=True,
+            )
+
     except PermissionServiceError as exc:
         log_permission_denied(
             acting_user=acting_user,
@@ -121,9 +130,10 @@ def require_permission_with_audit(
 
         raise PermissionServiceError(str(exc)) from exc
 
-    user_id = _user_id_value(acting_user)
-
-    if user_id is None:
-        raise PermissionServiceError("İşlem yapan kullanıcı bilgisi geçerli değil.")
-
     return user_id
+
+
+__all__ = [
+    "log_permission_denied",
+    "require_permission_with_audit",
+]
