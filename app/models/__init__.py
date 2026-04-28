@@ -25,6 +25,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.pos import PosDevice, PosSettlement
+from app.models.role_permission import RolePermission
 from app.models.user import User
 
 
@@ -42,6 +43,7 @@ __all__ = [
     "ReceivedCheckMovement",
     "PosDevice",
     "PosSettlement",
+    "RolePermission",
     "BankAccountType",
     "BankTransactionStatus",
     "BankTransferStatus",

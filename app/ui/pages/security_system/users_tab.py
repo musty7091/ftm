@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from app.db.session import session_scope
 from app.models.enums import UserRole
 from app.models.user import User
+from app.services.audit_service import write_audit_log
 from app.services.auth_service import hash_password
 
 
@@ -269,9 +270,35 @@ QTableCornerButton::section {
 """
 
 
+def _role_text(role: Any) -> str:
+    if hasattr(role, "value"):
+        return str(role.value)
+
+    return str(role or "-").strip().upper() or "-"
+
+
+def _user_audit_values(user: User) -> dict[str, Any]:
+    return {
+        "id": int(user.id),
+        "username": str(user.username or ""),
+        "full_name": str(user.full_name or ""),
+        "email": user.email,
+        "role": _role_text(user.role),
+        "is_active": bool(user.is_active),
+        "must_change_password": bool(user.must_change_password),
+    }
+
+
 class NewUserDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        actor_user_id: int | None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+
+        self.actor_user_id = actor_user_id
 
         self.setWindowTitle("Yeni Kullanıcı Ekle")
         self.setModal(True)
@@ -513,6 +540,17 @@ class NewUserDialog(QDialog):
             session.add(user)
             session.flush()
 
+            write_audit_log(
+                session,
+                user_id=self.actor_user_id,
+                action="USER_CREATED",
+                entity_type="User",
+                entity_id=user.id,
+                description=f"Kullanıcı oluşturuldu: {user.username}",
+                old_values=None,
+                new_values=_user_audit_values(user),
+            )
+
 
 class EditUserDialog(QDialog):
     def __init__(
@@ -566,7 +604,7 @@ class EditUserDialog(QDialog):
             self.email_input.setText(str(user.email or ""))
             self.must_change_password_checkbox.setChecked(bool(user.must_change_password))
 
-            role_text = self._role_text(user.role)
+            role_text = _role_text(user.role)
             role_index = self.role_combo.findData(role_text)
 
             if role_index >= 0:
@@ -722,7 +760,8 @@ class EditUserDialog(QDialog):
             if user is None:
                 raise ValueError("Kullanıcı kaydı bulunamadı.")
 
-            old_role_text = self._role_text(user.role)
+            old_values = _user_audit_values(user)
+            old_role_text = _role_text(user.role)
 
             if normalized_email:
                 email_exists_statement = select(User).where(
@@ -746,6 +785,17 @@ class EditUserDialog(QDialog):
             user.must_change_password = must_change_password
 
             session.flush()
+
+            write_audit_log(
+                session,
+                user_id=self.current_user_id,
+                action="USER_UPDATED",
+                entity_type="User",
+                entity_id=user.id,
+                description=f"Kullanıcı bilgileri güncellendi: {user.username}",
+                old_values=old_values,
+                new_values=_user_audit_values(user),
+            )
 
     def _validate_admin_role_can_change(
         self,
@@ -771,12 +821,6 @@ class EditUserDialog(QDialog):
         if int(active_admin_count or 0) <= 1:
             raise ValueError("Son aktif ADMIN kullanıcısının rolü değiştirilemez.")
 
-    def _role_text(self, role: Any) -> str:
-        if hasattr(role, "value"):
-            return str(role.value)
-
-        return str(role or "-").strip().upper() or "-"
-
 
 class ResetPasswordDialog(QDialog):
     def __init__(
@@ -784,12 +828,14 @@ class ResetPasswordDialog(QDialog):
         *,
         user_id: int,
         username: str,
+        actor_user_id: int | None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.user_id = user_id
         self.username = username
+        self.actor_user_id = actor_user_id
 
         self.setWindowTitle("Şifre Sıfırla")
         self.setModal(True)
@@ -905,10 +951,31 @@ class ResetPasswordDialog(QDialog):
                 if user is None:
                     raise ValueError("Kullanıcı kaydı bulunamadı.")
 
+                old_values = {
+                    "id": int(user.id),
+                    "username": str(user.username or ""),
+                    "must_change_password": bool(user.must_change_password),
+                }
+
                 user.password_hash = hash_password(password)
                 user.must_change_password = self.must_change_password_checkbox.isChecked()
 
                 session.flush()
+
+                write_audit_log(
+                    session,
+                    user_id=self.actor_user_id,
+                    action="USER_PASSWORD_RESET",
+                    entity_type="User",
+                    entity_id=user.id,
+                    description=f"Kullanıcı şifresi sıfırlandı: {user.username}",
+                    old_values=old_values,
+                    new_values={
+                        "id": int(user.id),
+                        "username": str(user.username or ""),
+                        "must_change_password": bool(user.must_change_password),
+                    },
+                )
 
             QMessageBox.information(
                 self,
@@ -1031,7 +1098,7 @@ class UsersTab(QWidget):
 
         subtitle = QLabel(
             "Bu ekranda sistem kullanıcıları gerçek veritabanından okunur. "
-            "Yeni kullanıcı ekleme, bilgileri düzenleme, aktif/pasif yönetimi ve şifre sıfırlama işlemleri aktiftir."
+            "Kullanıcı yönetimi işlemleri audit log ile kayıt altına alınır."
         )
         subtitle.setObjectName("UsersTabSubtitle")
         subtitle.setWordWrap(True)
@@ -1085,7 +1152,10 @@ class UsersTab(QWidget):
         return toolbar
 
     def open_new_user_dialog(self) -> None:
-        dialog = NewUserDialog(self)
+        dialog = NewUserDialog(
+            actor_user_id=self._current_user_id(),
+            parent=self,
+        )
 
         if dialog.exec() != QDialog.Accepted:
             return
@@ -1141,6 +1211,7 @@ class UsersTab(QWidget):
         dialog = ResetPasswordDialog(
             user_id=user_id,
             username=username,
+            actor_user_id=self._current_user_id(),
             parent=self,
         )
 
@@ -1184,7 +1255,7 @@ class UsersTab(QWidget):
                 user.username,
                 user.full_name,
                 user.email or "-",
-                self._role_text(user.role),
+                _role_text(user.role),
                 "Evet" if user.is_active else "Hayır",
                 "Evet" if user.must_change_password else "Hayır",
                 self._format_datetime(user.last_login_at),
@@ -1318,6 +1389,8 @@ class UsersTab(QWidget):
                     durum = "aktif" if target_is_active else "pasif"
                     raise ValueError(f"Bu kullanıcı zaten {durum} durumda.")
 
+                old_values = _user_audit_values(user)
+
                 if not target_is_active:
                     self._validate_user_can_be_deactivated(
                         session=session,
@@ -1326,6 +1399,21 @@ class UsersTab(QWidget):
 
                 user.is_active = target_is_active
                 session.flush()
+
+                write_audit_log(
+                    session,
+                    user_id=self._current_user_id(),
+                    action="USER_ACTIVATED" if target_is_active else "USER_DEACTIVATED",
+                    entity_type="User",
+                    entity_id=user.id,
+                    description=(
+                        f"Kullanıcı aktif yapıldı: {user.username}"
+                        if target_is_active
+                        else f"Kullanıcı pasif yapıldı: {user.username}"
+                    ),
+                    old_values=old_values,
+                    new_values=_user_audit_values(user),
+                )
 
             QMessageBox.information(
                 self,
@@ -1356,7 +1444,7 @@ class UsersTab(QWidget):
         if current_username and str(user.username).lower() == current_username.lower():
             raise ValueError("Kendi kullanıcını pasif yapamazsın.")
 
-        if self._role_text(user.role) != UserRole.ADMIN.value:
+        if _role_text(user.role) != UserRole.ADMIN.value:
             return
 
         active_admin_count_statement = select(func.count(User.id)).where(
@@ -1421,12 +1509,6 @@ class UsersTab(QWidget):
             return None
 
         return str(username).strip()
-
-    def _role_text(self, role: Any) -> str:
-        if hasattr(role, "value"):
-            return str(role.value)
-
-        return str(role or "-").strip().upper() or "-"
 
     def _format_datetime(self, value: Any) -> str:
         if value is None:

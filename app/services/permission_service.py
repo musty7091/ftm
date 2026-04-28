@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 from enum import StrEnum
 from typing import Iterable
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.models.enums import UserRole
+from app.models.role_permission import RolePermission
 
 
 class PermissionServiceError(ValueError):
@@ -210,3 +216,171 @@ def get_all_role_permission_matrix() -> dict[str, list[str]]:
         matrix[role.value] = get_role_permission_names(role)
 
     return matrix
+
+
+def get_permissions_for_role_from_db(
+    session: Session,
+    role: UserRole | str,
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> frozenset[Permission]:
+    normalized_role = normalize_role(role)
+
+    statement = select(RolePermission).where(
+        RolePermission.role == normalized_role,
+    )
+
+    rows = session.execute(statement).scalars().all()
+
+    if not rows:
+        if fallback_to_code_defaults:
+            return get_permissions_for_role(normalized_role)
+
+        return frozenset()
+
+    allowed_permissions: set[Permission] = set()
+
+    for row in rows:
+        if not bool(row.is_allowed):
+            continue
+
+        try:
+            allowed_permissions.add(normalize_permission(row.permission))
+        except PermissionServiceError:
+            continue
+
+    return frozenset(allowed_permissions)
+
+
+def has_permission_from_db(
+    session: Session,
+    role: UserRole | str,
+    permission: Permission | str,
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> bool:
+    normalized_permission = normalize_permission(permission)
+
+    role_permissions = get_permissions_for_role_from_db(
+        session,
+        role,
+        fallback_to_code_defaults=fallback_to_code_defaults,
+    )
+
+    return normalized_permission in role_permissions
+
+
+def has_any_permission_from_db(
+    session: Session,
+    role: UserRole | str,
+    permissions: Iterable[Permission | str],
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> bool:
+    return any(
+        has_permission_from_db(
+            session,
+            role,
+            permission,
+            fallback_to_code_defaults=fallback_to_code_defaults,
+        )
+        for permission in permissions
+    )
+
+
+def has_all_permissions_from_db(
+    session: Session,
+    role: UserRole | str,
+    permissions: Iterable[Permission | str],
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> bool:
+    return all(
+        has_permission_from_db(
+            session,
+            role,
+            permission,
+            fallback_to_code_defaults=fallback_to_code_defaults,
+        )
+        for permission in permissions
+    )
+
+
+def require_permission_from_db(
+    session: Session,
+    role: UserRole | str,
+    permission: Permission | str,
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> None:
+    normalized_role = normalize_role(role)
+    normalized_permission = normalize_permission(permission)
+
+    if not has_permission_from_db(
+        session,
+        normalized_role,
+        normalized_permission,
+        fallback_to_code_defaults=fallback_to_code_defaults,
+    ):
+        raise PermissionServiceError(
+            f"Bu işlem için yetkiniz yok. Rol: {normalized_role.value}, Yetki: {normalized_permission.value}"
+        )
+
+
+def get_role_permission_names_from_db(
+    session: Session,
+    role: UserRole | str,
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> list[str]:
+    permissions = get_permissions_for_role_from_db(
+        session,
+        role,
+        fallback_to_code_defaults=fallback_to_code_defaults,
+    )
+
+    return sorted(permission.value for permission in permissions)
+
+
+def get_all_role_permission_matrix_from_db(
+    session: Session,
+    *,
+    fallback_to_code_defaults: bool = True,
+) -> dict[str, list[str]]:
+    matrix: dict[str, list[str]] = {}
+
+    for role in UserRole:
+        matrix[role.value] = get_role_permission_names_from_db(
+            session,
+            role,
+            fallback_to_code_defaults=fallback_to_code_defaults,
+        )
+
+    return matrix
+
+
+__all__ = [
+    "PermissionServiceError",
+    "Permission",
+    "ADMIN_PERMISSIONS",
+    "FINANCE_PERMISSIONS",
+    "DATA_ENTRY_PERMISSIONS",
+    "VIEWER_PERMISSIONS",
+    "ROLE_PERMISSION_MAP",
+    "normalize_role",
+    "normalize_permission",
+    "get_permissions_for_role",
+    "has_permission",
+    "has_any_permission",
+    "has_all_permissions",
+    "require_permission",
+    "get_role_permission_names",
+    "get_all_role_permission_matrix",
+    "get_permissions_for_role_from_db",
+    "has_permission_from_db",
+    "has_any_permission_from_db",
+    "has_all_permissions_from_db",
+    "require_permission_from_db",
+    "get_role_permission_names_from_db",
+    "get_all_role_permission_matrix_from_db",
+]

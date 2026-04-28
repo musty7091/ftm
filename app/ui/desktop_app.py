@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.db.session import session_scope
+from app.models.enums import UserRole
+from app.services.permission_service import Permission, has_any_permission_from_db
 from app.ui.components.status_badge import create_health_badge, create_user_badge
 from app.ui.dashboard_data import load_dashboard_data
 from app.ui.navigation import (
     ALL_NAV_ITEMS,
-    count_hidden_pages_for_role,
     get_allowed_pages_for_role,
     role_to_text,
     username_to_text,
@@ -50,6 +52,42 @@ PAGE_SUBTITLES = {
 }
 
 
+PAGE_PERMISSION_MAP: dict[str, tuple[Permission, ...]] = {
+    "Bankalar": (
+        Permission.BANK_TRANSACTION_VIEW,
+        Permission.BANK_TRANSFER_VIEW,
+        Permission.BANK_CREATE,
+        Permission.BANK_ACCOUNT_CREATE,
+    ),
+    "POS Mutabakat": (
+        Permission.POS_SETTLEMENT_VIEW,
+        Permission.POS_SETTLEMENT_CREATE,
+        Permission.POS_SETTLEMENT_REALIZE,
+        Permission.POS_SETTLEMENT_CANCEL,
+    ),
+    "Çek Yönetimi": (
+        Permission.ISSUED_CHECK_VIEW,
+        Permission.ISSUED_CHECK_CREATE,
+        Permission.RECEIVED_CHECK_VIEW,
+        Permission.RECEIVED_CHECK_CREATE,
+    ),
+    "Vade Takvimi": (
+        Permission.ISSUED_CHECK_VIEW,
+        Permission.RECEIVED_CHECK_VIEW,
+    ),
+    "Müşteri / Tedarikçi Kartları": (
+        Permission.BUSINESS_PARTNER_VIEW,
+        Permission.BUSINESS_PARTNER_CREATE,
+    ),
+    "Raporlar": (
+        Permission.REPORT_VIEW_ALL,
+        Permission.REPORT_EXPORT_ALL,
+        Permission.REPORT_VIEW_LIMITED,
+        Permission.REPORT_EXPORT_LIMITED,
+    ),
+}
+
+
 class FtmDesktopWindow(QMainWindow):
     def __init__(self, current_user: Optional[Any] = None) -> None:
         super().__init__()
@@ -65,7 +103,7 @@ class FtmDesktopWindow(QMainWindow):
         self.resize(1450, 900)
         self.setMinimumSize(1180, 720)
 
-        self.allowed_pages = get_allowed_pages_for_role(self.current_role)
+        self.allowed_pages = self._load_allowed_pages_for_current_user()
         self.current_page = (
             "Genel Bakış"
             if "Genel Bakış" in self.allowed_pages
@@ -152,6 +190,67 @@ class FtmDesktopWindow(QMainWindow):
 
         self.render_current_page()
 
+    def _load_allowed_pages_for_current_user(self) -> list[str]:
+        if self.current_role == UserRole.ADMIN.value:
+            return list(ALL_NAV_ITEMS)
+
+        allowed_pages = ["Genel Bakış"]
+
+        try:
+            with session_scope() as session:
+                for page_title in ALL_NAV_ITEMS:
+                    if page_title == "Genel Bakış":
+                        continue
+
+                    if page_title == "Güvenlik ve Sistem":
+                        continue
+
+                    required_permissions = PAGE_PERMISSION_MAP.get(page_title)
+
+                    if not required_permissions:
+                        continue
+
+                    if has_any_permission_from_db(
+                        session,
+                        self.current_role,
+                        required_permissions,
+                        fallback_to_code_defaults=True,
+                    ):
+                        allowed_pages.append(page_title)
+
+        except Exception:
+            fallback_pages = get_allowed_pages_for_role(self.current_role)
+
+            allowed_pages = [
+                page_title
+                for page_title in fallback_pages
+                if page_title != "Güvenlik ve Sistem"
+            ]
+
+            if "Genel Bakış" not in allowed_pages:
+                allowed_pages.insert(0, "Genel Bakış")
+
+        if not allowed_pages:
+            return ["Genel Bakış"]
+
+        return [
+            page_title
+            for page_title in ALL_NAV_ITEMS
+            if page_title in allowed_pages
+        ]
+
+    def _hidden_page_count(self) -> int:
+        return len(
+            [
+                page_title
+                for page_title in ALL_NAV_ITEMS
+                if page_title not in self.allowed_pages
+            ]
+        )
+
+    def _can_access_current_page(self) -> bool:
+        return self.current_page in self.allowed_pages
+
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
@@ -208,12 +307,10 @@ class FtmDesktopWindow(QMainWindow):
 
         layout.addWidget(logout_button)
 
-        hidden_count = count_hidden_pages_for_role(self.current_role)
-
         footer = QLabel(
             f"v0.5 UI Modular\n"
             f"Rol bazlı menü aktif.\n"
-            f"Gizlenen bölüm: {hidden_count}"
+            f"Gizlenen bölüm: {self._hidden_page_count()}"
         )
         footer.setObjectName("MutedText")
         footer.setWordWrap(True)
@@ -260,6 +357,8 @@ class FtmDesktopWindow(QMainWindow):
             button.update()
 
     def set_page(self, page_title: str) -> None:
+        self.allowed_pages = self._load_allowed_pages_for_current_user()
+
         if page_title not in self.allowed_pages:
             self.current_page = "Erişim Yok"
         else:
@@ -280,6 +379,17 @@ class FtmDesktopWindow(QMainWindow):
         self.content_layout.addWidget(self._build_top_bar())
 
         if self.current_page == "Erişim Yok":
+            self.content_layout.addWidget(
+                AccessDeniedPage(
+                    username=self.current_username,
+                    role=self.current_role,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if not self._can_access_current_page():
             self.content_layout.addWidget(
                 AccessDeniedPage(
                     username=self.current_username,
@@ -429,7 +539,16 @@ class FtmDesktopWindow(QMainWindow):
         )
 
     def refresh_dashboard(self) -> None:
+        self.allowed_pages = self._load_allowed_pages_for_current_user()
         self.dashboard_data = load_dashboard_data()
+
+        if self.current_page not in self.allowed_pages:
+            self.current_page = (
+                "Genel Bakış"
+                if "Genel Bakış" in self.allowed_pages
+                else self.allowed_pages[0]
+            )
+
         self.render_current_page()
 
     def confirm_exit(self) -> None:
