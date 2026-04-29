@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -25,12 +24,16 @@ class AuditLog(Base):
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    old_values: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    new_values: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    old_values: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    new_values: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
     user: Mapped[Optional["User"]] = relationship(
         "User",
