@@ -1,0 +1,12 @@
+{
+  "created_at": "2026-04-29 09:02:42",
+  "database_engine": "sqlite",
+  "database_host": "localhost",
+  "database_name": "ftm_db",
+  "database_password": "",
+  "database_port": 5432,
+  "database_user": "ftm_user",
+  "setup_completed": true,
+  "sqlite_database_path": "data/ftm_local_4614_test.db",
+  "updated_at": "2026-04-29 09:02:42"
+}
