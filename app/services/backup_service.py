@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
+from app.core.config import settings
 from app.services.app_settings_service import (
     get_backup_folder_path,
     get_control_mail_recipients,
@@ -103,6 +105,33 @@ def _get_env_required(name: str) -> str:
     return value.strip()
 
 
+def _is_sqlite_mode() -> bool:
+    return bool(getattr(settings, "is_sqlite", False))
+
+
+def _is_postgresql_mode() -> bool:
+    return bool(getattr(settings, "is_postgresql", False))
+
+
+def _database_engine_label() -> str:
+    if _is_sqlite_mode():
+        return "sqlite"
+
+    if _is_postgresql_mode():
+        return "postgresql"
+
+    return str(getattr(settings, "database_engine", "unknown") or "unknown")
+
+
+def _sqlite_database_path() -> Path:
+    sqlite_path = settings.sqlite_database_path
+
+    if sqlite_path.is_absolute():
+        return sqlite_path
+
+    return _get_project_root() / sqlite_path
+
+
 def _get_folder_from_env(name: str, default_value: str) -> Path:
     project_root = _get_project_root()
     folder_value = os.getenv(name, default_value).strip() or default_value
@@ -177,6 +206,19 @@ def _write_backup_log(message: str) -> None:
         file.write(f"[{timestamp}] {message}\n")
 
 
+def _backup_file_patterns_for_current_engine() -> list[str]:
+    if _is_sqlite_mode():
+        return [
+            "*_backup_*.db",
+            "*_backup_*.sqlite",
+            "*_backup_*.sqlite3",
+        ]
+
+    return [
+        "*_backup_*.dump",
+    ]
+
+
 def _cleanup_old_backups(backup_folder: Path, keep_days: int) -> int:
     if keep_days <= 0:
         return 0
@@ -184,36 +226,42 @@ def _cleanup_old_backups(backup_folder: Path, keep_days: int) -> int:
     cutoff_time = datetime.now() - timedelta(days=keep_days)
     deleted_count = 0
 
-    for backup_file in backup_folder.glob("*_backup_*.dump"):
-        if not backup_file.is_file():
-            continue
+    for pattern in _backup_file_patterns_for_current_engine():
+        for backup_file in backup_folder.glob(pattern):
+            if not backup_file.is_file():
+                continue
 
-        file_modified_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
+            file_modified_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
 
-        if file_modified_time < cutoff_time:
-            metadata_file = _metadata_file_for_backup(backup_file)
+            if file_modified_time < cutoff_time:
+                metadata_file = _metadata_file_for_backup(backup_file)
 
-            backup_file.unlink()
-            deleted_count += 1
+                backup_file.unlink()
+                deleted_count += 1
 
-            if metadata_file.exists():
-                try:
-                    metadata_file.unlink()
-                except OSError:
-                    pass
+                if metadata_file.exists():
+                    try:
+                        metadata_file.unlink()
+                    except OSError:
+                        pass
 
     return deleted_count
 
 
-def _create_backup_file_path(backup_folder: Path, database_name: str) -> Path:
+def _create_backup_file_path(
+    *,
+    backup_folder: Path,
+    database_name: str,
+    suffix: str,
+) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_database_name = _safe_filename(database_name)
 
-    return backup_folder / f"{safe_database_name}_backup_{timestamp}.dump"
+    return backup_folder / f"{safe_database_name}_backup_{timestamp}{suffix}"
 
 
 def _metadata_file_for_backup(backup_file: Path) -> Path:
-    return backup_file.with_suffix(".meta.json")
+    return backup_file.with_suffix(f"{backup_file.suffix}.meta.json")
 
 
 def _safe_filename(value: str) -> str:
@@ -274,13 +322,55 @@ def _run_docker_pg_dump(
     output_path.write_bytes(result.stdout)
 
 
+def _run_sqlite_backup(
+    *,
+    source_database_path: Path,
+    output_path: Path,
+) -> None:
+    if not source_database_path.exists():
+        raise BackupServiceError(
+            f"SQLite veritabanı dosyası bulunamadı: {source_database_path}"
+        )
+
+    if not source_database_path.is_file():
+        raise BackupServiceError(
+            f"SQLite veritabanı yolu dosya değil: {source_database_path}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    source_connection: sqlite3.Connection | None = None
+    backup_connection: sqlite3.Connection | None = None
+
+    try:
+        source_connection = sqlite3.connect(str(source_database_path))
+        backup_connection = sqlite3.connect(str(output_path))
+
+        with backup_connection:
+            source_connection.backup(backup_connection)
+
+    except sqlite3.Error as exc:
+        raise BackupServiceError(f"SQLite yedekleme başarısız oldu: {exc}") from exc
+
+    finally:
+        if backup_connection is not None:
+            backup_connection.close()
+
+        if source_connection is not None:
+            source_connection.close()
+
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise BackupServiceError("SQLite yedek dosyası oluşturulamadı veya boş oluştu.")
+
+
 def _build_backup_mail_subject(*, success: bool) -> str:
     subject_prefix = os.getenv("BACKUP_MAIL_SUBJECT_PREFIX", "FTM").strip() or "FTM"
+    engine_label = "SQLite" if _is_sqlite_mode() else "PostgreSQL"
 
     if success:
-        return f"{subject_prefix} - PostgreSQL yedekleme başarılı"
+        return f"{subject_prefix} - {engine_label} yedekleme başarılı"
 
-    return f"{subject_prefix} - PostgreSQL yedekleme başarısız"
+    return f"{subject_prefix} - {engine_label} yedekleme başarısız"
 
 
 def _build_backup_success_mail_body(
@@ -292,6 +382,21 @@ def _build_backup_success_mail_body(
     finished_at: datetime,
     backup_sha256: str,
 ) -> str:
+    if _is_sqlite_mode():
+        sqlite_path = _sqlite_database_path()
+
+        return (
+            "FTM SQLite yedekleme işlemi başarıyla tamamlandı.\n\n"
+            f"Veritabanı dosyası : {sqlite_path}\n"
+            f"Yedek dosyası      : {backup_file}\n"
+            f"Yedek boyutu       : {_format_backup_size(backup_size_bytes)}\n"
+            f"SHA256             : {backup_sha256}\n"
+            f"Silinen eski yedek : {deleted_old_backup_count}\n"
+            f"Başlangıç zamanı   : {started_at}\n"
+            f"Bitiş zamanı       : {finished_at}\n\n"
+            "Bu mail FTM yedekleme sistemi tarafından otomatik oluşturulmuştur."
+        )
+
     database_name = os.getenv("DATABASE_NAME", "").strip()
     database_user = os.getenv("DATABASE_USER", "").strip()
     docker_container = os.getenv("BACKUP_DOCKER_CONTAINER", "").strip()
@@ -402,6 +507,17 @@ def _is_postgresql_custom_dump(file_path: Path) -> bool:
         return False
 
 
+def _is_sqlite_database_file(file_path: Path) -> bool:
+    try:
+        with file_path.open("rb") as file:
+            header = file.read(16)
+
+        return header == b"SQLite format 3\x00"
+
+    except OSError:
+        return False
+
+
 def _write_backup_metadata(
     *,
     backup_file: Path,
@@ -417,18 +533,32 @@ def _write_backup_metadata(
 ) -> Path:
     metadata_file = _metadata_file_for_backup(backup_file)
 
+    if _is_sqlite_mode():
+        database_name = _sqlite_database_path().name
+        database_user = "local"
+        docker_container = ""
+        source_database_path = str(_sqlite_database_path())
+    else:
+        database_name = os.getenv("DATABASE_NAME", "").strip()
+        database_user = os.getenv("DATABASE_USER", "").strip()
+        docker_container = os.getenv("BACKUP_DOCKER_CONTAINER", "").strip()
+        source_database_path = ""
+
     metadata = {
         "backup_file": str(backup_file),
         "backup_size_bytes": backup_size_bytes,
         "backup_size_text": _format_backup_size(backup_size_bytes),
         "sha256": backup_sha256,
+        "database_engine": _database_engine_label(),
         "is_postgresql_custom_dump": _is_postgresql_custom_dump(backup_file),
+        "is_sqlite_database_file": _is_sqlite_database_file(backup_file),
         "deleted_old_backup_count": deleted_old_backup_count,
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": finished_at.isoformat(timespec="seconds"),
-        "database_name": os.getenv("DATABASE_NAME", "").strip(),
-        "database_user": os.getenv("DATABASE_USER", "").strip(),
-        "docker_container": os.getenv("BACKUP_DOCKER_CONTAINER", "").strip(),
+        "database_name": database_name,
+        "database_user": database_user,
+        "docker_container": docker_container,
+        "source_database_path": source_database_path,
         "mail_enabled": mail_enabled,
         "mail_sent": mail_sent,
         "mail_message": mail_message,
@@ -465,33 +595,31 @@ def _read_backup_metadata(metadata_file: Path) -> dict[str, Any]:
     return {}
 
 
-def create_database_backup() -> BackupResult:
-    _load_environment()
+def _create_disabled_backup_result(
+    *,
+    started_at: datetime,
+    message: str,
+) -> BackupResult:
+    finished_at = datetime.now()
 
-    started_at = datetime.now()
+    _write_backup_log(message)
 
-    backup_enabled = _env_bool("BACKUP_ENABLED", True)
+    return BackupResult(
+        success=False,
+        backup_file=None,
+        backup_size_bytes=0,
+        deleted_old_backup_count=0,
+        started_at=started_at,
+        finished_at=finished_at,
+        message=message,
+        mail_enabled=False,
+        mail_sent=False,
+        mail_message="Yedekleme yapılmadığı için mail gönderilmedi.",
+        mail_recipients=[],
+    )
 
-    if not backup_enabled:
-        finished_at = datetime.now()
-        message = "Yedekleme pasif. BACKUP_ENABLED=false"
 
-        _write_backup_log(message)
-
-        return BackupResult(
-            success=False,
-            backup_file=None,
-            backup_size_bytes=0,
-            deleted_old_backup_count=0,
-            started_at=started_at,
-            finished_at=finished_at,
-            message=message,
-            mail_enabled=False,
-            mail_sent=False,
-            mail_message="Yedekleme yapılmadığı için mail gönderilmedi.",
-            mail_recipients=[],
-        )
-
+def _create_postgresql_database_backup(*, started_at: datetime) -> BackupResult:
     backup_method = os.getenv("BACKUP_METHOD", "docker").strip().lower()
 
     if backup_method != "docker":
@@ -508,6 +636,7 @@ def create_database_backup() -> BackupResult:
     backup_file = _create_backup_file_path(
         backup_folder=backup_folder,
         database_name=database_name,
+        suffix=".dump",
     )
 
     try:
@@ -591,6 +720,116 @@ def create_database_backup() -> BackupResult:
     )
 
 
+def _create_sqlite_database_backup(*, started_at: datetime) -> BackupResult:
+    sqlite_database_path = _sqlite_database_path()
+
+    backup_folder = _get_backup_folder()
+    keep_days = _env_int("BACKUP_KEEP_DAYS", 30)
+
+    backup_file = _create_backup_file_path(
+        backup_folder=backup_folder,
+        database_name=sqlite_database_path.stem or "ftm_local",
+        suffix=".db",
+    )
+
+    try:
+        _run_sqlite_backup(
+            source_database_path=sqlite_database_path,
+            output_path=backup_file,
+        )
+
+    except Exception:
+        if backup_file.exists():
+            try:
+                backup_file.unlink()
+            except OSError:
+                pass
+
+        raise
+
+    backup_size_bytes = backup_file.stat().st_size
+    backup_sha256 = calculate_file_sha256(backup_file)
+    deleted_old_backup_count = _cleanup_old_backups(backup_folder, keep_days)
+
+    finished_at = datetime.now()
+
+    message = (
+        f"SQLite yedeği başarıyla alındı. "
+        f"Kaynak: {sqlite_database_path} | "
+        f"Dosya: {backup_file} | "
+        f"Boyut: {_format_backup_size(backup_size_bytes)} | "
+        f"Silinen eski yedek: {deleted_old_backup_count}"
+    )
+
+    _write_backup_log(message)
+
+    mail_enabled = _is_backup_mail_enabled()
+
+    mail_sent, mail_message, mail_recipients = _send_backup_success_mail(
+        backup_file=backup_file,
+        backup_size_bytes=backup_size_bytes,
+        deleted_old_backup_count=deleted_old_backup_count,
+        started_at=started_at,
+        finished_at=finished_at,
+        backup_sha256=backup_sha256,
+    )
+
+    if mail_sent:
+        _write_backup_log(f"Yedekleme bilgi maili gönderildi. Alıcılar: {', '.join(mail_recipients)}")
+    else:
+        _write_backup_log(mail_message)
+
+    try:
+        _write_backup_metadata(
+            backup_file=backup_file,
+            backup_size_bytes=backup_size_bytes,
+            backup_sha256=backup_sha256,
+            deleted_old_backup_count=deleted_old_backup_count,
+            started_at=started_at,
+            finished_at=finished_at,
+            mail_enabled=mail_enabled,
+            mail_sent=mail_sent,
+            mail_message=mail_message,
+            mail_recipients=mail_recipients,
+        )
+
+    except Exception as exc:
+        _write_backup_log(f"Yedek metadata dosyası yazılamadı: {exc}")
+
+    return BackupResult(
+        success=True,
+        backup_file=backup_file,
+        backup_size_bytes=backup_size_bytes,
+        deleted_old_backup_count=deleted_old_backup_count,
+        started_at=started_at,
+        finished_at=finished_at,
+        message=message,
+        mail_enabled=mail_enabled,
+        mail_sent=mail_sent,
+        mail_message=mail_message,
+        mail_recipients=mail_recipients,
+    )
+
+
+def create_database_backup() -> BackupResult:
+    _load_environment()
+
+    started_at = datetime.now()
+
+    backup_enabled = _env_bool("BACKUP_ENABLED", True)
+
+    if not backup_enabled:
+        return _create_disabled_backup_result(
+            started_at=started_at,
+            message="Yedekleme pasif. BACKUP_ENABLED=false",
+        )
+
+    if _is_sqlite_mode():
+        return _create_sqlite_database_backup(started_at=started_at)
+
+    return _create_postgresql_database_backup(started_at=started_at)
+
+
 def list_database_backups() -> list[BackupFileInfo]:
     _load_environment()
 
@@ -599,12 +838,19 @@ def list_database_backups() -> list[BackupFileInfo]:
     if not backup_folder.exists():
         return []
 
+    backup_files: list[Path] = []
+
+    for pattern in _backup_file_patterns_for_current_engine():
+        backup_files.extend(
+            [
+                backup_file
+                for backup_file in backup_folder.glob(pattern)
+                if backup_file.is_file()
+            ]
+        )
+
     backup_files = sorted(
-        [
-            backup_file
-            for backup_file in backup_folder.glob("*.dump")
-            if backup_file.is_file()
-        ],
+        backup_files,
         key=lambda backup_file: backup_file.stat().st_mtime,
         reverse=True,
     )
@@ -626,9 +872,24 @@ def list_database_backups() -> list[BackupFileInfo]:
         if backup_size_bytes <= 0:
             status = "WARN"
             status_message = "Yedek dosyası boş görünüyor."
+        elif _is_sqlite_mode():
+            if not _is_sqlite_database_file(backup_file):
+                status = "WARN"
+                status_message = "Dosya var ancak SQLite veritabanı başlığı doğrulanamadı."
+            else:
+                status_message = "SQLite yedek dosyası doğrulanabilir görünüyor."
         elif not _is_postgresql_custom_dump(backup_file):
             status = "WARN"
             status_message = "Dosya var ancak PostgreSQL custom dump başlığı doğrulanamadı."
+
+        if _is_sqlite_mode():
+            database_name = str(metadata.get("database_name") or _sqlite_database_path().name)
+            database_user = str(metadata.get("database_user") or "local")
+            docker_container = str(metadata.get("docker_container") or "SQLite Local")
+        else:
+            database_name = str(metadata.get("database_name") or os.getenv("DATABASE_NAME", ""))
+            database_user = str(metadata.get("database_user") or os.getenv("DATABASE_USER", ""))
+            docker_container = str(metadata.get("docker_container") or os.getenv("BACKUP_DOCKER_CONTAINER", ""))
 
         results.append(
             BackupFileInfo(
@@ -638,9 +899,9 @@ def list_database_backups() -> list[BackupFileInfo]:
                 created_at=created_at,
                 sha256=sha256_value,
                 metadata_file=metadata_file if metadata_file.exists() else None,
-                database_name=str(metadata.get("database_name") or os.getenv("DATABASE_NAME", "")),
-                database_user=str(metadata.get("database_user") or os.getenv("DATABASE_USER", "")),
-                docker_container=str(metadata.get("docker_container") or os.getenv("BACKUP_DOCKER_CONTAINER", "")),
+                database_name=database_name,
+                database_user=database_user,
+                docker_container=docker_container,
                 status=status,
                 status_message=status_message,
             )
@@ -665,24 +926,35 @@ def validate_backup_file(backup_file: str | Path) -> BackupValidationResult:
 
     backup_sha256 = calculate_file_sha256(backup_path)
     is_custom_dump = _is_postgresql_custom_dump(backup_path)
+    is_sqlite_file = _is_sqlite_database_file(backup_path)
 
-    if not is_custom_dump:
+    if is_custom_dump:
         return BackupValidationResult(
-            success=False,
+            success=True,
+            backup_file=backup_path,
+            backup_size_bytes=backup_size_bytes,
+            sha256=backup_sha256,
+            is_postgresql_custom_dump=True,
+            message="Yedek dosyası mevcut, boş değil ve PostgreSQL custom dump başlığı doğrulandı.",
+        )
+
+    if is_sqlite_file:
+        return BackupValidationResult(
+            success=True,
             backup_file=backup_path,
             backup_size_bytes=backup_size_bytes,
             sha256=backup_sha256,
             is_postgresql_custom_dump=False,
-            message="Yedek dosyası mevcut ancak PostgreSQL custom dump başlığı doğrulanamadı.",
+            message="Yedek dosyası mevcut, boş değil ve SQLite veritabanı başlığı doğrulandı.",
         )
 
     return BackupValidationResult(
-        success=True,
+        success=False,
         backup_file=backup_path,
         backup_size_bytes=backup_size_bytes,
         sha256=backup_sha256,
-        is_postgresql_custom_dump=True,
-        message="Yedek dosyası mevcut, boş değil ve PostgreSQL custom dump başlığı doğrulandı.",
+        is_postgresql_custom_dump=False,
+        message="Yedek dosyası mevcut ancak PostgreSQL custom dump veya SQLite veritabanı başlığı doğrulanamadı.",
     )
 
 
