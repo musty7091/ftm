@@ -1,8 +1,8 @@
 {
   "backup_folder": "backups",
-  "company_address": "girne",
-  "company_email": "firma@ftm.com",
-  "company_name": "FTM Finans Takip Merkezi",
+  "company_address": "Girne",
+  "company_email": "magaza@ftm.com",
+  "company_name": "FTM Finansal Takip Merkezi",
   "company_phone": "05338463131",
   "control_mail_enabled": true,
   "control_mail_to": "",

@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.enums import UserRole
 from app.models.user import User
 
@@ -62,7 +63,15 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
 
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "evet",
+        "açık",
+        "acik",
+    }
 
 
 def _env_text(name: str, default: str = "") -> str:
@@ -72,6 +81,38 @@ def _env_text(name: str, default: str = "") -> str:
         return default
 
     return value.strip()
+
+
+def _database_engine() -> str:
+    env_database_engine = _env_text("DATABASE_ENGINE", "").strip().lower()
+
+    if env_database_engine in {"sqlite", "postgresql"}:
+        return env_database_engine
+
+    if settings.is_sqlite:
+        return "sqlite"
+
+    if settings.is_postgresql:
+        return "postgresql"
+
+    return "postgresql"
+
+
+def _is_sqlite_mode() -> bool:
+    return _database_engine() == "sqlite"
+
+
+def _is_postgresql_mode() -> bool:
+    return _database_engine() == "postgresql"
+
+
+def _get_sqlite_database_path() -> Path:
+    sqlite_path = settings.sqlite_database_path
+
+    if sqlite_path.is_absolute():
+        return sqlite_path
+
+    return _get_project_root() / sqlite_path
 
 
 def _get_folder_from_env(name: str, default_value: str) -> Path:
@@ -117,8 +158,33 @@ def _find_latest_backup_file(backup_folder: Path) -> Optional[Path]:
     if not backup_folder.exists():
         return None
 
+    if _is_sqlite_mode():
+        backup_patterns = [
+            "*_backup_*.db",
+            "*_backup_*.sqlite",
+            "*_backup_*.sqlite3",
+            "*.db",
+            "*.sqlite",
+            "*.sqlite3",
+        ]
+    else:
+        backup_patterns = [
+            "*_backup_*.dump",
+        ]
+
+    backup_files: list[Path] = []
+
+    for pattern in backup_patterns:
+        backup_files.extend(
+            [
+                file_path
+                for file_path in backup_folder.glob(pattern)
+                if file_path.is_file()
+            ]
+        )
+
     backup_files = sorted(
-        backup_folder.glob("*_backup_*.dump"),
+        backup_files,
         key=lambda file_path: file_path.stat().st_mtime,
         reverse=True,
     )
@@ -175,7 +241,101 @@ def _count_permission_denied_logs(session: Session) -> int:
     return int(result or 0)
 
 
+def _check_database_mode(items: list[HealthCheckItem]) -> None:
+    database_engine = _database_engine()
+
+    if database_engine == "sqlite":
+        _add_item(
+            items,
+            "Veritabanı modu",
+            "OK",
+            "DATABASE_ENGINE=sqlite. FTM Local / SQLite modu aktif.",
+        )
+        return
+
+    if database_engine == "postgresql":
+        _add_item(
+            items,
+            "Veritabanı modu",
+            "OK",
+            "DATABASE_ENGINE=postgresql. PostgreSQL modu aktif.",
+        )
+        return
+
+    _add_item(
+        items,
+        "Veritabanı modu",
+        "FAIL",
+        f"Desteklenmeyen veritabanı modu: {database_engine}",
+    )
+
+
+def _check_sqlite_database_file(items: list[HealthCheckItem]) -> None:
+    sqlite_database_path = _get_sqlite_database_path()
+
+    if not sqlite_database_path.exists():
+        _add_item(
+            items,
+            "SQLite veritabanı dosyası",
+            "FAIL",
+            f"SQLite veritabanı dosyası bulunamadı: {sqlite_database_path}",
+        )
+        return
+
+    if not sqlite_database_path.is_file():
+        _add_item(
+            items,
+            "SQLite veritabanı dosyası",
+            "FAIL",
+            f"SQLite veritabanı yolu dosya değil: {sqlite_database_path}",
+        )
+        return
+
+    file_size = sqlite_database_path.stat().st_size
+
+    if file_size <= 0:
+        _add_item(
+            items,
+            "SQLite veritabanı dosyası",
+            "WARN",
+            f"SQLite veritabanı dosyası boş görünüyor: {sqlite_database_path}",
+        )
+        return
+
+    _add_item(
+        items,
+        "SQLite veritabanı dosyası",
+        "OK",
+        f"{sqlite_database_path} | Boyut: {_format_file_size(file_size)}",
+    )
+
+
 def _check_database_connection(session: Session, items: list[HealthCheckItem]) -> None:
+    if _is_sqlite_mode():
+        try:
+            sqlite_version = session.execute(
+                text("SELECT sqlite_version()")
+            ).scalar_one()
+
+            sqlite_database_path = _get_sqlite_database_path()
+
+            _add_item(
+                items,
+                "SQLite bağlantısı",
+                "OK",
+                f"Bağlantı başarılı. SQLite sürümü: {sqlite_version} | Dosya: {sqlite_database_path}",
+            )
+
+        except Exception as exc:
+            _add_item(
+                items,
+                "SQLite bağlantısı",
+                "FAIL",
+                f"SQLite bağlantı hatası: {exc}",
+            )
+
+        return
+
     try:
         row = session.execute(
             text("SELECT current_database(), current_user")
@@ -242,10 +402,12 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
     backup_folder = _get_folder_from_env("BACKUP_FOLDER", "backups")
 
     if not backup_folder.exists():
+        status = "WARN" if _is_sqlite_mode() else "FAIL"
+
         _add_item(
             items,
             "Yedek klasörü",
-            "FAIL",
+            status,
             f"Yedek klasörü bulunamadı: {backup_folder}",
         )
         return
@@ -262,11 +424,21 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
     latest_backup = _find_latest_backup_file(backup_folder)
 
     if latest_backup is None:
+        status = "WARN" if _is_sqlite_mode() else "FAIL"
+
+        if _is_sqlite_mode():
+            message = (
+                "SQLite yedek dosyası henüz bulunamadı. "
+                f"Bu, yeni kurulumda normaldir. Klasör: {backup_folder}"
+            )
+        else:
+            message = f"Yedek klasöründe .dump dosyası bulunamadı: {backup_folder}"
+
         _add_item(
             items,
             "Son yedek dosyası",
-            "FAIL",
-            f"Yedek klasöründe .dump dosyası bulunamadı: {backup_folder}",
+            status,
+            message,
         )
         return
 
@@ -288,8 +460,8 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
         _add_item(
             items,
             "Log klasörü",
-            "FAIL",
-            f"Log klasörü bulunamadı: {log_folder}",
+            "WARN",
+            f"Log klasörü henüz bulunamadı: {log_folder}",
         )
         return
 
@@ -451,6 +623,11 @@ def run_system_health_check(session: Session) -> SystemHealthReport:
     _load_environment()
 
     items: list[HealthCheckItem] = []
+
+    _check_database_mode(items)
+
+    if _is_sqlite_mode():
+        _check_sqlite_database_file(items)
 
     _check_database_connection(session, items)
     _check_users(session, items)

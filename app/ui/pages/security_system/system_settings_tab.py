@@ -843,29 +843,134 @@ class SystemSettingsTab(QWidget):
         ]
 
     def _database_rows(self) -> list[tuple[str, str, str]]:
-        rows = [
-            ("DB Host", settings.database_host, "OK" if settings.database_host else "FAIL"),
-            ("DB Port", str(settings.database_port), "OK" if settings.database_port else "FAIL"),
-            ("DB Name", settings.database_name, "OK" if settings.database_name else "FAIL"),
-            ("DB User", settings.database_user, "OK" if settings.database_user else "FAIL"),
-            ("DB Echo", "Açık" if settings.database_echo else "Kapalı", "WARN" if settings.database_echo else "OK"),
-        ]
+        rows: list[tuple[str, str, str]] = []
+
+        if settings.is_sqlite:
+            sqlite_database_path = settings.sqlite_database_path
+            sqlite_database_folder = sqlite_database_path.parent
+
+            rows.extend(
+                [
+                    (
+                        "DB Motoru",
+                        "SQLite / Local",
+                        "OK",
+                    ),
+                    (
+                        "SQLite Dosyası",
+                        str(sqlite_database_path),
+                        "OK" if sqlite_database_path.exists() and sqlite_database_path.is_file() else "FAIL",
+                    ),
+                    (
+                        "SQLite Klasörü",
+                        str(sqlite_database_folder),
+                        "OK" if sqlite_database_folder.exists() and sqlite_database_folder.is_dir() else "FAIL",
+                    ),
+                    (
+                        "PostgreSQL Host",
+                        "SQLite modunda gerekli değil",
+                        "OK",
+                    ),
+                    (
+                        "PostgreSQL Port",
+                        "SQLite modunda gerekli değil",
+                        "OK",
+                    ),
+                    (
+                        "PostgreSQL User",
+                        "SQLite modunda gerekli değil",
+                        "OK",
+                    ),
+                    (
+                        "DB Echo",
+                        "Açık" if settings.database_echo else "Kapalı",
+                        "WARN" if settings.database_echo else "OK",
+                    ),
+                ]
+            )
+
+        else:
+            rows.extend(
+                [
+                    (
+                        "DB Motoru",
+                        "PostgreSQL",
+                        "OK",
+                    ),
+                    (
+                        "DB Host",
+                        settings.database_host,
+                        "OK" if settings.database_host else "FAIL",
+                    ),
+                    (
+                        "DB Port",
+                        str(settings.database_port),
+                        "OK" if settings.database_port else "FAIL",
+                    ),
+                    (
+                        "DB Name",
+                        settings.database_name,
+                        "OK" if settings.database_name else "FAIL",
+                    ),
+                    (
+                        "DB User",
+                        settings.database_user,
+                        "OK" if settings.database_user else "FAIL",
+                    ),
+                    (
+                        "DB Echo",
+                        "Açık" if settings.database_echo else "Kapalı",
+                        "WARN" if settings.database_echo else "OK",
+                    ),
+                ]
+            )
 
         try:
             db_info = check_database_connection()
 
             rows.extend(
                 [
-                    ("DB Bağlantı", "Başarılı", "OK"),
-                    ("DB Aktif Veritabanı", str(db_info.get("database_name", "-")), "OK"),
-                    ("DB Aktif Kullanıcı", str(db_info.get("user_name", "-")), "OK"),
-                    ("DB Sunucu Portu", str(db_info.get("server_port", "-")), "OK"),
-                    ("DB Sürüm", str(db_info.get("version_text", "-")), "OK"),
+                    (
+                        "DB Bağlantı",
+                        "Başarılı",
+                        "OK",
+                    ),
+                    (
+                        "DB Aktif Motor",
+                        str(db_info.get("database_engine", "-")),
+                        "OK",
+                    ),
+                    (
+                        "DB Aktif Veritabanı",
+                        str(db_info.get("database_name", "-")),
+                        "OK",
+                    ),
+                    (
+                        "DB Aktif Kullanıcı",
+                        str(db_info.get("user_name", "-")),
+                        "OK",
+                    ),
+                    (
+                        "DB Sunucu Portu",
+                        str(db_info.get("server_port", "-")),
+                        "OK",
+                    ),
+                    (
+                        "DB Sürüm",
+                        str(db_info.get("version_text", "-")),
+                        "OK",
+                    ),
                 ]
             )
 
         except Exception as exc:
-            rows.append(("DB Bağlantı", str(exc), "FAIL"))
+            rows.append(
+                (
+                    "DB Bağlantı",
+                    str(exc),
+                    "FAIL",
+                )
+            )
 
         return rows
 
