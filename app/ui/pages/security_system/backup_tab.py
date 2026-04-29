@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.config import settings
 from app.services.backup_service import (
     BackupServiceError,
     create_database_backup,
@@ -198,6 +199,116 @@ QTableCornerButton::section {
 """
 
 
+def _is_sqlite_mode() -> bool:
+    return bool(getattr(settings, "is_sqlite", False))
+
+
+def _backup_table_headers() -> list[str]:
+    if _is_sqlite_mode():
+        return [
+            "Dosya",
+            "Boyut",
+            "Oluşturma",
+            "Veritabanı Dosyası",
+            "Mod",
+            "Kaynak",
+            "Durum",
+            "Dosya Yolu",
+        ]
+
+    return [
+        "Dosya",
+        "Boyut",
+        "Oluşturma",
+        "Veritabanı",
+        "Kullanıcı",
+        "Container",
+        "Durum",
+        "Dosya Yolu",
+    ]
+
+
+def _backup_subtitle_text() -> str:
+    if _is_sqlite_mode():
+        return (
+            "Bu sekmeden FTM Local / SQLite veritabanının güvenli .db yedeği alınır, "
+            "mevcut SQLite yedekleri listelenir ve seçili yedeğin temel dosya doğrulaması yapılır. "
+            "Yedekleme PostgreSQL veya Docker gerektirmez."
+        )
+
+    return (
+        "Bu sekmeden manuel PostgreSQL yedeği alınır, mevcut yedekler listelenir "
+        "ve seçili yedeğin temel dosya doğrulaması yapılır. Geri yükleme işlemi şimdilik "
+        "otomatik çalıştırılmaz; önce güvenli doğrulama yapılır."
+    )
+
+
+def _manual_backup_card_body() -> str:
+    if _is_sqlite_mode():
+        return (
+            "Aktif SQLite veritabanı dosyasının zaman damgalı .db yedeği alınır. "
+            "Yedek dosyası backups klasörüne kaydedilir."
+        )
+
+    return "Veritabanının PostgreSQL custom dump formatında yedeği alınır."
+
+
+def _validation_card_body() -> str:
+    if _is_sqlite_mode():
+        return (
+            "Seçili SQLite .db yedeğinin varlığı, boyutu, SHA256 değeri ve SQLite dosya başlığı kontrol edilir."
+        )
+
+    return "Seçili dosyanın varlığı, boyutu, SHA256 değeri ve dump başlığı kontrol edilir."
+
+
+def _restore_card_body() -> str:
+    return (
+        "Otomatik geri yükleme bu aşamada bilerek kapalıdır. "
+        "Önce güvenli yedek alma ve doğrulama mantığı oturtulur."
+    )
+
+
+def _backup_hint_text() -> str:
+    if _is_sqlite_mode():
+        return (
+            "Not: SQLite Local modda yedekleme, aktif .db veritabanı dosyasının güvenli kopyasını alır. "
+            "Docker, pg_dump veya PostgreSQL sunucusu gerekmez. "
+            "Yedek klasörü Sistem Ayarları ekranındaki risksiz ayardan gelir."
+        )
+
+    return (
+        "Not: Yedekleme Docker içindeki pg_dump ile çalışır. "
+        "BACKUP_DOCKER_CONTAINER ve veritabanı bilgileri .env dosyasından okunur. "
+        "Yedek klasörü ise Sistem Ayarları ekranındaki risksiz ayardan gelir."
+    )
+
+
+def _manual_backup_confirm_text() -> str:
+    if _is_sqlite_mode():
+        return (
+            "SQLite veritabanı yedeği alınacak.\n\n"
+            "Bu işlem aktif .db veritabanı dosyasının güvenli bir kopyasını oluşturur.\n"
+            "PostgreSQL veya Docker kullanılmaz.\n\n"
+            "Devam etmek istiyor musun?"
+        )
+
+    return (
+        "Veritabanı yedeği alınacak.\n\n"
+        "Bu işlem birkaç saniye sürebilir. Devam etmek istiyor musun?"
+    )
+
+
+def _validation_file_type_text(*, message: str, is_postgresql_custom_dump: bool) -> str:
+    if is_postgresql_custom_dump:
+        return "PostgreSQL Custom Dump"
+
+    if "SQLite" in message:
+        return "SQLite veritabanı dosyası"
+
+    return "Bilinmiyor"
+
+
 class BackupTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -230,18 +341,7 @@ class BackupTab(QWidget):
         self.backup_table = QTableWidget()
         self.backup_table.setObjectName("BackupTable")
         self.backup_table.setColumnCount(8)
-        self.backup_table.setHorizontalHeaderLabels(
-            [
-                "Dosya",
-                "Boyut",
-                "Oluşturma",
-                "Veritabanı",
-                "Kullanıcı",
-                "Container",
-                "Durum",
-                "Dosya Yolu",
-            ]
-        )
+        self.backup_table.setHorizontalHeaderLabels(_backup_table_headers())
         self.backup_table.setAlternatingRowColors(True)
         self.backup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.backup_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -285,11 +385,7 @@ class BackupTab(QWidget):
         title_row.addWidget(self.last_backup_label, 0, Qt.AlignVCenter)
         title_row.addWidget(self.validation_status_label, 0, Qt.AlignVCenter)
 
-        subtitle = QLabel(
-            "Bu sekmeden manuel PostgreSQL yedeği alınır, mevcut yedekler listelenir "
-            "ve seçili yedeğin temel dosya doğrulaması yapılır. Geri yükleme işlemi şimdilik "
-            "otomatik çalıştırılmaz; önce güvenli doğrulama yapılır."
-        )
+        subtitle = QLabel(_backup_subtitle_text())
         subtitle.setObjectName("BackupSubtitle")
         subtitle.setWordWrap(True)
 
@@ -308,7 +404,7 @@ class BackupTab(QWidget):
         grid.addWidget(
             self._build_small_card(
                 title="Manuel Yedekleme",
-                body="Veritabanının PostgreSQL custom dump formatında yedeği alınır.",
+                body=_manual_backup_card_body(),
                 object_name="BackupSuccessCard",
             ),
             0,
@@ -318,7 +414,7 @@ class BackupTab(QWidget):
         grid.addWidget(
             self._build_small_card(
                 title="Yedek Doğrulama",
-                body="Seçili dosyanın varlığı, boyutu, SHA256 değeri ve dump başlığı kontrol edilir.",
+                body=_validation_card_body(),
                 object_name="BackupWarningCard",
             ),
             0,
@@ -328,7 +424,7 @@ class BackupTab(QWidget):
         grid.addWidget(
             self._build_small_card(
                 title="Geri Yükleme",
-                body="Otomatik geri yükleme bu aşamada bilerek kapalıdır. Önce güvenli test mantığı oturtulur.",
+                body=_restore_card_body(),
                 object_name="BackupInfoCard",
             ),
             0,
@@ -368,11 +464,7 @@ class BackupTab(QWidget):
         layout = QHBoxLayout()
         layout.setSpacing(10)
 
-        hint = QLabel(
-            "Not: Yedekleme Docker içindeki pg_dump ile çalışır. "
-            "BACKUP_DOCKER_CONTAINER ve veritabanı bilgileri .env dosyasından okunur. "
-            "Yedek klasörü ise Sistem Ayarları ekranındaki risksiz ayardan gelir."
-        )
+        hint = QLabel(_backup_hint_text())
         hint.setObjectName("BackupSubtitle")
         hint.setWordWrap(True)
 
@@ -432,8 +524,7 @@ class BackupTab(QWidget):
         answer = QMessageBox.question(
             self,
             "Manuel Yedek Alınsın mı?",
-            "Veritabanı yedeği alınacak.\n\n"
-            "Bu işlem birkaç saniye sürebilir. Devam etmek istiyor musun?",
+            _manual_backup_confirm_text(),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -509,6 +600,11 @@ class BackupTab(QWidget):
 
             self._refresh_widget_style(self.validation_status_label)
 
+            file_type_text = _validation_file_type_text(
+                message=result.message,
+                is_postgresql_custom_dump=result.is_postgresql_custom_dump,
+            )
+
             QMessageBox.information(
                 self,
                 "Yedek Doğrulama Sonucu",
@@ -516,7 +612,7 @@ class BackupTab(QWidget):
                 f"Dosya: {result.backup_file}\n"
                 f"Boyut: {format_backup_size(result.backup_size_bytes)}\n"
                 f"SHA256: {result.sha256}\n"
-                f"PostgreSQL Custom Dump: {'Evet' if result.is_postgresql_custom_dump else 'Hayır'}",
+                f"Dosya Tipi: {file_type_text}",
             )
 
             self.load_backups()
@@ -546,16 +642,28 @@ class BackupTab(QWidget):
         self.backup_table.setRowCount(len(self.backup_infos))
 
         for row_index, backup_info in enumerate(self.backup_infos):
-            values = [
-                backup_info.file_name,
-                format_backup_size(backup_info.backup_size_bytes),
-                backup_info.created_at.strftime("%d.%m.%Y %H:%M:%S"),
-                backup_info.database_name or "-",
-                backup_info.database_user or "-",
-                backup_info.docker_container or "-",
-                backup_info.status,
-                str(backup_info.file_path),
-            ]
+            if _is_sqlite_mode():
+                values = [
+                    backup_info.file_name,
+                    format_backup_size(backup_info.backup_size_bytes),
+                    backup_info.created_at.strftime("%d.%m.%Y %H:%M:%S"),
+                    backup_info.database_name or "-",
+                    backup_info.database_user or "local",
+                    backup_info.docker_container or "SQLite Local",
+                    backup_info.status,
+                    str(backup_info.file_path),
+                ]
+            else:
+                values = [
+                    backup_info.file_name,
+                    format_backup_size(backup_info.backup_size_bytes),
+                    backup_info.created_at.strftime("%d.%m.%Y %H:%M:%S"),
+                    backup_info.database_name or "-",
+                    backup_info.database_user or "-",
+                    backup_info.docker_container or "-",
+                    backup_info.status,
+                    str(backup_info.file_path),
+                ]
 
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
