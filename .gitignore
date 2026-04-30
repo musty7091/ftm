@@ -39,10 +39,34 @@ exports/
 # Alembic cache
 alembic/versions/__pycache__/
 
-# PyInstaller
+# PyInstaller build outputs
 build/
 dist/
+build_tools/
+dist_tools/
 *.spec
+
+# Pilot / release package outputs
+pilot_packages/
+release_packages/
+
+# Local instance / generated data
+instance/
+restore_tests/
+daily_backups/
+
+# License files and local license outputs
+licenses/
+*.ftmlic
+*.lic
+
+# Secret / certificate / private key files
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
 
 # IDE
 .vscode/
@@ -57,17 +81,7 @@ Desktop.ini
 .coverage
 htmlcov/
 
-Add-Content .gitignore @'
-
-# Local instance / generated data
-instance/
-
-# Restore test outputs
-restore_tests/
-daily_backups/
-
-# Secret / certificate files
-*.key
-*.pem
-'@licenses/
-*.ftmlic
+# PyInstaller build outputs
+build/
+dist/
+*.spec
