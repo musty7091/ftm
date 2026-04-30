@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QTabWidget,
@@ -12,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.services.license_service import check_license
 from app.ui.navigation import role_to_text, username_to_text
 from app.ui.pages.placeholder_page import AccessDeniedPage
 from app.ui.pages.security_system import (
@@ -68,6 +71,7 @@ class SecuritySystemPage(QWidget):
         self._register_tab("İşlem Kayıtları", build_audit_logs_tab)
         self._register_tab("Sistem Ayarları", build_system_settings_tab)
         self._register_tab("Yedekleme", build_backup_tab)
+        self._register_tab("Lisans", build_license_tab)
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -252,8 +256,8 @@ class SecuritySystemPage(QWidget):
         title_row.addWidget(badge, 0, Qt.AlignVCenter)
 
         subtitle = QLabel(
-            "Kullanıcı yönetimi, roller, giriş kayıtları, işlem geçmişi, sistem ayarları "
-            "ve yedekleme süreçleri bu tek merkezden yönetilecek."
+            "Kullanıcı yönetimi, roller, giriş kayıtları, işlem geçmişi, sistem ayarları, "
+            "yedekleme ve lisans süreçleri bu tek merkezden yönetilecek."
         )
         subtitle.setObjectName("SecuritySystemSubTitle")
         subtitle.setWordWrap(True)
@@ -262,6 +266,142 @@ class SecuritySystemPage(QWidget):
         layout.addWidget(subtitle)
 
         return hero
+
+
+def build_license_tab() -> QWidget:
+    page = QWidget()
+
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(18, 18, 18, 18)
+    layout.setSpacing(14)
+
+    license_result = check_license()
+
+    summary_card = QFrame()
+    summary_card.setObjectName("SecuritySystemHero")
+
+    summary_layout = QVBoxLayout(summary_card)
+    summary_layout.setContentsMargins(20, 18, 20, 18)
+    summary_layout.setSpacing(10)
+
+    title_row = QHBoxLayout()
+    title_row.setSpacing(10)
+
+    title = QLabel("Lisans Durumu")
+    title.setObjectName("SecuritySystemTitle")
+
+    status_badge = QLabel(license_result.status_label)
+    status_badge.setObjectName("SecuritySystemAdminBadge")
+
+    title_row.addWidget(title, 1)
+    title_row.addWidget(status_badge, 0, Qt.AlignVCenter)
+
+    message = QLabel(license_result.message)
+    message.setObjectName("SecuritySystemSubTitle")
+    message.setWordWrap(True)
+
+    summary_layout.addLayout(title_row)
+    summary_layout.addWidget(message)
+
+    detail_card = QFrame()
+    detail_card.setObjectName("SecuritySystemHero")
+
+    detail_layout = QVBoxLayout(detail_card)
+    detail_layout.setContentsMargins(20, 18, 20, 18)
+    detail_layout.setSpacing(12)
+
+    detail_title = QLabel("Lisans Bilgileri")
+    detail_title.setObjectName("SecuritySystemTitle")
+
+    detail_grid = QGridLayout()
+    detail_grid.setHorizontalSpacing(18)
+    detail_grid.setVerticalSpacing(10)
+
+    rows = [
+        ("Durum", license_result.status_label),
+        ("Firma", license_result.company_name or "-"),
+        ("Lisans Tipi", license_result.license_type or "-"),
+        ("Cihaz Kodu", license_result.device_code),
+        ("Başlangıç Tarihi", _format_license_date(license_result.starts_at)),
+        ("Bitiş Tarihi", _format_license_date(license_result.expires_at)),
+        ("Kalan Süre", _format_days_remaining(license_result.days_remaining)),
+        ("Lisans Dosyası", str(license_result.license_file)),
+        ("Uygulama Açılışı", "İzin Var" if license_result.allow_app_open else "Engelli"),
+        ("Veri Girişi", "İzin Var" if license_result.allow_data_entry else "Engelli"),
+    ]
+
+    for row_index, (label_text, value_text) in enumerate(rows):
+        label = QLabel(label_text)
+        label.setObjectName("SecuritySystemSubTitle")
+
+        value = QLabel(str(value_text))
+        value.setObjectName("SecuritySystemSubTitle")
+        value.setWordWrap(True)
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        detail_grid.addWidget(label, row_index, 0, Qt.AlignTop)
+        detail_grid.addWidget(value, row_index, 1)
+
+    detail_grid.setColumnStretch(0, 0)
+    detail_grid.setColumnStretch(1, 1)
+
+    detail_layout.addWidget(detail_title)
+    detail_layout.addLayout(detail_grid)
+
+    info_card = QFrame()
+    info_card.setObjectName("SecuritySystemHero")
+
+    info_layout = QVBoxLayout(info_card)
+    info_layout.setContentsMargins(20, 18, 20, 18)
+    info_layout.setSpacing(8)
+
+    info_title = QLabel("Not")
+    info_title.setObjectName("SecuritySystemTitle")
+
+    info_text = QLabel(
+        "Bu aşamada lisans sistemi uyarı modundadır. "
+        "Lisans yoksa veya süresi dolmuşsa bilgi verir; programı henüz tamamen kilitlemez. "
+        "Sonraki adımda açılış uyarısı ve istenirse veri girişi kısıtlaması eklenebilir."
+    )
+    info_text.setObjectName("SecuritySystemSubTitle")
+    info_text.setWordWrap(True)
+
+    info_layout.addWidget(info_title)
+    info_layout.addWidget(info_text)
+
+    layout.addWidget(summary_card)
+    layout.addWidget(detail_card)
+    layout.addWidget(info_card)
+    layout.addStretch(1)
+
+    return page
+
+
+def _format_license_date(value: str) -> str:
+    cleaned_value = str(value or "").strip()
+
+    if not cleaned_value:
+        return "-"
+
+    try:
+        parsed_date = datetime.strptime(cleaned_value, "%Y-%m-%d")
+    except ValueError:
+        return cleaned_value
+
+    return parsed_date.strftime("%d.%m.%Y")
+
+
+def _format_days_remaining(value: int | None) -> str:
+    if value is None:
+        return "-"
+
+    if value < 0:
+        return f"Süresi {abs(value)} gün önce doldu"
+
+    if value == 0:
+        return "Bugün bitiyor"
+
+    return f"{value} gün"
 
 
 __all__ = [
