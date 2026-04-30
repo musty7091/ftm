@@ -7,8 +7,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+if not getattr(sys, "frozen", False):
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -33,8 +34,22 @@ from app.services.license_service import (
 
 
 APP_TITLE = "FTM Lisans Üretici"
-DEFAULT_OUTPUT_FOLDER = PROJECT_ROOT / "licenses"
 DEFAULT_LICENSE_TYPE = "annual"
+
+
+def is_packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_application_folder() -> Path:
+    if is_packaged_app():
+        return Path(sys.executable).resolve().parent
+
+    return PROJECT_ROOT
+
+
+def get_default_output_folder() -> Path:
+    return get_application_folder() / "licenses"
 
 
 class LicenseGeneratorWindow(QWidget):
@@ -58,7 +73,7 @@ class LicenseGeneratorWindow(QWidget):
         self.valid_days_input.setSuffix(" gün")
 
         self.output_folder_input = QLineEdit()
-        self.output_folder_input.setText(str(DEFAULT_OUTPUT_FOLDER))
+        self.output_folder_input.setText(str(get_default_output_folder()))
         self.output_folder_input.setReadOnly(True)
 
         self.result_label = QLabel("Henüz lisans üretilmedi.")
@@ -147,9 +162,7 @@ class LicenseGeneratorWindow(QWidget):
                 helper_text="Lisans ekranında görünecek müşteri adıdır. Resmi unvan şart değil, takip edilebilir kısa ad yeterlidir.",
             )
         )
-        form_layout.addWidget(
-            self._build_device_code_row()
-        )
+        form_layout.addWidget(self._build_device_code_row())
         form_layout.addWidget(
             self._build_field_row(
                 label_text="Lisans Süresi",
@@ -157,12 +170,8 @@ class LicenseGeneratorWindow(QWidget):
                 helper_text="Genellikle 365 gün kullanılır. Deneme lisansı için daha kısa süre verebilirsin.",
             )
         )
-        form_layout.addWidget(
-            self._build_output_folder_row()
-        )
-        form_layout.addWidget(
-            self._build_action_buttons()
-        )
+        form_layout.addWidget(self._build_output_folder_row())
+        form_layout.addWidget(self._build_action_buttons())
 
         return form_card
 
@@ -254,7 +263,8 @@ class LicenseGeneratorWindow(QWidget):
         input_row.addWidget(select_folder_button, 0)
 
         helper = QLabel(
-            "Üretilen .ftmlic lisans dosyası bu klasöre kaydedilir. Varsayılan klasör: C:\\ftm\\licenses"
+            "Üretilen .ftmlic lisans dosyası bu klasöre kaydedilir. "
+            "Exe olarak çalışırken varsayılan klasör, lisans üretici exe dosyasının yanındaki licenses klasörüdür."
         )
         helper.setObjectName("FieldHelper")
         helper.setWordWrap(True)
@@ -326,7 +336,7 @@ class LicenseGeneratorWindow(QWidget):
         selected_folder = QFileDialog.getExistingDirectory(
             self,
             "Lisans Çıktı Klasörü Seç",
-            self.output_folder_input.text().strip() or str(DEFAULT_OUTPUT_FOLDER),
+            self.output_folder_input.text().strip() or str(get_default_output_folder()),
         )
 
         if not selected_folder:
@@ -414,7 +424,7 @@ class LicenseGeneratorWindow(QWidget):
         self.company_name_input.clear()
         self.device_code_input.clear()
         self.valid_days_input.setValue(365)
-        self.output_folder_input.setText(str(DEFAULT_OUTPUT_FOLDER))
+        self.output_folder_input.setText(str(get_default_output_folder()))
         self.result_label.setText("Henüz lisans üretilmedi.")
         self.last_created_file = None
         self.company_name_input.setFocus()
