@@ -17,6 +17,16 @@ from PySide6.QtWidgets import (
 
 from app.db.session import session_scope
 from app.models.enums import UserRole
+from app.services.license_service import (
+    LICENSE_STATUS_ACTIVE,
+    LICENSE_STATUS_DEVICE_MISMATCH,
+    LICENSE_STATUS_EXPIRED,
+    LICENSE_STATUS_EXPIRING_SOON,
+    LICENSE_STATUS_FUTURE,
+    LICENSE_STATUS_INVALID,
+    LICENSE_STATUS_MISSING,
+    check_license,
+)
 from app.services.permission_service import Permission, has_any_permission_from_db
 from app.ui.components.status_badge import create_health_badge, create_user_badge
 from app.ui.dashboard_data import load_dashboard_data
@@ -339,6 +349,7 @@ class FtmDesktopWindow(QMainWindow):
         logo_title.setObjectName("LogoTitle")
 
         logo_subtitle = QLabel("Finans Takip Merkezi")
+
         logo_subtitle.setObjectName("LogoSubtitle")
 
         user_text = QLabel(f"{self.current_username} / {self.current_role}")
@@ -526,6 +537,8 @@ class FtmDesktopWindow(QMainWindow):
             status=self.dashboard_data.health_status,
         )
 
+        license_badge = self._build_license_badge()
+
         refresh_button = QPushButton("Verileri Yenile")
         refresh_button.setObjectName("RefreshButton")
         refresh_button.setFixedWidth(150)
@@ -534,9 +547,116 @@ class FtmDesktopWindow(QMainWindow):
         layout.addLayout(title_box, 1)
         layout.addWidget(user_badge)
         layout.addWidget(health_badge)
+        layout.addWidget(license_badge)
         layout.addWidget(refresh_button)
 
         return top_bar
+
+    def _build_license_badge(self) -> QLabel:
+        try:
+            license_result = check_license()
+
+            badge_text = self._license_badge_text(
+                status=license_result.status,
+                days_remaining=license_result.days_remaining,
+            )
+            tooltip_text = (
+                f"{license_result.status_label}\n"
+                f"{license_result.message}\n\n"
+                f"Firma: {license_result.company_name or '-'}\n"
+                f"Cihaz Kodu: {license_result.device_code}\n"
+                f"Bitiş: {license_result.expires_at or '-'}\n"
+                f"Lisans Dosyası: {license_result.license_file}"
+            )
+            style_text = self._license_badge_style(license_result.status)
+
+        except Exception as exc:
+            badge_text = "Lisans: Kontrol Hatası"
+            tooltip_text = f"Lisans durumu okunamadı: {exc}"
+            style_text = self._license_badge_style("error")
+
+        badge = QLabel(badge_text)
+        badge.setMinimumHeight(42)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setToolTip(tooltip_text)
+        badge.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        badge.setStyleSheet(style_text)
+
+        return badge
+
+    def _license_badge_text(
+        self,
+        *,
+        status: str,
+        days_remaining: int | None,
+    ) -> str:
+        if status == LICENSE_STATUS_ACTIVE:
+            return "Lisans: Aktif"
+
+        if status == LICENSE_STATUS_EXPIRING_SOON:
+            if days_remaining is None:
+                return "Lisans: Yakında Bitecek"
+
+            if days_remaining <= 0:
+                return "Lisans: Bugün Bitiyor"
+
+            return f"Lisans: {days_remaining} gün kaldı"
+
+        if status == LICENSE_STATUS_MISSING:
+            return "Lisans: Yok"
+
+        if status == LICENSE_STATUS_EXPIRED:
+            return "Lisans: Süresi Doldu"
+
+        if status == LICENSE_STATUS_INVALID:
+            return "Lisans: Geçersiz"
+
+        if status == LICENSE_STATUS_DEVICE_MISMATCH:
+            return "Lisans: Cihaz Uyumsuz"
+
+        if status == LICENSE_STATUS_FUTURE:
+            return "Lisans: Başlamadı"
+
+        return "Lisans: Kontrol Et"
+
+    def _license_badge_style(self, status: str) -> str:
+        if status == LICENSE_STATUS_ACTIVE:
+            return """
+                QLabel {
+                    background-color: #064e3b;
+                    color: #bbf7d0;
+                    border: 1px solid #22c55e;
+                    border-radius: 14px;
+                    padding: 9px 14px;
+                    font-size: 12px;
+                    font-weight: 900;
+                }
+            """
+
+        if status == LICENSE_STATUS_EXPIRING_SOON:
+            return """
+                QLabel {
+                    background-color: #78350f;
+                    color: #fde68a;
+                    border: 1px solid #f59e0b;
+                    border-radius: 14px;
+                    padding: 9px 14px;
+                    font-size: 12px;
+                    font-weight: 900;
+                }
+            """
+
+        return """
+            QLabel {
+                background-color: #7f1d1d;
+                color: #fecaca;
+                border: 1px solid #f87171;
+                border-radius: 14px;
+                padding: 9px 14px;
+                font-size: 12px;
+                font-weight: 900;
+            }
+        """
 
     def _page_subtitle(self) -> str:
         return PAGE_SUBTITLES.get(

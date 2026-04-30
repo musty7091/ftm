@@ -1,7 +1,7 @@
 import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -23,6 +23,12 @@ from app.services.auth_service import (
     AuthenticatedUser,
     authenticate_user,
     hash_password,
+)
+from app.services.license_service import (
+    LICENSE_STATUS_ACTIVE,
+    LICENSE_STATUS_EXPIRING_SOON,
+    LICENSE_STATUS_MISSING,
+    check_license,
 )
 from app.services.setup_service import is_setup_completed
 from app.services.sqlite_setup_apply_service import (
@@ -427,6 +433,74 @@ def _run_initial_setup_if_needed() -> bool:
         return False
 
 
+def _show_license_warning_if_needed(parent=None) -> None:
+    try:
+        license_result = check_license()
+
+    except Exception as exc:
+        QMessageBox.warning(
+            parent,
+            "FTM Lisans Kontrolü",
+            "Lisans durumu kontrol edilirken beklenmeyen bir hata oluştu.\n\n"
+            f"Hata: {exc}\n\n"
+            "Uygulama şu anda uyarı modunda açılmaya devam edecek.",
+        )
+        return
+
+    if license_result.status == LICENSE_STATUS_ACTIVE:
+        return
+
+    if license_result.status == LICENSE_STATUS_EXPIRING_SOON:
+        QMessageBox.warning(
+            parent,
+            "FTM Lisans Uyarısı",
+            f"{license_result.message}\n\n"
+            f"Firma: {license_result.company_name or '-'}\n"
+            f"Bitiş Tarihi: {license_result.expires_at or '-'}\n"
+            f"Kalan Süre: {_format_license_days_remaining(license_result.days_remaining)}\n\n"
+            "Lütfen lisans yenileme sürecini geciktirmeyin.",
+        )
+        return
+
+    if license_result.status == LICENSE_STATUS_MISSING:
+        QMessageBox.warning(
+            parent,
+            "FTM Lisans Bulunamadı",
+            f"{license_result.message}\n\n"
+            f"Cihaz Kodu: {license_result.device_code}\n"
+            f"Lisans Dosyası: {license_result.license_file}\n\n"
+            "Bu aşamada uygulama uyarı modunda açılmaya devam edecek.",
+        )
+        return
+
+    QMessageBox.warning(
+        parent,
+        "FTM Lisans Uyarısı",
+        f"Durum: {license_result.status_label}\n\n"
+        f"{license_result.message}\n\n"
+        f"Firma: {license_result.company_name or '-'}\n"
+        f"Cihaz Kodu: {license_result.device_code}\n"
+        f"Başlangıç: {license_result.starts_at or '-'}\n"
+        f"Bitiş: {license_result.expires_at or '-'}\n"
+        f"Kalan Süre: {_format_license_days_remaining(license_result.days_remaining)}\n"
+        f"Lisans Dosyası: {license_result.license_file}\n\n"
+        "Uygulama şu anda kilitleme yapmadan uyarı modunda açılmaya devam edecek.",
+    )
+
+
+def _format_license_days_remaining(days_remaining: int | None) -> str:
+    if days_remaining is None:
+        return "-"
+
+    if days_remaining < 0:
+        return f"Süresi {abs(days_remaining)} gün önce doldu"
+
+    if days_remaining == 0:
+        return "Bugün bitiyor"
+
+    return f"{days_remaining} gün"
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -447,6 +521,11 @@ def main() -> None:
         current_user=login_dialog.authenticated_user,
     )
     window.showMaximized()
+
+    QTimer.singleShot(
+        400,
+        lambda: _show_license_warning_if_needed(window),
+    )
 
     app.setQuitOnLastWindowClosed(True)
 
