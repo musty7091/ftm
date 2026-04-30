@@ -209,6 +209,7 @@ class LoginDialog(QDialog):
         super().__init__()
 
         self.authenticated_user: Optional[AuthenticatedUser] = None
+        self._allow_dialog_close = False
 
         self.setWindowTitle("FTM Giriş")
         self.setModal(True)
@@ -259,10 +260,14 @@ class LoginDialog(QDialog):
 
         cancel_button = QPushButton("Çıkış")
         cancel_button.setObjectName("CancelButton")
-        cancel_button.clicked.connect(self.reject)
+        cancel_button.setAutoDefault(False)
+        cancel_button.setDefault(False)
+        cancel_button.clicked.connect(self.cancel_login)
 
         login_button = QPushButton("Giriş Yap")
         login_button.setObjectName("LoginButton")
+        login_button.setAutoDefault(False)
+        login_button.setDefault(False)
         login_button.clicked.connect(self.try_login)
 
         button_row.addWidget(cancel_button)
@@ -290,17 +295,44 @@ class LoginDialog(QDialog):
 
         self.identifier_input.setFocus()
 
+    def accept(self) -> None:
+        if self.authenticated_user is None:
+            self.password_input.clear()
+            self.password_input.setFocus()
+            return
+
+        self._allow_dialog_close = True
+        super().accept()
+
+    def reject(self) -> None:
+        if not self._allow_dialog_close:
+            return
+
+        super().reject()
+
+    def cancel_login(self) -> None:
+        self._allow_dialog_close = True
+        self.reject()
+
     def try_login(self) -> None:
         identifier = self.identifier_input.text().strip()
         password = self.password_input.text()
 
         if not identifier:
-            QMessageBox.warning(self, "FTM Giriş", "Kullanıcı adı veya e-posta boş olamaz.")
+            QMessageBox.warning(
+                self,
+                "FTM Giriş",
+                "Kullanıcı adı veya e-posta boş olamaz.",
+            )
             self.identifier_input.setFocus()
             return
 
         if not password:
-            QMessageBox.warning(self, "FTM Giriş", "Şifre boş olamaz.")
+            QMessageBox.warning(
+                self,
+                "FTM Giriş",
+                "Şifre boş olamaz.",
+            )
             self.password_input.setFocus()
             return
 
@@ -337,13 +369,31 @@ class LoginDialog(QDialog):
             self.accept()
 
         except AuthServiceError as exc:
-            QMessageBox.warning(
-                self,
-                "FTM Giriş Başarısız",
-                str(exc),
+            self._show_login_failed_message(str(exc))
+            return
+
+        except Exception as exc:
+            self._show_login_failed_message(
+                "Giriş kontrolü sırasında beklenmeyen bir hata oluştu.\n\n"
+                f"Hata: {exc}"
             )
-            self.password_input.clear()
-            self.password_input.setFocus()
+            return
+
+    def _show_login_failed_message(self, message: str) -> None:
+        self.authenticated_user = None
+        self._allow_dialog_close = False
+
+        QMessageBox.warning(
+            self,
+            "FTM Giriş Başarısız",
+            message,
+        )
+
+        self.password_input.clear()
+        self.password_input.setFocus()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
 
 def _run_initial_setup_if_needed() -> bool:
@@ -363,6 +413,7 @@ def _run_initial_setup_if_needed() -> bool:
 
     setup_dialog = SetupWizardDialog()
     setup_dialog.setWindowModality(Qt.ApplicationModal)
+    setup_dialog.showMaximized()
     setup_dialog.raise_()
     setup_dialog.activateWindow()
 
