@@ -7,11 +7,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-from app.core.config import BASE_DIR
+from app.core.runtime_paths import (
+    ensure_runtime_folders as ensure_core_runtime_folders,
+    get_runtime_paths,
+)
 
 
-SETUP_CONFIG_FOLDER = BASE_DIR / "config"
-SETUP_CONFIG_FILE = SETUP_CONFIG_FOLDER / "app_setup.json"
+RUNTIME_PATHS = get_runtime_paths()
+
+SETUP_CONFIG_FOLDER = RUNTIME_PATHS.config_folder
+SETUP_CONFIG_FILE = RUNTIME_PATHS.config_folder / "app_setup.json"
 
 SUPPORTED_SETUP_DATABASE_ENGINES = {
     "sqlite",
@@ -94,6 +99,8 @@ def load_setup_config() -> SetupConfig:
 
 
 def load_setup_config_dict() -> dict[str, Any]:
+    ensure_core_runtime_folders()
+
     if not SETUP_CONFIG_FILE.exists():
         return normalize_setup_config_payload(default_setup_config_dict())
 
@@ -138,6 +145,7 @@ def save_setup_config_dict(payload: dict[str, Any]) -> dict[str, Any]:
     normalized_data["updated_at"] = now_text
 
     try:
+        ensure_core_runtime_folders()
         SETUP_CONFIG_FOLDER.mkdir(parents=True, exist_ok=True)
 
         with SETUP_CONFIG_FILE.open("w", encoding="utf-8") as file:
@@ -287,13 +295,17 @@ def build_database_url_from_setup_config(setup_config: SetupConfig | None = None
 
 
 def resolve_sqlite_database_path(sqlite_database_path: str) -> Path:
+    ensure_core_runtime_folders()
+
     cleaned_path_text = _clean_sqlite_database_path(sqlite_database_path)
-    database_path = Path(cleaned_path_text)
+    database_path = Path(cleaned_path_text).expanduser()
 
     if database_path.is_absolute():
         return database_path
 
-    return BASE_DIR / database_path
+    runtime_paths = get_runtime_paths()
+
+    return runtime_paths.root_folder / database_path
 
 
 def validate_setup_config_for_completion(payload: dict[str, Any]) -> None:

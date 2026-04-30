@@ -7,6 +7,8 @@ import os
 
 from dotenv import load_dotenv
 
+from app.core.runtime_paths import ensure_runtime_folders, get_runtime_paths
+
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BASE_DIR / ".env"
@@ -23,8 +25,10 @@ SUPPORTED_DATABASE_ENGINES = {
 
 def _get_env(name: str, default: str = "") -> str:
     value = os.getenv(name)
+
     if value is None:
         return default
+
     return value.strip()
 
 
@@ -195,18 +199,26 @@ def _get_database_engine() -> str:
 
 
 def _get_sqlite_database_path() -> Path:
+    ensure_runtime_folders()
+
+    runtime_paths = get_runtime_paths()
+
     sqlite_database_path_text = _get_env_or_setup(
         env_name="SQLITE_DATABASE_PATH",
         setup_name="sqlite_database_path",
         default="data/ftm_local.db",
     )
 
-    sqlite_database_path = Path(sqlite_database_path_text)
+    sqlite_database_path = Path(sqlite_database_path_text).expanduser()
 
     if sqlite_database_path.is_absolute():
-        return sqlite_database_path
+        final_database_path = sqlite_database_path
+    else:
+        final_database_path = runtime_paths.root_folder / sqlite_database_path
 
-    return BASE_DIR / sqlite_database_path
+    final_database_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return final_database_path
 
 
 @dataclass(frozen=True)

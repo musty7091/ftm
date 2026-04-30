@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.core.runtime_paths import ensure_runtime_folders as ensure_core_runtime_folders
 from app.db.session import session_scope
 from app.models.user import User
 from app.services.auth_service import (
@@ -23,7 +24,13 @@ from app.services.auth_service import (
     authenticate_user,
     hash_password,
 )
+from app.services.setup_service import is_setup_completed
+from app.services.sqlite_setup_apply_service import (
+    SqliteSetupApplyServiceError,
+    apply_sqlite_initial_setup,
+)
 from app.ui.desktop_app import FtmDesktopWindow
+from app.ui.setup_wizard_dialog import SetupWizardDialog
 from app.ui.styles import get_application_stylesheet
 
 
@@ -339,9 +346,94 @@ class LoginDialog(QDialog):
             self.password_input.setFocus()
 
 
+def _run_initial_setup_if_needed() -> bool:
+    try:
+        ensure_core_runtime_folders()
+
+        if is_setup_completed():
+            return True
+
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Kurulum Kontrolü",
+            f"Kurulum durumu kontrol edilirken hata oluştu:\n\n{exc}",
+        )
+        return False
+
+    setup_dialog = SetupWizardDialog()
+    setup_dialog.setWindowModality(Qt.ApplicationModal)
+    setup_dialog.raise_()
+    setup_dialog.activateWindow()
+
+    if setup_dialog.exec() != QDialog.Accepted:
+        QMessageBox.warning(
+            None,
+            "FTM İlk Kurulum",
+            "İlk kurulum tamamlanmadan uygulamaya giriş yapılamaz.",
+        )
+        return False
+
+    try:
+        payload = setup_dialog.get_payload()
+
+        if payload.database_engine != "sqlite":
+            QMessageBox.warning(
+                None,
+                "FTM Local Kurulum",
+                "Bu kurulum paketinde şu anda sadece SQLite Local modu destekleniyor.\n\n"
+                "Lütfen veritabanı tipi olarak SQLite seçip kurulumu tekrar başlatın.",
+            )
+            return False
+
+        result = apply_sqlite_initial_setup(
+            sqlite_database_path=payload.sqlite_database_path,
+            company_name=payload.company_name,
+            company_address=payload.company_address,
+            company_phone=payload.company_phone,
+            company_email=payload.company_email,
+            admin_username=payload.admin_username,
+            admin_full_name=payload.admin_full_name,
+            admin_password=payload.admin_password,
+            admin_email=payload.admin_email,
+        )
+
+        QMessageBox.information(
+            None,
+            "FTM İlk Kurulum Tamamlandı",
+            "İlk kurulum başarıyla tamamlandı.\n\n"
+            f"Firma: {result.company_name}\n"
+            f"ADMIN kullanıcı: {result.admin_username}\n"
+            f"Veritabanı: {result.sqlite_database_path}\n\n"
+            "Şimdi giriş ekranına geçilecek.",
+        )
+
+        return True
+
+    except SqliteSetupApplyServiceError as exc:
+        QMessageBox.critical(
+            None,
+            "FTM İlk Kurulum Başarısız",
+            str(exc),
+        )
+        return False
+
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "FTM İlk Kurulum Başarısız",
+            f"İlk kurulum sırasında beklenmeyen hata oluştu:\n\n{exc}",
+        )
+        return False
+
+
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(get_application_stylesheet())
+
+    if not _run_initial_setup_if_needed():
+        sys.exit(0)
 
     login_dialog = LoginDialog()
 
@@ -355,6 +447,8 @@ def main() -> None:
         current_user=login_dialog.authenticated_user,
     )
     window.showMaximized()
+
+    app.setQuitOnLastWindowClosed(True)
 
     sys.exit(app.exec())
 

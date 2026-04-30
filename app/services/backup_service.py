@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.services.app_settings_service import (
     get_backup_folder_path,
     get_control_mail_recipients,
+    get_log_folder_path,
     load_app_settings,
 )
 from app.services.mail_service import MailServiceError, parse_mail_recipients, send_mail
@@ -158,16 +159,10 @@ def _get_backup_folder() -> Path:
 
 def _get_log_folder() -> Path:
     try:
-        app_settings = load_app_settings()
-        project_root = _get_project_root()
-        folder_path = Path(app_settings.log_folder)
+        log_folder = get_log_folder_path()
+        log_folder.mkdir(parents=True, exist_ok=True)
 
-        if not folder_path.is_absolute():
-            folder_path = project_root / folder_path
-
-        folder_path.mkdir(parents=True, exist_ok=True)
-
-        return folder_path
+        return log_folder
 
     except Exception:
         return _get_folder_from_env("LOG_FOLDER", "logs")

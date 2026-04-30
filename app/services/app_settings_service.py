@@ -7,11 +7,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.config import BASE_DIR, settings
+from app.core.config import settings
+from app.core.runtime_paths import (
+    ensure_runtime_folders as ensure_core_runtime_folders,
+    get_runtime_paths,
+)
 
 
-CONFIG_FOLDER = BASE_DIR / "config"
-APP_SETTINGS_FILE = CONFIG_FOLDER / "app_settings.json"
+RUNTIME_PATHS = get_runtime_paths()
+
+CONFIG_FOLDER = RUNTIME_PATHS.config_folder
+APP_SETTINGS_FILE = RUNTIME_PATHS.app_settings_file
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,7 @@ def save_app_settings_dict(payload: dict[str, Any]) -> dict[str, Any]:
     normalized_data = normalize_app_settings_payload(payload)
 
     try:
+        ensure_core_runtime_folders()
         CONFIG_FOLDER.mkdir(parents=True, exist_ok=True)
 
         with APP_SETTINGS_FILE.open("w", encoding="utf-8") as file:
@@ -178,6 +185,8 @@ def update_app_settings(
 
 
 def ensure_app_settings_file_exists() -> None:
+    ensure_core_runtime_folders()
+
     if APP_SETTINGS_FILE.exists():
         return
 
@@ -250,15 +259,19 @@ def get_log_folder_path() -> Path:
 
 def resolve_runtime_folder(folder_value: str) -> Path:
     cleaned_folder = _clean_folder_text(folder_value, "outputs")
-    folder_path = Path(cleaned_folder)
+    folder_path = Path(cleaned_folder).expanduser()
 
     if folder_path.is_absolute():
         return folder_path
 
-    return BASE_DIR / folder_path
+    runtime_paths = get_runtime_paths()
+
+    return runtime_paths.root_folder / folder_path
 
 
 def ensure_runtime_folders() -> dict[str, str]:
+    ensure_core_runtime_folders()
+
     app_settings = load_app_settings()
 
     folders = {
@@ -314,6 +327,7 @@ def normalize_mail_recipients_text(value: Any) -> str:
 
 def describe_app_settings_status() -> list[dict[str, str]]:
     app_settings = load_app_settings()
+    runtime_paths = get_runtime_paths()
 
     rows: list[dict[str, str]] = []
 
@@ -330,6 +344,14 @@ def describe_app_settings_status() -> list[dict[str, str]]:
             "Firma E-posta",
             app_settings.company_email or "-",
             "OK" if not app_settings.company_email or _is_valid_email(app_settings.company_email) else "WARN",
+        )
+    )
+
+    rows.append(
+        _status_row(
+            "FTM Çalışma Klasörü",
+            str(runtime_paths.root_folder),
+            "OK" if runtime_paths.root_folder.exists() and runtime_paths.root_folder.is_dir() else "WARN",
         )
     )
 
