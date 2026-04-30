@@ -69,4 +69,5 @@ daily_backups/
 # Secret / certificate files
 *.key
 *.pem
-'@
+'@licenses/
+*.ftmlic

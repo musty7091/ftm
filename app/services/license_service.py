@@ -102,7 +102,27 @@ def build_license_data(
     starts_at: date | None = None,
     notes: str = "",
 ) -> LicenseData:
+    return build_license_data_for_device_code(
+        company_name=company_name,
+        device_code=get_device_code(),
+        valid_days=valid_days,
+        license_type=license_type,
+        starts_at=starts_at,
+        notes=notes,
+    )
+
+
+def build_license_data_for_device_code(
+    *,
+    company_name: str,
+    device_code: str,
+    valid_days: int = 365,
+    license_type: str = "annual",
+    starts_at: date | None = None,
+    notes: str = "",
+) -> LicenseData:
     cleaned_company_name = _clean_required_text(company_name, "Firma adı")
+    cleaned_device_code = _clean_device_code(device_code)
     cleaned_license_type = _clean_text(license_type, "annual")
     cleaned_notes = _clean_text(notes, "")
 
@@ -113,12 +133,11 @@ def build_license_data(
     license_expire_date = license_start_date + timedelta(days=valid_days)
 
     issued_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    device_code = get_device_code()
 
     signature_payload = {
         "company_name": cleaned_company_name,
         "license_type": cleaned_license_type,
-        "device_code": device_code,
+        "device_code": cleaned_device_code,
         "starts_at": license_start_date.strftime(LICENSE_DATE_FORMAT),
         "expires_at": license_expire_date.strftime(LICENSE_DATE_FORMAT),
         "issued_at": issued_at,
@@ -130,7 +149,7 @@ def build_license_data(
     return LicenseData(
         company_name=cleaned_company_name,
         license_type=cleaned_license_type,
-        device_code=device_code,
+        device_code=cleaned_device_code,
         starts_at=signature_payload["starts_at"],
         expires_at=signature_payload["expires_at"],
         issued_at=issued_at,
@@ -164,6 +183,35 @@ def create_license_file(
     return license_data
 
 
+def create_license_file_for_device_code(
+    *,
+    company_name: str,
+    device_code: str,
+    output_file: str | Path,
+    valid_days: int = 365,
+    license_type: str = "annual",
+    starts_at: date | None = None,
+    notes: str = "",
+    overwrite: bool = False,
+) -> LicenseData:
+    license_data = build_license_data_for_device_code(
+        company_name=company_name,
+        device_code=device_code,
+        valid_days=valid_days,
+        license_type=license_type,
+        starts_at=starts_at,
+        notes=notes,
+    )
+
+    save_license_data_to_file(
+        license_data=license_data,
+        output_file=output_file,
+        overwrite=overwrite,
+    )
+
+    return license_data
+
+
 def save_license_data(
     *,
     license_data: LicenseData,
@@ -176,6 +224,41 @@ def save_license_data(
     if target_file.exists() and not overwrite:
         raise LicenseServiceError(
             f"Lisans dosyası zaten mevcut: {target_file}"
+        )
+
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = asdict(license_data)
+
+    with target_file.open("w", encoding="utf-8") as file:
+        json.dump(
+            payload,
+            file,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        file.write("\n")
+
+    return target_file
+
+
+def save_license_data_to_file(
+    *,
+    license_data: LicenseData,
+    output_file: str | Path,
+    overwrite: bool = False,
+) -> Path:
+    target_file = Path(output_file).expanduser()
+
+    if target_file.exists() and not overwrite:
+        raise LicenseServiceError(
+            f"Lisans çıktı dosyası zaten mevcut: {target_file}"
+        )
+
+    if target_file.suffix.lower() not in {".json", ".ftmlic"}:
+        raise LicenseServiceError(
+            "Lisans çıktı dosyası uzantısı .json veya .ftmlic olmalıdır."
         )
 
     target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -496,6 +579,41 @@ def _format_device_code(machine_hash: str) -> str:
     return "FTM-" + "-".join(parts)
 
 
+def _clean_device_code(value: Any) -> str:
+    cleaned_value = str(value or "").strip().upper()
+
+    if not cleaned_value:
+        raise LicenseServiceError("Cihaz kodu boş olamaz.")
+
+    if not cleaned_value.startswith("FTM-"):
+        raise LicenseServiceError("Cihaz kodu FTM- ile başlamalıdır.")
+
+    parts = cleaned_value.split("-")
+
+    if len(parts) != 6:
+        raise LicenseServiceError(
+            "Cihaz kodu formatı geçersiz. Beklenen format: FTM-XXXX-XXXX-XXXX-XXXX-XXXX"
+        )
+
+    if parts[0] != "FTM":
+        raise LicenseServiceError(
+            "Cihaz kodu formatı geçersiz. Beklenen format: FTM-XXXX-XXXX-XXXX-XXXX-XXXX"
+        )
+
+    for part in parts[1:]:
+        if len(part) != 4:
+            raise LicenseServiceError(
+                "Cihaz kodu formatı geçersiz. Her kod bölümü 4 karakter olmalıdır."
+            )
+
+        if not part.isalnum():
+            raise LicenseServiceError(
+                "Cihaz kodu formatı geçersiz. Kod yalnızca harf ve rakam içermelidir."
+            )
+
+    return cleaned_value
+
+
 def _clean_required_text(value: Any, field_name: str) -> str:
     cleaned_value = str(value or "").strip()
 
@@ -531,8 +649,11 @@ __all__ = [
     "license_file_exists",
     "get_device_code",
     "build_license_data",
+    "build_license_data_for_device_code",
     "create_license_file",
+    "create_license_file_for_device_code",
     "save_license_data",
+    "save_license_data_to_file",
     "load_license_data",
     "check_license",
     "license_data_to_dict",

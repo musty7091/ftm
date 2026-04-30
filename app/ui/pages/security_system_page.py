@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import json
+import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from app.services.license_service import check_license
+from app.services.license_service import check_license, license_file_path
 from app.ui.navigation import role_to_text, username_to_text
 from app.ui.pages.placeholder_page import AccessDeniedPage
 from app.ui.pages.security_system import (
@@ -268,113 +275,360 @@ class SecuritySystemPage(QWidget):
         return hero
 
 
+class LicenseTabPage(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(18, 18, 18, 18)
+        self.main_layout.setSpacing(14)
+
+        self.render()
+
+    def render(self) -> None:
+        _clear_layout(self.main_layout)
+
+        license_result = check_license()
+
+        self.main_layout.addWidget(self._build_summary_card(license_result))
+        self.main_layout.addWidget(self._build_action_card(license_result))
+        self.main_layout.addWidget(self._build_detail_card(license_result))
+        self.main_layout.addWidget(self._build_info_card())
+        self.main_layout.addStretch(1)
+
+    def _build_summary_card(self, license_result: Any) -> QWidget:
+        summary_card = QFrame()
+        summary_card.setObjectName("SecuritySystemHero")
+
+        summary_layout = QVBoxLayout(summary_card)
+        summary_layout.setContentsMargins(20, 18, 20, 18)
+        summary_layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+
+        title = QLabel("Lisans Durumu")
+        title.setObjectName("SecuritySystemTitle")
+
+        status_badge = QLabel(license_result.status_label)
+        status_badge.setObjectName("SecuritySystemAdminBadge")
+
+        title_row.addWidget(title, 1)
+        title_row.addWidget(status_badge, 0, Qt.AlignVCenter)
+
+        message = QLabel(license_result.message)
+        message.setObjectName("SecuritySystemSubTitle")
+        message.setWordWrap(True)
+
+        summary_layout.addLayout(title_row)
+        summary_layout.addWidget(message)
+
+        return summary_card
+
+    def _build_action_card(self, license_result: Any) -> QWidget:
+        action_card = QFrame()
+        action_card.setObjectName("SecuritySystemHero")
+
+        action_layout = QVBoxLayout(action_card)
+        action_layout.setContentsMargins(20, 18, 20, 18)
+        action_layout.setSpacing(12)
+
+        title = QLabel("Lisans İşlemleri")
+        title.setObjectName("SecuritySystemTitle")
+
+        description = QLabel(
+            "Müşteri cihaz kodunu buradan kopyalayabilir. "
+            "Gönderilen lisans dosyası yine bu ekrandan seçilerek yüklenebilir."
+        )
+        description.setObjectName("SecuritySystemSubTitle")
+        description.setWordWrap(True)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
+        copy_device_button = QPushButton("Cihaz Kodunu Kopyala")
+        copy_device_button.setObjectName("PrimaryButton")
+        copy_device_button.setMinimumHeight(40)
+        copy_device_button.clicked.connect(
+            lambda: self.copy_device_code(license_result.device_code)
+        )
+
+        load_license_button = QPushButton("Lisans Dosyası Yükle")
+        load_license_button.setObjectName("RefreshButton")
+        load_license_button.setMinimumHeight(40)
+        load_license_button.clicked.connect(self.load_license_file)
+
+        refresh_button = QPushButton("Lisans Durumunu Yenile")
+        refresh_button.setObjectName("RefreshButton")
+        refresh_button.setMinimumHeight(40)
+        refresh_button.clicked.connect(self.render)
+
+        button_row.addWidget(copy_device_button)
+        button_row.addWidget(load_license_button)
+        button_row.addWidget(refresh_button)
+        button_row.addStretch(1)
+
+        action_layout.addWidget(title)
+        action_layout.addWidget(description)
+        action_layout.addLayout(button_row)
+
+        return action_card
+
+    def _build_detail_card(self, license_result: Any) -> QWidget:
+        detail_card = QFrame()
+        detail_card.setObjectName("SecuritySystemHero")
+
+        detail_layout = QVBoxLayout(detail_card)
+        detail_layout.setContentsMargins(20, 18, 20, 18)
+        detail_layout.setSpacing(12)
+
+        detail_title = QLabel("Lisans Bilgileri")
+        detail_title.setObjectName("SecuritySystemTitle")
+
+        detail_grid = QGridLayout()
+        detail_grid.setHorizontalSpacing(18)
+        detail_grid.setVerticalSpacing(10)
+
+        rows = [
+            ("Durum", license_result.status_label),
+            ("Firma", license_result.company_name or "-"),
+            ("Lisans Tipi", license_result.license_type or "-"),
+            ("Cihaz Kodu", license_result.device_code),
+            ("Başlangıç Tarihi", _format_license_date(license_result.starts_at)),
+            ("Bitiş Tarihi", _format_license_date(license_result.expires_at)),
+            ("Kalan Süre", _format_days_remaining(license_result.days_remaining)),
+            ("Lisans Dosyası", str(license_result.license_file)),
+            ("Uygulama Açılışı", "İzin Var" if license_result.allow_app_open else "Engelli"),
+            ("Veri Girişi", "İzin Var" if license_result.allow_data_entry else "Engelli"),
+        ]
+
+        for row_index, (label_text, value_text) in enumerate(rows):
+            label = QLabel(label_text)
+            label.setObjectName("SecuritySystemSubTitle")
+
+            value = QLabel(str(value_text))
+            value.setObjectName("SecuritySystemSubTitle")
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+            detail_grid.addWidget(label, row_index, 0, Qt.AlignTop)
+            detail_grid.addWidget(value, row_index, 1)
+
+        detail_grid.setColumnStretch(0, 0)
+        detail_grid.setColumnStretch(1, 1)
+
+        detail_layout.addWidget(detail_title)
+        detail_layout.addLayout(detail_grid)
+
+        return detail_card
+
+    def _build_info_card(self) -> QWidget:
+        info_card = QFrame()
+        info_card.setObjectName("SecuritySystemHero")
+
+        info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(20, 18, 20, 18)
+        info_layout.setSpacing(8)
+
+        info_title = QLabel("Not")
+        info_title.setObjectName("SecuritySystemTitle")
+
+        info_text = QLabel(
+            "Bu aşamada lisans sistemi uyarı modundadır. "
+            "Lisans yoksa veya süresi dolmuşsa bilgi verir; programı henüz tamamen kilitlemez. "
+            "Müşteri lisans dosyasını bu ekrandan yükleyebilir."
+        )
+        info_text.setObjectName("SecuritySystemSubTitle")
+        info_text.setWordWrap(True)
+
+        info_layout.addWidget(info_title)
+        info_layout.addWidget(info_text)
+
+        return info_card
+
+    def copy_device_code(self, device_code: str) -> None:
+        cleaned_device_code = str(device_code or "").strip()
+
+        if not cleaned_device_code:
+            QMessageBox.warning(
+                self,
+                "Cihaz Kodu Kopyalanamadı",
+                "Cihaz kodu boş görünüyor. Lisans ekranını yenileyip tekrar deneyin.",
+            )
+            return
+
+        clipboard = QApplication.clipboard()
+        clipboard.setText(cleaned_device_code)
+
+        QMessageBox.information(
+            self,
+            "Cihaz Kodu Kopyalandı",
+            "Cihaz kodu panoya kopyalandı.\n\n"
+            f"{cleaned_device_code}\n\n"
+            "Bu kodu lisans oluşturmak için kullanabilirsiniz.",
+        )
+
+    def load_license_file(self) -> None:
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Lisans Dosyası Seç",
+            "",
+            "FTM Lisans Dosyası (*.json *.ftmlic);;JSON Dosyası (*.json);;Tüm Dosyalar (*.*)",
+        )
+
+        if not selected_file:
+            return
+
+        source_path = Path(selected_file)
+
+        validation_error = _validate_license_file_for_install(source_path)
+
+        if validation_error:
+            QMessageBox.critical(
+                self,
+                "Lisans Dosyası Yüklenemedi",
+                validation_error,
+            )
+            return
+
+        target_path = license_file_path()
+
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if target_path.exists():
+                backup_path = _build_existing_license_backup_path(target_path)
+                shutil.copy2(target_path, backup_path)
+
+            shutil.copy2(source_path, target_path)
+
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Lisans Dosyası Yüklenemedi",
+                f"Lisans dosyası kopyalanırken hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.render()
+
+        refreshed_result = check_license()
+
+        if refreshed_result.is_valid:
+            QMessageBox.information(
+                self,
+                "Lisans Dosyası Yüklendi",
+                "Lisans dosyası başarıyla yüklendi.\n\n"
+                f"Durum: {refreshed_result.status_label}\n"
+                f"Firma: {refreshed_result.company_name or '-'}\n"
+                f"Bitiş Tarihi: {_format_license_date(refreshed_result.expires_at)}",
+            )
+            return
+
+        QMessageBox.warning(
+            self,
+            "Lisans Dosyası Yüklendi Ancak Aktif Değil",
+            "Lisans dosyası doğru klasöre yüklendi fakat geçerli görünmüyor.\n\n"
+            f"Durum: {refreshed_result.status_label}\n"
+            f"Açıklama: {refreshed_result.message}",
+        )
+
+
 def build_license_tab() -> QWidget:
-    page = QWidget()
+    return LicenseTabPage()
 
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(18, 18, 18, 18)
-    layout.setSpacing(14)
 
-    license_result = check_license()
+def _validate_license_file_for_install(source_path: Path) -> str | None:
+    if not source_path.exists():
+        return f"Seçilen lisans dosyası bulunamadı:\n\n{source_path}"
 
-    summary_card = QFrame()
-    summary_card.setObjectName("SecuritySystemHero")
+    if not source_path.is_file():
+        return f"Seçilen yol bir dosya değil:\n\n{source_path}"
 
-    summary_layout = QVBoxLayout(summary_card)
-    summary_layout.setContentsMargins(20, 18, 20, 18)
-    summary_layout.setSpacing(10)
+    if source_path.suffix.lower() not in {".json", ".ftmlic"}:
+        return (
+            "Lisans dosyası uzantısı geçersiz.\n\n"
+            "Beklenen dosya türü: .json veya .ftmlic"
+        )
 
-    title_row = QHBoxLayout()
-    title_row.setSpacing(10)
+    try:
+        with source_path.open("r", encoding="utf-8") as file:
+            loaded_data = json.load(file)
 
-    title = QLabel("Lisans Durumu")
-    title.setObjectName("SecuritySystemTitle")
+    except json.JSONDecodeError:
+        return (
+            "Lisans dosyası okunamadı.\n\n"
+            "Dosya JSON formatında değil veya bozuk görünüyor."
+        )
 
-    status_badge = QLabel(license_result.status_label)
-    status_badge.setObjectName("SecuritySystemAdminBadge")
+    except OSError as exc:
+        return f"Lisans dosyası okunamadı:\n\n{exc}"
 
-    title_row.addWidget(title, 1)
-    title_row.addWidget(status_badge, 0, Qt.AlignVCenter)
+    if not isinstance(loaded_data, dict):
+        return "Lisans dosyası geçersiz. Dosya içeriği JSON nesnesi olmalıdır."
 
-    message = QLabel(license_result.message)
-    message.setObjectName("SecuritySystemSubTitle")
-    message.setWordWrap(True)
-
-    summary_layout.addLayout(title_row)
-    summary_layout.addWidget(message)
-
-    detail_card = QFrame()
-    detail_card.setObjectName("SecuritySystemHero")
-
-    detail_layout = QVBoxLayout(detail_card)
-    detail_layout.setContentsMargins(20, 18, 20, 18)
-    detail_layout.setSpacing(12)
-
-    detail_title = QLabel("Lisans Bilgileri")
-    detail_title.setObjectName("SecuritySystemTitle")
-
-    detail_grid = QGridLayout()
-    detail_grid.setHorizontalSpacing(18)
-    detail_grid.setVerticalSpacing(10)
-
-    rows = [
-        ("Durum", license_result.status_label),
-        ("Firma", license_result.company_name or "-"),
-        ("Lisans Tipi", license_result.license_type or "-"),
-        ("Cihaz Kodu", license_result.device_code),
-        ("Başlangıç Tarihi", _format_license_date(license_result.starts_at)),
-        ("Bitiş Tarihi", _format_license_date(license_result.expires_at)),
-        ("Kalan Süre", _format_days_remaining(license_result.days_remaining)),
-        ("Lisans Dosyası", str(license_result.license_file)),
-        ("Uygulama Açılışı", "İzin Var" if license_result.allow_app_open else "Engelli"),
-        ("Veri Girişi", "İzin Var" if license_result.allow_data_entry else "Engelli"),
+    required_fields = [
+        "company_name",
+        "license_type",
+        "device_code",
+        "starts_at",
+        "expires_at",
+        "issued_at",
+        "notes",
+        "signature",
     ]
 
-    for row_index, (label_text, value_text) in enumerate(rows):
-        label = QLabel(label_text)
-        label.setObjectName("SecuritySystemSubTitle")
+    missing_fields = [
+        field_name
+        for field_name in required_fields
+        if field_name not in loaded_data
+    ]
 
-        value = QLabel(str(value_text))
-        value.setObjectName("SecuritySystemSubTitle")
-        value.setWordWrap(True)
-        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    if missing_fields:
+        return (
+            "Lisans dosyası eksik alanlar içeriyor.\n\n"
+            "Eksik alanlar: " + ", ".join(missing_fields)
+        )
 
-        detail_grid.addWidget(label, row_index, 0, Qt.AlignTop)
-        detail_grid.addWidget(value, row_index, 1)
+    return None
 
-    detail_grid.setColumnStretch(0, 0)
-    detail_grid.setColumnStretch(1, 1)
 
-    detail_layout.addWidget(detail_title)
-    detail_layout.addLayout(detail_grid)
+def _build_existing_license_backup_path(target_path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    info_card = QFrame()
-    info_card.setObjectName("SecuritySystemHero")
-
-    info_layout = QVBoxLayout(info_card)
-    info_layout.setContentsMargins(20, 18, 20, 18)
-    info_layout.setSpacing(8)
-
-    info_title = QLabel("Not")
-    info_title.setObjectName("SecuritySystemTitle")
-
-    info_text = QLabel(
-        "Bu aşamada lisans sistemi uyarı modundadır. "
-        "Lisans yoksa veya süresi dolmuşsa bilgi verir; programı henüz tamamen kilitlemez. "
-        "Sonraki adımda açılış uyarısı ve istenirse veri girişi kısıtlaması eklenebilir."
+    return target_path.with_name(
+        f"{target_path.stem}.backup_{timestamp}{target_path.suffix}"
     )
-    info_text.setObjectName("SecuritySystemSubTitle")
-    info_text.setWordWrap(True)
 
-    info_layout.addWidget(info_title)
-    info_layout.addWidget(info_text)
 
-    layout.addWidget(summary_card)
-    layout.addWidget(detail_card)
-    layout.addWidget(info_card)
-    layout.addStretch(1)
+def _clear_layout(layout: QVBoxLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
 
-    return page
+        child_widget = item.widget()
+        child_layout = item.layout()
+
+        if child_widget is not None:
+            child_widget.setParent(None)
+            child_widget.deleteLater()
+
+        if child_layout is not None:
+            _clear_nested_layout(child_layout)
+
+
+def _clear_nested_layout(layout: Any) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+
+        child_widget = item.widget()
+        child_layout = item.layout()
+
+        if child_widget is not None:
+            child_widget.setParent(None)
+            child_widget.deleteLater()
+
+        if child_layout is not None:
+            _clear_nested_layout(child_layout)
 
 
 def _format_license_date(value: str) -> str:
