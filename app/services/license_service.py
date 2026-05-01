@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -11,11 +12,17 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
+
 from app.core.runtime_paths import ensure_runtime_folders, get_runtime_paths
+from app.services.license_public_key import load_license_public_key
 
 
 LICENSE_DATE_FORMAT = "%Y-%m-%d"
 LICENSE_WARNING_DAYS = 30
+
+SIGNED_LICENSE_VERSION = 2
+SIGNED_LICENSE_ALGORITHM = "Ed25519"
 
 LICENSE_STATUS_MISSING = "missing"
 LICENSE_STATUS_ACTIVE = "active"
@@ -23,6 +30,7 @@ LICENSE_STATUS_EXPIRING_SOON = "expiring_soon"
 LICENSE_STATUS_EXPIRED = "expired"
 LICENSE_STATUS_FUTURE = "future"
 LICENSE_STATUS_INVALID = "invalid"
+LICENSE_STATUS_SIGNATURE_INVALID = "signature_invalid"
 LICENSE_STATUS_DEVICE_MISMATCH = "device_mismatch"
 
 BASIC_LICENSE_SIGNATURE_SALT = "FTM_LOCAL_LICENSE_V1_BASIC_CHECK"
@@ -278,7 +286,7 @@ def save_license_data_to_file(
     return target_file
 
 
-def load_license_data() -> LicenseData:
+def load_license_file_dict() -> dict[str, Any]:
     target_file = license_file_path()
 
     if not target_file.exists():
@@ -304,6 +312,12 @@ def load_license_data() -> LicenseData:
         raise LicenseServiceError(
             "Lisans dosyası geçersiz. JSON kök değeri nesne olmalıdır."
         )
+
+    return loaded_data
+
+
+def load_license_data() -> LicenseData:
+    loaded_data = load_license_file_dict()
 
     return _license_data_from_dict(loaded_data)
 
@@ -494,6 +508,95 @@ def license_check_result_to_dict(result: LicenseCheckResult) -> dict[str, Any]:
     return payload
 
 
+def is_signed_license_file_data(data: dict[str, Any]) -> bool:
+    return (
+        isinstance(data, dict)
+        and int(data.get("version") or 0) == SIGNED_LICENSE_VERSION
+        and str(data.get("algorithm") or "").strip() == SIGNED_LICENSE_ALGORITHM
+        and isinstance(data.get("payload"), dict)
+        and isinstance(data.get("signature"), str)
+    )
+
+
+def canonicalize_signed_license_payload(payload: dict[str, Any]) -> bytes:
+    if not isinstance(payload, dict):
+        raise LicenseServiceError("İmzalı lisans payload değeri nesne olmalıdır.")
+
+    payload_text = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return payload_text.encode("utf-8")
+
+
+def verify_signed_license_file_data(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Version 2 imzalı lisans dosyasını public key ile doğrular.
+
+    Başarılı olursa imzalanmış payload sözlüğünü döndürür.
+    Başarısız olursa LicenseServiceError fırlatır.
+    """
+
+    if not isinstance(data, dict):
+        raise LicenseServiceError("Lisans dosyası geçersiz. JSON kök değeri nesne olmalıdır.")
+
+    version = int(data.get("version") or 0)
+
+    if version != SIGNED_LICENSE_VERSION:
+        raise LicenseServiceError(
+            f"İmzalı lisans sürümü geçersiz. Beklenen: {SIGNED_LICENSE_VERSION}"
+        )
+
+    algorithm = str(data.get("algorithm") or "").strip()
+
+    if algorithm != SIGNED_LICENSE_ALGORITHM:
+        raise LicenseServiceError(
+            f"İmzalı lisans algoritması geçersiz. Beklenen: {SIGNED_LICENSE_ALGORITHM}"
+        )
+
+    payload = data.get("payload")
+
+    if not isinstance(payload, dict):
+        raise LicenseServiceError("İmzalı lisans payload alanı eksik veya geçersiz.")
+
+    signature_text = str(data.get("signature") or "").strip()
+
+    if not signature_text:
+        raise LicenseServiceError("İmzalı lisans imza alanı boş olamaz.")
+
+    try:
+        signature_bytes = base64.b64decode(
+            signature_text.encode("ascii"),
+            validate=True,
+        )
+
+    except Exception as exc:
+        raise LicenseServiceError(
+            "İmzalı lisans imza alanı Base64 formatında değil."
+        ) from exc
+
+    payload_bytes = canonicalize_signed_license_payload(payload)
+
+    try:
+        public_key = load_license_public_key()
+        public_key.verify(signature_bytes, payload_bytes)
+
+    except InvalidSignature as exc:
+        raise LicenseServiceError(
+            "Lisans imzası geçersiz. Lisans dosyası değiştirilmiş veya sahte üretilmiş olabilir."
+        ) from exc
+
+    except Exception as exc:
+        raise LicenseServiceError(
+            f"Lisans imzası doğrulanamadı: {exc}"
+        ) from exc
+
+    return payload
+
+
 def _license_data_from_dict(data: dict[str, Any]) -> LicenseData:
     return LicenseData(
         company_name=_clean_required_text(data.get("company_name"), "Firma adı"),
@@ -635,12 +738,15 @@ def _clean_text(value: Any, default: str = "") -> str:
 __all__ = [
     "LICENSE_DATE_FORMAT",
     "LICENSE_WARNING_DAYS",
+    "SIGNED_LICENSE_VERSION",
+    "SIGNED_LICENSE_ALGORITHM",
     "LICENSE_STATUS_MISSING",
     "LICENSE_STATUS_ACTIVE",
     "LICENSE_STATUS_EXPIRING_SOON",
     "LICENSE_STATUS_EXPIRED",
     "LICENSE_STATUS_FUTURE",
     "LICENSE_STATUS_INVALID",
+    "LICENSE_STATUS_SIGNATURE_INVALID",
     "LICENSE_STATUS_DEVICE_MISMATCH",
     "LicenseData",
     "LicenseCheckResult",
@@ -654,8 +760,12 @@ __all__ = [
     "create_license_file_for_device_code",
     "save_license_data",
     "save_license_data_to_file",
+    "load_license_file_dict",
     "load_license_data",
     "check_license",
     "license_data_to_dict",
     "license_check_result_to_dict",
+    "is_signed_license_file_data",
+    "canonicalize_signed_license_payload",
+    "verify_signed_license_file_data",
 ]
