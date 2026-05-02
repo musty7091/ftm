@@ -16,6 +16,18 @@ from cryptography.exceptions import InvalidSignature
 
 from app.core.runtime_paths import ensure_runtime_folders, get_runtime_paths
 from app.services.license_public_key import load_license_public_key
+from app.services.license_event_log_service import (
+    LICENSE_EVENT_ACTIVE,
+    LICENSE_EVENT_CHECK_FINISHED,
+    LICENSE_EVENT_DEVICE_MISMATCH,
+    LICENSE_EVENT_EXPIRED,
+    LICENSE_EVENT_EXPIRING_SOON,
+    LICENSE_EVENT_FILE_INVALID,
+    LICENSE_EVENT_FILE_MISSING,
+    LICENSE_EVENT_FUTURE,
+    LICENSE_EVENT_SIGNATURE_INVALID,
+    write_license_check_result_event,
+)
 
 
 LICENSE_DATE_FORMAT = "%Y-%m-%d"
@@ -351,22 +363,24 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
     target_file = license_file_path()
 
     if not target_file.exists():
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_MISSING,
-            status_label="Lisans Yok",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name="",
-            license_type="",
-            starts_at="",
-            expires_at="",
-            days_remaining=None,
-            message=(
-                "Lisans dosyası bulunamadı. "
-                "Uygulama açılabilir ancak veri girişi için imzalı lisans gereklidir."
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_MISSING,
+                status_label="Lisans Yok",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=(
+                    "Lisans dosyası bulunamadı. "
+                    "Uygulama açılabilir ancak veri girişi için imzalı lisans gereklidir."
+                ),
             ),
         )
 
@@ -374,40 +388,46 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
         license_file_data = load_license_file_dict()
 
     except LicenseServiceError as exc:
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_INVALID,
-            status_label="Lisans Geçersiz",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name="",
-            license_type="",
-            starts_at="",
-            expires_at="",
-            days_remaining=None,
-            message=str(exc),
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_INVALID,
+                status_label="Lisans Geçersiz",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=str(exc),
+            ),
+            details={"error_source": "load_license_file_dict"},
         )
 
     if not is_signed_license_file_data(license_file_data):
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_INVALID,
-            status_label="Lisans Geçersiz",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name="",
-            license_type="",
-            starts_at="",
-            expires_at="",
-            days_remaining=None,
-            message=(
-                "Bu lisans dosyası eski formatta veya imzasız görünüyor. "
-                "FTM artık yalnızca version 2 Ed25519 imzalı lisansları kabul eder."
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_INVALID,
+                status_label="Lisans Geçersiz",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=(
+                    "Bu lisans dosyası eski formatta veya imzasız görünüyor. "
+                    "FTM artık yalnızca version 2 Ed25519 imzalı lisansları kabul eder."
+                ),
             ),
+            details={"error_source": "is_signed_license_file_data"},
         )
 
     try:
@@ -422,9 +442,29 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
         error_message = str(exc)
 
         if "imza" in error_message.lower():
-            return LicenseCheckResult(
-                status=LICENSE_STATUS_SIGNATURE_INVALID,
-                status_label="Lisans İmzası Geçersiz",
+            return _finalize_license_check_result(
+                LicenseCheckResult(
+                    status=LICENSE_STATUS_SIGNATURE_INVALID,
+                    status_label="Lisans İmzası Geçersiz",
+                    is_valid=False,
+                    allow_app_open=True,
+                    allow_data_entry=False,
+                    license_file=target_file,
+                    device_code=current_device_code,
+                    company_name="",
+                    license_type="",
+                    starts_at="",
+                    expires_at="",
+                    days_remaining=None,
+                    message=error_message,
+                ),
+                details={"error_source": "verify_signed_license_file_data"},
+            )
+
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_INVALID,
+                status_label="Lisans Geçersiz",
                 is_valid=False,
                 allow_app_open=True,
                 allow_data_entry=False,
@@ -436,42 +476,31 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
                 expires_at="",
                 days_remaining=None,
                 message=error_message,
-            )
-
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_INVALID,
-            status_label="Lisans Geçersiz",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name="",
-            license_type="",
-            starts_at="",
-            expires_at="",
-            days_remaining=None,
-            message=error_message,
+            ),
+            details={"error_source": "verify_signed_license_file_data"},
         )
 
     if license_data.device_code != current_device_code:
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_DEVICE_MISMATCH,
-            status_label="Cihaz Uyumsuz",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name=license_data.company_name,
-            license_type=license_data.license_type,
-            starts_at=license_data.starts_at,
-            expires_at=license_data.expires_at,
-            days_remaining=None,
-            message=(
-                "Bu lisans dosyası bu bilgisayara ait görünmüyor. "
-                "Lisansın bağlı olduğu cihaz kodu farklı."
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_DEVICE_MISMATCH,
+                status_label="Cihaz Uyumsuz",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name=license_data.company_name,
+                license_type=license_data.license_type,
+                starts_at=license_data.starts_at,
+                expires_at=license_data.expires_at,
+                days_remaining=None,
+                message=(
+                    "Bu lisans dosyası bu bilgisayara ait görünmüyor. "
+                    "Lisansın bağlı olduğu cihaz kodu farklı."
+                ),
             ),
+            details={"license_device_code": license_data.device_code},
         )
 
     try:
@@ -485,64 +514,93 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
         )
 
     except LicenseServiceError as exc:
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_INVALID,
-            status_label="Lisans Geçersiz",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name=license_data.company_name,
-            license_type=license_data.license_type,
-            starts_at=license_data.starts_at,
-            expires_at=license_data.expires_at,
-            days_remaining=None,
-            message=str(exc),
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_INVALID,
+                status_label="Lisans Geçersiz",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name=license_data.company_name,
+                license_type=license_data.license_type,
+                starts_at=license_data.starts_at,
+                expires_at=license_data.expires_at,
+                days_remaining=None,
+                message=str(exc),
+            ),
+            details={"error_source": "_parse_license_date"},
         )
 
     if check_date < start_date:
         days_until_start = (start_date - check_date).days
 
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_FUTURE,
-            status_label="Lisans Henüz Başlamadı",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name=license_data.company_name,
-            license_type=license_data.license_type,
-            starts_at=license_data.starts_at,
-            expires_at=license_data.expires_at,
-            days_remaining=None,
-            message=f"Lisans başlangıcına {days_until_start} gün var.",
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_FUTURE,
+                status_label="Lisans Henüz Başlamadı",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name=license_data.company_name,
+                license_type=license_data.license_type,
+                starts_at=license_data.starts_at,
+                expires_at=license_data.expires_at,
+                days_remaining=None,
+                message=f"Lisans başlangıcına {days_until_start} gün var.",
+            ),
+            details={"check_date": check_date.strftime(LICENSE_DATE_FORMAT)},
         )
 
     days_remaining = (expire_date - check_date).days
 
     if days_remaining < 0:
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_EXPIRED,
-            status_label="Lisans Süresi Doldu",
-            is_valid=False,
-            allow_app_open=True,
-            allow_data_entry=False,
-            license_file=target_file,
-            device_code=current_device_code,
-            company_name=license_data.company_name,
-            license_type=license_data.license_type,
-            starts_at=license_data.starts_at,
-            expires_at=license_data.expires_at,
-            days_remaining=days_remaining,
-            message="Lisans süresi dolmuş. Yenileme yapılması gerekiyor.",
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_EXPIRED,
+                status_label="Lisans Süresi Doldu",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name=license_data.company_name,
+                license_type=license_data.license_type,
+                starts_at=license_data.starts_at,
+                expires_at=license_data.expires_at,
+                days_remaining=days_remaining,
+                message="Lisans süresi dolmuş. Yenileme yapılması gerekiyor.",
+            ),
+            details={"check_date": check_date.strftime(LICENSE_DATE_FORMAT)},
         )
 
     if days_remaining <= LICENSE_WARNING_DAYS:
-        return LicenseCheckResult(
-            status=LICENSE_STATUS_EXPIRING_SOON,
-            status_label="Lisans Yakında Bitecek",
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_EXPIRING_SOON,
+                status_label="Lisans Yakında Bitecek",
+                is_valid=True,
+                allow_app_open=True,
+                allow_data_entry=True,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name=license_data.company_name,
+                license_type=license_data.license_type,
+                starts_at=license_data.starts_at,
+                expires_at=license_data.expires_at,
+                days_remaining=days_remaining,
+                message=f"İmzalı lisans aktif. Kalan süre: {days_remaining} gün.",
+            ),
+            details={"check_date": check_date.strftime(LICENSE_DATE_FORMAT)},
+        )
+
+    return _finalize_license_check_result(
+        LicenseCheckResult(
+            status=LICENSE_STATUS_ACTIVE,
+            status_label="Lisans Aktif",
             is_valid=True,
             allow_app_open=True,
             allow_data_entry=True,
@@ -554,24 +612,9 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             expires_at=license_data.expires_at,
             days_remaining=days_remaining,
             message=f"İmzalı lisans aktif. Kalan süre: {days_remaining} gün.",
-        )
-
-    return LicenseCheckResult(
-        status=LICENSE_STATUS_ACTIVE,
-        status_label="Lisans Aktif",
-        is_valid=True,
-        allow_app_open=True,
-        allow_data_entry=True,
-        license_file=target_file,
-        device_code=current_device_code,
-        company_name=license_data.company_name,
-        license_type=license_data.license_type,
-        starts_at=license_data.starts_at,
-        expires_at=license_data.expires_at,
-        days_remaining=days_remaining,
-        message=f"İmzalı lisans aktif. Kalan süre: {days_remaining} gün.",
+        ),
+        details={"check_date": check_date.strftime(LICENSE_DATE_FORMAT)},
     )
-
 
 def license_data_to_dict(license_data: LicenseData) -> dict[str, Any]:
     return asdict(license_data)
@@ -839,6 +882,43 @@ def _clean_text(value: Any, default: str = "") -> str:
 
     return cleaned_value
 
+
+
+def _finalize_license_check_result(
+    result: LicenseCheckResult,
+    *,
+    details: dict[str, Any] | None = None,
+) -> LicenseCheckResult:
+    event_type = _license_event_type_for_status(result.status)
+
+    try:
+        write_license_check_result_event(
+            event_type=event_type,
+            license_result=result,
+            details=details,
+        )
+
+    except Exception:
+        pass
+
+    return result
+
+
+def _license_event_type_for_status(status: str) -> str:
+    clean_status = str(status or "").strip()
+
+    event_map = {
+        LICENSE_STATUS_MISSING: LICENSE_EVENT_FILE_MISSING,
+        LICENSE_STATUS_ACTIVE: LICENSE_EVENT_ACTIVE,
+        LICENSE_STATUS_EXPIRING_SOON: LICENSE_EVENT_EXPIRING_SOON,
+        LICENSE_STATUS_EXPIRED: LICENSE_EVENT_EXPIRED,
+        LICENSE_STATUS_FUTURE: LICENSE_EVENT_FUTURE,
+        LICENSE_STATUS_INVALID: LICENSE_EVENT_FILE_INVALID,
+        LICENSE_STATUS_SIGNATURE_INVALID: LICENSE_EVENT_SIGNATURE_INVALID,
+        LICENSE_STATUS_DEVICE_MISMATCH: LICENSE_EVENT_DEVICE_MISMATCH,
+    }
+
+    return event_map.get(clean_status, LICENSE_EVENT_CHECK_FINISHED)
 
 __all__ = [
     "LICENSE_DATE_FORMAT",
