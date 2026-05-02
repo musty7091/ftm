@@ -13,7 +13,7 @@ from app.models.enums import UserRole
 from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.services.app_settings_service import update_app_settings
-from app.services.auth_service import hash_password
+from app.services.auth_service import AuthServiceError, hash_password
 from app.services.permission_service import Permission, get_permissions_for_role
 from app.services.setup_service import (
     save_sqlite_setup_config,
@@ -74,10 +74,15 @@ def apply_sqlite_initial_setup(
     )
     cleaned_admin_email = _clean_optional_text(admin_email)
 
-    if len(cleaned_admin_password) < 6:
+    if cleaned_admin_password.lower() == cleaned_admin_username.lower():
         raise SqliteSetupApplyServiceError(
-            "ADMIN şifresi en az 6 karakter olmalıdır."
+            "ADMIN şifresi kullanıcı adıyla aynı olamaz."
         )
+
+    try:
+        admin_password_hash = hash_password(cleaned_admin_password)
+    except AuthServiceError as exc:
+        raise SqliteSetupApplyServiceError(str(exc)) from exc
 
     sqlite_path = resolve_sqlite_database_path(cleaned_sqlite_database_path)
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +112,7 @@ def apply_sqlite_initial_setup(
                 session=session,
                 username=cleaned_admin_username,
                 full_name=cleaned_admin_full_name,
-                password=cleaned_admin_password,
+                password_hash=admin_password_hash,
                 email=cleaned_admin_email,
             )
             session.commit()
@@ -186,7 +191,7 @@ def _create_initial_admin_user(
     session: Session,
     username: str,
     full_name: str,
-    password: str,
+    password_hash: str,
     email: str | None,
 ) -> User:
     existing_admin_user = session.execute(
@@ -224,7 +229,7 @@ def _create_initial_admin_user(
         username=username,
         full_name=full_name,
         email=email,
-        password_hash=hash_password(password),
+        password_hash=password_hash,
         role=UserRole.ADMIN,
         is_active=True,
         must_change_password=False,

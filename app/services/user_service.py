@@ -3,7 +3,13 @@ from typing import Any, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password, normalize_username, verify_password
+from app.core.security import (
+    PasswordValidationError,
+    hash_password,
+    normalize_username,
+    validate_password_strength,
+    verify_password,
+)
 from app.models.enums import UserRole
 from app.models.user import User
 from app.services.audit_service import write_audit_log
@@ -64,14 +70,10 @@ def _validate_email(email: Optional[str]) -> Optional[str]:
 def _validate_password(password: str) -> str:
     cleaned_password = password or ""
 
-    if len(cleaned_password) < 8:
-        raise UserServiceError("Şifre en az 8 karakter olmalıdır.")
-
-    has_letter = any(character.isalpha() for character in cleaned_password)
-    has_digit = any(character.isdigit() for character in cleaned_password)
-
-    if not has_letter or not has_digit:
-        raise UserServiceError("Şifre en az bir harf ve en az bir rakam içermelidir.")
+    try:
+        validate_password_strength(cleaned_password)
+    except PasswordValidationError as exc:
+        raise UserServiceError(str(exc)) from exc
 
     return cleaned_password
 

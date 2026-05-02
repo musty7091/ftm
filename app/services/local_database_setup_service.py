@@ -13,7 +13,7 @@ from app.db.session import Base, engine, session_scope
 from app.models.enums import UserRole
 from app.models.role_permission import RolePermission
 from app.models.user import User
-from app.services.auth_service import hash_password
+from app.services.auth_service import AuthServiceError, hash_password
 from app.services.permission_service import Permission, get_permissions_for_role
 
 
@@ -228,8 +228,15 @@ def create_initial_admin_user(
     cleaned_password = _clean_required_text(password, "Şifre")
     cleaned_email = _clean_optional_text(email)
 
-    if len(cleaned_password) < 6:
-        raise LocalDatabaseSetupServiceError("ADMIN şifresi en az 6 karakter olmalıdır.")
+    if cleaned_password.lower() == cleaned_username.lower():
+        raise LocalDatabaseSetupServiceError(
+            "ADMIN şifresi kullanıcı adıyla aynı olamaz."
+        )
+
+    try:
+        admin_password_hash = hash_password(cleaned_password)
+    except AuthServiceError as exc:
+        raise LocalDatabaseSetupServiceError(str(exc)) from exc
 
     prepare_sqlite_database()
 
@@ -262,7 +269,7 @@ def create_initial_admin_user(
             username=cleaned_username,
             full_name=cleaned_full_name,
             email=cleaned_email,
-            password_hash=hash_password(cleaned_password),
+            password_hash=admin_password_hash,
             role=UserRole.ADMIN,
             is_active=True,
             must_change_password=must_change_password,

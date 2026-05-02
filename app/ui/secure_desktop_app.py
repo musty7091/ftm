@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
-
+from app.core.security import PasswordValidationError, validate_password_strength
 from app.core.runtime_paths import ensure_runtime_folders as ensure_core_runtime_folders
 from app.db.session import session_scope
 from app.models.user import User
@@ -599,8 +599,10 @@ class ForcedPasswordChangeDialog(QDialog):
         if not new_password:
             return "Yeni şifre boş olamaz."
 
-        if len(new_password) < 6:
-            return "Yeni şifre en az 6 karakter olmalıdır."
+        try:
+            validate_password_strength(new_password)
+        except PasswordValidationError as exc:
+            return str(exc)
 
         if new_password != repeat_password:
             return "Yeni şifre ve tekrar alanı aynı olmalıdır."
