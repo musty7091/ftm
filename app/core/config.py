@@ -12,7 +12,7 @@ from app.core.runtime_paths import ensure_runtime_folders, get_runtime_paths
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BASE_DIR / ".env"
-SETUP_CONFIG_FILE = BASE_DIR / "config" / "app_setup.json"
+SETUP_CONFIG_FILE = get_runtime_paths().config_folder / "app_setup.json"
 
 load_dotenv(ENV_FILE)
 

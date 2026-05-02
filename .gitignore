@@ -85,3 +85,7 @@ htmlcov/
 build/
 dist/
 *.spec
+
+# Runtime config files
+config/app_settings.json
+config/app_setup.json
