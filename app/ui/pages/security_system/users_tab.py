@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy import func, select
 
+from app.core.security import PasswordValidationError, validate_password_strength
 from app.db.session import session_scope
 from app.models.enums import UserRole
 from app.models.user import User
@@ -289,6 +290,15 @@ def _user_audit_values(user: User) -> dict[str, Any]:
     }
 
 
+def _validate_password_policy(password: str) -> str | None:
+    try:
+        validate_password_strength(password)
+    except PasswordValidationError as exc:
+        return str(exc)
+
+    return None
+
+
 class NewUserDialog(QDialog):
     def __init__(
         self,
@@ -321,7 +331,7 @@ class NewUserDialog(QDialog):
         self.role_combo.addItem("VIEWER", UserRole.VIEWER.value)
 
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Geçici şifre")
+        self.password_input.setPlaceholderText("En az 8 karakter, harf ve rakam")
         self.password_input.setEchoMode(QLineEdit.Password)
 
         self.password_repeat_input = QLineEdit()
@@ -353,7 +363,8 @@ class NewUserDialog(QDialog):
 
         subtitle = QLabel(
             "Bu form ADMIN yetkisiyle yeni kullanıcı oluşturur. "
-            "Şifre veritabanına açık metin olarak değil, güvenli hash olarak kaydedilir."
+            "Şifre veritabanına açık metin olarak değil, güvenli hash olarak kaydedilir. "
+            "Şifre en az 8 karakter olmalı, en az bir harf ve en az bir rakam içermelidir."
         )
         subtitle.setObjectName("UsersTabSubtitle")
         subtitle.setWordWrap(True)
@@ -486,11 +497,16 @@ class NewUserDialog(QDialog):
         if not password:
             return "Geçici şifre boş olamaz."
 
-        if len(password) < 6:
-            return "Geçici şifre en az 6 karakter olmalıdır."
-
         if password != password_repeat:
             return "Şifre ve şifre tekrar alanları aynı olmalıdır."
+
+        if password.strip().lower() == username.strip().lower():
+            return "Geçici şifre kullanıcı adı ile aynı olmamalıdır."
+
+        password_policy_error = _validate_password_policy(password)
+
+        if password_policy_error:
+            return password_policy_error
 
         return None
 
@@ -843,7 +859,7 @@ class ResetPasswordDialog(QDialog):
         self.setStyleSheet(USERS_TAB_STYLE)
 
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Yeni geçici şifre")
+        self.password_input.setPlaceholderText("En az 8 karakter, harf ve rakam")
         self.password_input.setEchoMode(QLineEdit.Password)
 
         self.password_repeat_input = QLineEdit()
@@ -872,7 +888,8 @@ class ResetPasswordDialog(QDialog):
 
         subtitle = QLabel(
             f"{self.username} kullanıcısı için yeni geçici şifre belirle. "
-            "Şifre güvenli hash olarak kaydedilecek."
+            "Şifre güvenli hash olarak kaydedilecek. "
+            "Şifre en az 8 karakter olmalı, en az bir harf ve en az bir rakam içermelidir."
         )
         subtitle.setObjectName("UsersTabSubtitle")
         subtitle.setWordWrap(True)
@@ -1000,14 +1017,16 @@ class ResetPasswordDialog(QDialog):
         if not password:
             return "Yeni geçici şifre boş olamaz."
 
-        if len(password) < 6:
-            return "Yeni geçici şifre en az 6 karakter olmalıdır."
-
         if password != password_repeat:
             return "Şifre ve şifre tekrar alanları aynı olmalıdır."
 
         if password.strip().lower() == self.username.strip().lower():
             return "Şifre kullanıcı adı ile aynı olmamalıdır."
+
+        password_policy_error = _validate_password_policy(password)
+
+        if password_policy_error:
+            return password_policy_error
 
         return None
 
