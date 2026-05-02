@@ -21,6 +21,9 @@ from app.services.app_settings_service import (
 )
 from app.services.mail_service import MailServiceError, parse_mail_recipients, send_mail
 
+def _apply_sqlite_backup_connection_pragmas(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 10000")
 
 @dataclass
 class BackupResult:
@@ -340,6 +343,9 @@ def _run_sqlite_backup(
     try:
         source_connection = sqlite3.connect(str(source_database_path))
         backup_connection = sqlite3.connect(str(output_path))
+
+        _apply_sqlite_backup_connection_pragmas(source_connection)
+        _apply_sqlite_backup_connection_pragmas(backup_connection)
 
         with backup_connection:
             source_connection.backup(backup_connection)

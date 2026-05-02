@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from typing import Any, Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
@@ -41,6 +41,29 @@ engine = create_engine(
     **_create_engine_kwargs(),
 )
 
+def _apply_sqlite_connection_pragmas(
+    dbapi_connection: Any,
+    connection_record: Any,
+) -> None:
+    if not settings.is_sqlite:
+        return
+
+    cursor = dbapi_connection.cursor()
+
+    try:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.execute("PRAGMA busy_timeout = 10000")
+        cursor.execute("PRAGMA journal_mode = WAL")
+    finally:
+        cursor.close()
+
+
+if settings.is_sqlite:
+    event.listen(
+        engine,
+        "connect",
+        _apply_sqlite_connection_pragmas,
+    )
 
 SessionLocal = sessionmaker(
     bind=engine,
