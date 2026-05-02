@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.security import PasswordValidationError, validate_password_strength
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -293,7 +295,7 @@ class SetupWizardDialog(QDialog):
         self.admin_email_input.setPlaceholderText("admin@example.com")
 
         self.admin_password_input = QLineEdit()
-        self.admin_password_input.setPlaceholderText("En az 6 karakter")
+        self.admin_password_input.setPlaceholderText("En az 8 karakter, harf ve rakam")
         self.admin_password_input.setEchoMode(QLineEdit.Password)
 
         self.admin_password_repeat_input = QLineEdit()
@@ -594,14 +596,16 @@ class SetupWizardDialog(QDialog):
         if admin_email and "@" not in admin_email:
             raise ValueError("ADMIN e-posta adresi geçerli görünmüyor.")
 
-        if not admin_password:
-            raise ValueError("ADMIN şifresi boş olamaz.")
-
-        if len(admin_password) < 6:
-            raise ValueError("ADMIN şifresi en az 6 karakter olmalıdır.")
-
         if admin_password != admin_password_repeat:
             raise ValueError("ADMIN şifreleri aynı olmalıdır.")
+
+        if admin_password.strip().lower() == admin_username.strip().lower():
+            raise ValueError("ADMIN şifresi kullanıcı adıyla aynı olamaz.")
+
+        try:
+            validate_password_strength(admin_password)
+        except PasswordValidationError as exc:
+            raise ValueError(f"ADMIN şifresi geçersiz: {exc}") from exc
 
         return SetupWizardPayload(
             database_engine=database_engine,
