@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -1534,7 +1534,14 @@ class UsersTab(QWidget):
             return "-"
 
         if isinstance(value, datetime):
-            return value.strftime("%d.%m.%Y %H:%M")
+            try:
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+
+                local_value = value.astimezone()
+                return local_value.strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                return value.strftime("%d.%m.%Y %H:%M")
 
         return str(value)
 

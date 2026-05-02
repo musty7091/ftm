@@ -1,5 +1,5 @@
 ﻿from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -319,7 +319,14 @@ def _format_datetime(value: datetime | None) -> str:
     if value is None:
         return "-"
 
-    return value.strftime("%d.%m.%Y %H:%M")
+    try:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+
+        local_value = value.astimezone()
+        return local_value.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return value.strftime("%d.%m.%Y %H:%M")
 
 def _format_date(value: Any) -> str:
     if value is None:
