@@ -19,6 +19,7 @@ from app.services.license_public_key import load_license_public_key
 from app.services.license_event_log_service import (
     LICENSE_EVENT_ACTIVE,
     LICENSE_EVENT_CHECK_FINISHED,
+    LICENSE_EVENT_CLOCK_ROLLBACK_DETECTED,
     LICENSE_EVENT_DEVICE_MISMATCH,
     LICENSE_EVENT_EXPIRED,
     LICENSE_EVENT_EXPIRING_SOON,
@@ -27,6 +28,11 @@ from app.services.license_event_log_service import (
     LICENSE_EVENT_FUTURE,
     LICENSE_EVENT_SIGNATURE_INVALID,
     write_license_check_result_event,
+)
+from app.services.license_clock_service import (
+    LicenseClockServiceError,
+    check_license_clock_rollback,
+    record_license_clock_observation,
 )
 
 
@@ -44,6 +50,7 @@ LICENSE_STATUS_FUTURE = "future"
 LICENSE_STATUS_INVALID = "invalid"
 LICENSE_STATUS_SIGNATURE_INVALID = "signature_invalid"
 LICENSE_STATUS_DEVICE_MISMATCH = "device_mismatch"
+LICENSE_STATUS_CLOCK_ROLLBACK = "clock_rollback"
 
 BASIC_LICENSE_SIGNATURE_SALT = "FTM_LOCAL_LICENSE_V1_BASIC_CHECK"
 
@@ -361,6 +368,51 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
     check_date = today or date.today()
     current_device_code = get_device_code()
     target_file = license_file_path()
+
+    clock_check_error = _clock_check_error_result(
+        check_date=check_date,
+        current_device_code=current_device_code,
+        target_file=target_file,
+    )
+
+    if clock_check_error is not None:
+        return clock_check_error
+
+    clock_rollback_result = check_license_clock_rollback(today=check_date)
+
+    if clock_rollback_result.rollback_detected:
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_CLOCK_ROLLBACK,
+                status_label="Bilgisayar Tarihi Şüpheli",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=(
+                    "Bilgisayar tarihi önceki lisans kontrol tarihinden geride görünüyor. "
+                    "Güvenlik nedeniyle lisans geçerli kabul edilmedi. "
+                    "Lütfen bilgisayar tarih/saat ayarını kontrol edin ve destek ekibiyle iletişime geçin."
+                ),
+            ),
+            details={
+                "check_date": check_date.strftime(LICENSE_DATE_FORMAT),
+                "clock_state_file": str(clock_rollback_result.state_file),
+                "last_seen_check_date": clock_rollback_result.last_seen_check_date,
+                "last_successful_check_date": clock_rollback_result.last_successful_check_date,
+                "reference_date": clock_rollback_result.reference_date,
+                "rollback_days": clock_rollback_result.rollback_days,
+                "tolerance_days": clock_rollback_result.tolerance_days,
+                "clock_message": clock_rollback_result.message,
+            },
+            check_date=check_date,
+        )
 
     if not target_file.exists():
         return _finalize_license_check_result(
@@ -883,19 +935,100 @@ def _clean_text(value: Any, default: str = "") -> str:
     return cleaned_value
 
 
+def _clock_check_error_result(
+    *,
+    check_date: date,
+    current_device_code: str,
+    target_file: Path,
+) -> LicenseCheckResult | None:
+    try:
+        check_license_clock_rollback(today=check_date)
+
+    except LicenseClockServiceError as exc:
+        return _finalize_license_check_result(
+            LicenseCheckResult(
+                status=LICENSE_STATUS_INVALID,
+                status_label="Lisans Saat Kontrol Hatası",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=(
+                    "Lisans saat kontrol dosyası okunamadı. "
+                    "Güvenlik nedeniyle veri girişi kapatıldı. "
+                    f"Hata: {exc}"
+                ),
+            ),
+            details={
+                "check_date": check_date.strftime(LICENSE_DATE_FORMAT),
+                "error_source": "check_license_clock_rollback",
+            },
+            check_date=check_date,
+        )
+
+    return None
+
+
+def _record_license_clock_observation_safely(
+    *,
+    result: LicenseCheckResult,
+    check_date: date,
+) -> None:
+    try:
+        record_license_clock_observation(
+            today=check_date,
+            device_code=result.device_code,
+            successful=bool(result.is_valid),
+        )
+
+    except Exception:
+        pass
+
+
+def _check_date_from_details(details: dict[str, Any]) -> date | None:
+    check_date_text = str(details.get("check_date") or "").strip()
+
+    if not check_date_text:
+        return None
+
+    try:
+        return datetime.strptime(check_date_text, LICENSE_DATE_FORMAT).date()
+
+    except ValueError:
+        return None
+
+
 
 def _finalize_license_check_result(
     result: LicenseCheckResult,
     *,
     details: dict[str, Any] | None = None,
+    check_date: date | None = None,
 ) -> LicenseCheckResult:
     event_type = _license_event_type_for_status(result.status)
+    clean_details = dict(details or {})
+    effective_check_date = check_date or _check_date_from_details(clean_details) or date.today()
+    clean_details.setdefault(
+        "check_date",
+        effective_check_date.strftime(LICENSE_DATE_FORMAT),
+    )
+
+    _record_license_clock_observation_safely(
+        result=result,
+        check_date=effective_check_date,
+    )
 
     try:
         write_license_check_result_event(
             event_type=event_type,
             license_result=result,
-            details=details,
+            details=clean_details,
         )
 
     except Exception:
@@ -916,6 +1049,7 @@ def _license_event_type_for_status(status: str) -> str:
         LICENSE_STATUS_INVALID: LICENSE_EVENT_FILE_INVALID,
         LICENSE_STATUS_SIGNATURE_INVALID: LICENSE_EVENT_SIGNATURE_INVALID,
         LICENSE_STATUS_DEVICE_MISMATCH: LICENSE_EVENT_DEVICE_MISMATCH,
+        LICENSE_STATUS_CLOCK_ROLLBACK: LICENSE_EVENT_CLOCK_ROLLBACK_DETECTED,
     }
 
     return event_map.get(clean_status, LICENSE_EVENT_CHECK_FINISHED)
@@ -933,6 +1067,7 @@ __all__ = [
     "LICENSE_STATUS_INVALID",
     "LICENSE_STATUS_SIGNATURE_INVALID",
     "LICENSE_STATUS_DEVICE_MISMATCH",
+    "LICENSE_STATUS_CLOCK_ROLLBACK",
     "LicenseData",
     "LicenseCheckResult",
     "LicenseServiceError",
