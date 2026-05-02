@@ -29,6 +29,10 @@ from app.services.auth_service import (
     authenticate_user,
     hash_password,
 )
+from app.services.database_migration_service import (
+    DatabaseMigrationServiceError,
+    run_database_migrations,
+)
 from app.services.license_service import (
     LICENSE_STATUS_ACTIVE,
     LICENSE_STATUS_EXPIRING_SOON,
@@ -887,6 +891,53 @@ def _run_initial_setup_if_needed() -> bool:
         return False
 
 
+def _run_database_migration_gate_if_needed() -> bool:
+    try:
+        ensure_core_runtime_folders()
+        result = run_database_migrations(require_backup=True)
+
+    except DatabaseMigrationServiceError as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Veritabanı Güncellemesi",
+            "Veritabanı güncellemesi tamamlanamadı. "
+            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
+            f"{exc}",
+        )
+        return False
+
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Veritabanı Güncellemesi",
+            "Veritabanı güncellemesi sırasında beklenmeyen bir hata oluştu. "
+            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
+            f"Hata: {exc}",
+        )
+        return False
+
+    if result.applied_migration_ids:
+        applied_migrations_text = "\n".join(
+            f"- {migration_id}"
+            for migration_id in result.applied_migration_ids
+        )
+        backup_file_text = result.backup_file or "Yedek dosyası bilgisi alınamadı."
+
+        QMessageBox.information(
+            None,
+            "FTM Veritabanı Güncellemesi",
+            "Veritabanı güncellemesi başarıyla tamamlandı.\n\n"
+            f"Uygulanan güncelleme sayısı: {len(result.applied_migration_ids)}\n"
+            f"Şema sürümü: {result.current_user_version} / {result.expected_schema_version}\n\n"
+            "Uygulanan güncellemeler:\n"
+            f"{applied_migrations_text}\n\n"
+            "Güncelleme öncesi güvenli yedek:\n"
+            f"{backup_file_text}",
+        )
+
+    return True
+
+
 def _run_license_gate_if_needed() -> bool:
     try:
         ensure_core_runtime_folders()
@@ -1014,6 +1065,9 @@ def main() -> None:
     app.setStyleSheet(get_application_stylesheet())
 
     if not _run_initial_setup_if_needed():
+        sys.exit(0)
+
+    if not _run_database_migration_gate_if_needed():
         sys.exit(0)
 
     if not _run_license_gate_if_needed():
