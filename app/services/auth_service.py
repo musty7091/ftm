@@ -1,12 +1,16 @@
-import bcrypt
 from dataclasses import dataclass
 from typing import Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.user import User
+from app.core.security import (
+    PasswordValidationError,
+    hash_password as core_hash_password,
+    verify_password as core_verify_password,
+)
 from app.models.enums import UserRole
+from app.models.user import User
 from app.services.audit_service import write_audit_log
 from app.services.permission_service import (
     Permission,
@@ -52,26 +56,27 @@ def _clean_password(password: str) -> str:
 def hash_password(password: str) -> str:
     cleaned_password = _clean_password(password)
 
-    password_bytes = cleaned_password.encode("utf-8")
-    hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
-
-    return hashed_password.decode("utf-8")
+    try:
+        return core_hash_password(cleaned_password)
+    except PasswordValidationError as exc:
+        raise AuthServiceError(str(exc)) from exc
 
 
 def verify_password(password: str, password_hash: str | bytes) -> bool:
-    cleaned_password = _clean_password(password)
+    try:
+        cleaned_password = _clean_password(password)
+    except AuthServiceError:
+        return False
 
     if isinstance(password_hash, bytes):
-        password_hash_bytes = password_hash
+        cleaned_password_hash = password_hash.decode("utf-8", errors="ignore")
     else:
-        password_hash_bytes = str(password_hash).encode("utf-8")
+        cleaned_password_hash = str(password_hash or "")
 
-    password_bytes = cleaned_password.encode("utf-8")
-
-    try:
-        return bcrypt.checkpw(password_bytes, password_hash_bytes)
-    except ValueError:
-        return False
+    return core_verify_password(
+        cleaned_password,
+        cleaned_password_hash,
+    )
 
 
 def _user_to_authenticated_user(user: User) -> AuthenticatedUser:
