@@ -332,6 +332,7 @@ PERMISSION_GROUPS: list[tuple[str, list[Permission]]] = [
             Permission.AUDIT_LOG_VIEW,
             Permission.BACKUP_RUN,
             Permission.RESTORE_TEST_RUN,
+            Permission.RESTORE_RUN,
             Permission.SYSTEM_SETTINGS_VIEW,
             Permission.SYSTEM_SETTINGS_UPDATE,
         ],
@@ -386,6 +387,7 @@ PERMISSION_LABELS = {
     Permission.AUDIT_LOG_VIEW: "İşlem kayıtlarını görüntüle",
     Permission.BACKUP_RUN: "Yedekleme çalıştır",
     Permission.RESTORE_TEST_RUN: "Geri yükleme testi çalıştır",
+    Permission.RESTORE_RUN: "Yedekten geri yükle",
     Permission.SYSTEM_SETTINGS_VIEW: "Sistem ayarlarını görüntüle",
     Permission.SYSTEM_SETTINGS_UPDATE: "Sistem ayarlarını güncelle",
 }
@@ -400,6 +402,7 @@ CRITICAL_PERMISSIONS = {
     Permission.AUDIT_LOG_VIEW,
     Permission.BACKUP_RUN,
     Permission.RESTORE_TEST_RUN,
+    Permission.RESTORE_RUN,
     Permission.SYSTEM_SETTINGS_UPDATE,
 }
 
@@ -413,6 +416,7 @@ ADMIN_ONLY_PERMISSIONS = {
     Permission.AUDIT_LOG_VIEW,
     Permission.BACKUP_RUN,
     Permission.RESTORE_TEST_RUN,
+    Permission.RESTORE_RUN,
     Permission.SYSTEM_SETTINGS_VIEW,
     Permission.SYSTEM_SETTINGS_UPDATE,
 }
@@ -511,7 +515,7 @@ class RolesTab(QWidget):
         subtitle = QLabel(
             "Rol seç, yetkileri işaretle, kaydet. "
             "ADMIN rolü sistem güvenliği için korumalıdır. "
-            "Kullanıcı yönetimi, audit log, yedekleme ve sistem ayarları yalnızca ADMIN tarafından kullanılabilir."
+            "Kullanıcı yönetimi, audit log, yedekleme, gerçek geri yükleme ve sistem ayarları yalnızca ADMIN tarafından kullanılabilir."
         )
         subtitle.setObjectName("RolesTabSubtitle")
         subtitle.setWordWrap(True)
@@ -544,7 +548,7 @@ class RolesTab(QWidget):
 
         info = QLabel(
             "Yetkiler role_permissions tablosundan okunur ve kaydedilir. "
-            "ADMIN'e özel güvenlik yetkileri non-admin rollere verilemez."
+            "ADMIN'e özel güvenlik ve gerçek geri yükleme yetkileri non-admin rollere verilemez."
         )
         info.setObjectName("RolesTabSubtitle")
         info.setWordWrap(True)
