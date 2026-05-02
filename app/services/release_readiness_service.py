@@ -62,22 +62,32 @@ class ReleaseReadinessReport:
 
     @property
     def is_ready_for_customer(self) -> bool:
+        """
+        Eski isim geriye dönük uyumluluk için korunuyor.
+
+        Anlamı:
+        FAIL kontrol yoksa mevcut FTM ortamı kullanılabilir durumdadır.
+        """
+        return self.fail_count == 0
+
+    @property
+    def is_environment_usable(self) -> bool:
         return self.fail_count == 0
 
     @property
     def summary_message(self) -> str:
         if self.overall_status == RELEASE_READINESS_STATUS_OK:
-            return "FTM müşteri kurulumu için hazır görünüyor."
+            return "Bu mevcut FTM ortamı sağlıklı görünüyor."
 
         if self.overall_status == RELEASE_READINESS_STATUS_WARN:
             return (
-                "FTM müşteri kurulumu için genel olarak hazır görünüyor; "
+                "Bu mevcut FTM ortamı kullanılabilir görünüyor; "
                 "ancak dikkat edilmesi gereken uyarılar var."
             )
 
         return (
-            "FTM müşteri kurulumu için hazır değil. "
-            "Başarısız kontroller düzeltilmeden release yapılmamalı."
+            "Bu mevcut FTM ortamı sağlıklı değil. "
+            "FAIL durumundaki kontroller düzeltilmeden kullanılmamalıdır."
         )
 
 
@@ -162,7 +172,7 @@ def run_release_readiness_check() -> ReleaseReadinessReport:
 
 def build_release_readiness_report_text(report: ReleaseReadinessReport) -> str:
     lines = [
-        "FTM RELEASE / MÜŞTERİ KURULUM ÖNCESİ KONTROL RAPORU",
+        "FTM MEVCUT ORTAM SAĞLIK KONTROL RAPORU",
         "=" * 64,
         f"Rapor zamanı : {report.generated_at}",
         f"Genel durum  : {report.overall_status}",
@@ -182,16 +192,21 @@ def build_release_readiness_report_text(report: ReleaseReadinessReport) -> str:
         )
 
     lines.append("")
-    lines.append("RELEASE KARARI")
+    lines.append("ORTAM KARARI")
     lines.append("-" * 64)
 
-    if report.is_ready_for_customer:
+    if report.is_environment_usable:
         lines.append(
-            "Bloke eden hata yok. Uyarılar varsa kontrol edilerek müşteri kurulumu yapılabilir."
+            "Bloke eden hata yok. Bu mevcut FTM ortamı kullanılabilir görünüyor."
         )
+
+        if report.warn_count > 0:
+            lines.append(
+                "Not: WARN durumundaki uyarılar kontrol edilmelidir."
+            )
     else:
         lines.append(
-            "Release yapılmamalı. FAIL durumundaki kontroller düzeltilmeli."
+            "Bu mevcut FTM ortamı kullanılmamalı. FAIL durumundaki kontroller düzeltilmelidir."
         )
 
     return "\n".join(lines)
@@ -359,7 +374,7 @@ def _check_license_status() -> ReleaseReadinessCheck:
             status=RELEASE_READINESS_STATUS_WARN,
             message=(
                 f"{license_result.message} "
-                "Release öncesi lisans süresi kontrol edilmeli."
+                "Lisans süresi kısa olduğu için yenileme/uzatma ihtiyacı kontrol edilmelidir."
             ),
         )
 
