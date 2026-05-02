@@ -33,6 +33,10 @@ from app.services.database_migration_service import (
     DatabaseMigrationServiceError,
     run_database_migrations,
 )
+from app.services.version_compatibility_service import (
+    DatabaseVersionCompatibilityError,
+    assert_database_version_is_compatible,
+)
 from app.services.license_service import (
     LICENSE_STATUS_ACTIVE,
     LICENSE_STATUS_EXPIRING_SOON,
@@ -938,6 +942,35 @@ def _run_database_migration_gate_if_needed() -> bool:
     return True
 
 
+def _run_database_version_compatibility_gate_if_needed() -> bool:
+    try:
+        ensure_core_runtime_folders()
+        assert_database_version_is_compatible()
+        return True
+
+    except DatabaseVersionCompatibilityError as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Sürüm Uyumluluk Kontrolü",
+            "Uygulama ve veritabanı sürüm uyumu sağlanamadı. "
+            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
+            f"{exc.user_message}\n\n"
+            "Teknik detay:\n"
+            f"{exc.technical_message}",
+        )
+        return False
+
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Sürüm Uyumluluk Kontrolü",
+            "Sürüm uyumluluk kontrolü sırasında beklenmeyen bir hata oluştu. "
+            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
+            f"Hata: {exc}",
+        )
+        return False
+
+
 def _run_license_gate_if_needed() -> bool:
     try:
         ensure_core_runtime_folders()
@@ -1068,6 +1101,9 @@ def main() -> None:
         sys.exit(0)
 
     if not _run_database_migration_gate_if_needed():
+        sys.exit(0)
+
+    if not _run_database_version_compatibility_gate_if_needed():
         sys.exit(0)
 
     if not _run_license_gate_if_needed():
