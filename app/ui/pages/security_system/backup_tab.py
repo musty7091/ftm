@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -27,6 +28,13 @@ from app.services.backup_service import (
     format_backup_size,
     list_database_backups,
     validate_backup_file,
+)
+from app.services.restore_standard_service import (
+    RestoreStandardServiceError,
+    build_restore_safety_plan,
+    execute_sqlite_restore_from_plan,
+    get_restore_execution_summary_lines,
+    get_restore_safety_plan_summary_lines,
 )
 from app.services.permission_service import Permission
 from app.ui.permission_ui import (
@@ -162,6 +170,19 @@ QPushButton#BackupWarningButton:hover {
     background-color: #b45309;
 }
 
+QPushButton#BackupDangerButton {
+    background-color: #991b1b;
+    color: #ffffff;
+    border: 1px solid #ef4444;
+    border-radius: 11px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#BackupDangerButton:hover {
+    background-color: #b91c1c;
+}
+
 QPushButton:disabled {
     background-color: rgba(30, 41, 59, 0.55);
     color: #64748b;
@@ -263,9 +284,16 @@ def _validation_card_body() -> str:
 
 
 def _restore_card_body() -> str:
+    if _is_sqlite_mode():
+        return (
+            "Seçili SQLite yedeği önce FTM güvenli yedek standardına göre doğrulanır. "
+            "Restore öncesi aktif veritabanının otomatik güvenlik yedeği alınır. "
+            "Gerçek geri yükleme için çift onay ve elle GERİ YÜKLE onayı gerekir."
+        )
+
     return (
-        "Otomatik geri yükleme bu aşamada bilerek kapalıdır. "
-        "Önce güvenli yedek alma ve doğrulama mantığı oturtulur."
+        "PostgreSQL için otomatik geri yükleme bu aşamada kapalıdır. "
+        "SQLite Local restore akışı güvenli standartla ayrıca yönetilir."
     )
 
 
@@ -337,6 +365,10 @@ class BackupTab(QWidget):
         self.validate_button = QPushButton("Seçili Yedeği Doğrula")
         self.validate_button.setObjectName("BackupWarningButton")
         self.validate_button.clicked.connect(self.validate_selected_backup)
+
+        self.restore_button = QPushButton("Yedekten Geri Yükle")
+        self.restore_button.setObjectName("BackupDangerButton")
+        self.restore_button.clicked.connect(self.restore_selected_backup)
 
         self.backup_table = QTableWidget()
         self.backup_table.setObjectName("BackupTable")
@@ -471,6 +503,7 @@ class BackupTab(QWidget):
         layout.addWidget(hint, 1)
         layout.addWidget(self.refresh_button, 0, Qt.AlignVCenter)
         layout.addWidget(self.validate_button, 0, Qt.AlignVCenter)
+        layout.addWidget(self.restore_button, 0, Qt.AlignVCenter)
         layout.addWidget(self.backup_button, 0, Qt.AlignVCenter)
 
         return layout
@@ -486,6 +519,11 @@ class BackupTab(QWidget):
             permission=Permission.RESTORE_TEST_RUN,
         )
 
+        can_run_restore = user_has_permission(
+            current_user=self._current_user(),
+            permission=Permission.RESTORE_RUN,
+        )
+
         set_widget_permission(
             self.backup_button,
             allowed=can_run_backup,
@@ -496,6 +534,12 @@ class BackupTab(QWidget):
             self.validate_button,
             allowed=can_run_restore_test,
             tooltip_when_denied="Yedek doğrulama testi için RESTORE_TEST_RUN yetkisi gerekir.",
+        )
+
+        set_widget_permission(
+            self.restore_button,
+            allowed=can_run_restore,
+            tooltip_when_denied="Yedekten geri yükleme için RESTORE_RUN yetkisi gerekir.",
         )
 
     def load_backups(self) -> None:
@@ -638,6 +682,151 @@ class BackupTab(QWidget):
                 f"Yedek doğrulama sırasında beklenmeyen hata oluştu:\n\n{exc}",
             )
 
+    def restore_selected_backup(self) -> None:
+        if not self._ensure_restore_permission():
+            return
+
+        if not _is_sqlite_mode():
+            QMessageBox.warning(
+                self,
+                "Geri Yükleme Desteklenmiyor",
+                "Bu güvenli geri yükleme akışı şu anda yalnızca SQLite Local mod için aktiftir.",
+            )
+            return
+
+        selected_backup_path = self._selected_backup_file_path()
+
+        if selected_backup_path is None:
+            QMessageBox.warning(
+                self,
+                "Yedek Seçilmedi",
+                "Geri yüklemek için listeden bir yedek dosyası seçmelisin.",
+            )
+            return
+
+        first_answer = QMessageBox.warning(
+            self,
+            "Yedekten Geri Yükleme - İlk Onay",
+            "Seçili yedek aktif veritabanının üzerine geri yüklenecek.\n\n"
+            "Bu işlem mevcut canlı verileri seçili yedekteki verilerle değiştirir.\n"
+            "İşlemden önce aktif veritabanının otomatik güvenlik yedeği alınacaktır.\n\n"
+            f"Seçili yedek:\n{selected_backup_path}\n\n"
+            "Devam etmek istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if first_answer != QMessageBox.Yes:
+            return
+
+        self.restore_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        try:
+            restore_plan = build_restore_safety_plan(selected_backup_path)
+
+        except RestoreStandardServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Restore Planı Oluşturulamadı",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Restore güvenlik planı oluşturulurken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.apply_permissions()
+
+        plan_summary = "\n".join(get_restore_safety_plan_summary_lines(restore_plan))
+
+        second_answer = QMessageBox.warning(
+            self,
+            "Yedekten Geri Yükleme - Son Kontrol",
+            f"{plan_summary}\n\n"
+            "Bu işlemden sonra uygulamayı kapatıp yeniden başlatman gerekecek.\n\n"
+            "Geri yüklemeye devam etmek istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if second_answer != QMessageBox.Yes:
+            return
+
+        typed_text, ok = QInputDialog.getText(
+            self,
+            "Elle Onay Gerekli",
+            "Gerçek geri yüklemeyi başlatmak için aşağıya aynen GERİ YÜKLE yaz:",
+        )
+
+        if not ok:
+            return
+
+        if str(typed_text or "").strip() != "GERİ YÜKLE":
+            QMessageBox.warning(
+                self,
+                "Onay Metni Hatalı",
+                "Geri yükleme başlatılmadı. Devam etmek için GERİ YÜKLE metni aynen yazılmalıdır.",
+            )
+            return
+
+        self.restore_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        try:
+            result = execute_sqlite_restore_from_plan(
+                restore_plan,
+                confirm_restore=True,
+            )
+
+            result_summary = "\n".join(get_restore_execution_summary_lines(result))
+
+            QMessageBox.information(
+                self,
+                "Yedekten Geri Yükleme Tamamlandı",
+                f"{result_summary}\n\n"
+                "Önemli: Uygulamayı şimdi kapatıp yeniden başlatmalısın. "
+                "Açık ekranlarda eski veriler görünüyor olabilir.",
+            )
+
+            self.validation_status_label.setText("Restore: Tamamlandı")
+            self.validation_status_label.setObjectName("BackupOkBadge")
+            self._refresh_widget_style(self.validation_status_label)
+            self.load_backups()
+
+        except RestoreStandardServiceError as exc:
+            self.validation_status_label.setText("Restore: FAIL")
+            self.validation_status_label.setObjectName("BackupFailBadge")
+            self._refresh_widget_style(self.validation_status_label)
+
+            QMessageBox.warning(
+                self,
+                "Yedekten Geri Yükleme Başarısız",
+                str(exc),
+            )
+
+        except Exception as exc:
+            self.validation_status_label.setText("Restore: FAIL")
+            self.validation_status_label.setObjectName("BackupFailBadge")
+            self._refresh_widget_style(self.validation_status_label)
+
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Yedekten geri yükleme sırasında beklenmeyen hata oluştu:\n\n{exc}",
+            )
+
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.apply_permissions()
+
     def _fill_backup_table(self) -> None:
         self.backup_table.setRowCount(len(self.backup_infos))
 
@@ -755,6 +944,20 @@ class BackupTab(QWidget):
             self,
             "Yetkisiz işlem",
             "Yedek doğrulama testi için RESTORE_TEST_RUN yetkisi gerekir.",
+        )
+        return False
+
+    def _ensure_restore_permission(self) -> bool:
+        if user_has_permission(
+            current_user=self._current_user(),
+            permission=Permission.RESTORE_RUN,
+        ):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            "Yedekten geri yükleme için RESTORE_RUN yetkisi gerekir.",
         )
         return False
 
