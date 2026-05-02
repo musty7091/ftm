@@ -100,8 +100,8 @@ def _confirm_sqlite_real_setup(
     message = (
         "SQLite kurulumu gerçek olarak uygulanacak.\n\n"
         "Bu işlem şunları yapacak:\n"
-        "- config/app_setup.json dosyasını yazacak\n"
-        "- config/app_settings.json dosyasını yazacak\n"
+        "- AppData\\Local\\FTM\\config\\app_setup.json dosyasını yazacak\n"
+        "- AppData\\Local\\FTM\\config\\app_settings.json dosyasını yazacak\n"
         "- SQLite veritabanı dosyasını oluşturacak\n"
         "- Tabloları oluşturacak\n"
         "- Role/yetki kayıtlarını oluşturacak\n"
@@ -169,8 +169,8 @@ def _apply_sqlite_setup(
         "SQLite Kurulumu Tamamlandı",
         "SQLite kurulumu başarıyla tamamlandı.\n\n"
         "Oluşturulanlar:\n"
-        "- config/app_setup.json\n"
-        "- config/app_settings.json\n"
+        "- AppData\\Local\\FTM\\config\\app_setup.json\n"
+        "- AppData\\Local\\FTM\\config\\app_settings.json\n"
         "- SQLite veritabanı dosyası\n"
         "- Veritabanı tabloları\n"
         "- Role/yetki kayıtları\n"
