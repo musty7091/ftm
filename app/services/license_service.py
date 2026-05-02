@@ -129,6 +129,14 @@ def build_license_data_for_device_code(
     starts_at: date | None = None,
     notes: str = "",
 ) -> LicenseData:
+    """
+    Eski version 1 lisans üretim yardımcısıdır.
+
+    Not:
+        check_license() artık bu eski formatı geçerli saymaz.
+        Bu fonksiyon şimdilik geriye dönük teknik uyumluluk için korunuyor.
+    """
+
     cleaned_company_name = _clean_required_text(company_name, "Firma adı")
     cleaned_device_code = _clean_device_code(device_code)
     cleaned_license_type = _clean_text(license_type, "annual")
@@ -317,12 +325,27 @@ def load_license_file_dict() -> dict[str, Any]:
 
 
 def load_license_data() -> LicenseData:
+    """
+    Eski version 1 lisans verisini okur.
+
+    Not:
+        check_license() artık bu eski formatı geçerli saymaz.
+    """
+
     loaded_data = load_license_file_dict()
 
     return _license_data_from_dict(loaded_data)
 
 
 def check_license(today: date | None = None) -> LicenseCheckResult:
+    """
+    FTM lisans kontrolü.
+
+    Güvenlik kararı:
+        Sadece version 2 Ed25519 imzalı lisanslar geçerli kabul edilir.
+        Eski version 1 / imzasız lisanslar geçersizdir.
+    """
+
     check_date = today or date.today()
     current_device_code = get_device_code()
     target_file = license_file_path()
@@ -333,7 +356,7 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             status_label="Lisans Yok",
             is_valid=False,
             allow_app_open=True,
-            allow_data_entry=True,
+            allow_data_entry=False,
             license_file=target_file,
             device_code=current_device_code,
             company_name="",
@@ -343,12 +366,13 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             days_remaining=None,
             message=(
                 "Lisans dosyası bulunamadı. "
-                "Şu anda lisans kontrolü yalnızca uyarı modundadır."
+                "Uygulama açılabilir ancak veri girişi için imzalı lisans gereklidir."
             ),
         )
 
     try:
-        license_data = load_license_data()
+        license_file_data = load_license_file_dict()
+
     except LicenseServiceError as exc:
         return LicenseCheckResult(
             status=LICENSE_STATUS_INVALID,
@@ -366,9 +390,7 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             message=str(exc),
         )
 
-    signature_validation_error = _validate_license_signature(license_data)
-
-    if signature_validation_error:
+    if not is_signed_license_file_data(license_file_data):
         return LicenseCheckResult(
             status=LICENSE_STATUS_INVALID,
             status_label="Lisans Geçersiz",
@@ -377,12 +399,59 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             allow_data_entry=False,
             license_file=target_file,
             device_code=current_device_code,
-            company_name=license_data.company_name,
-            license_type=license_data.license_type,
-            starts_at=license_data.starts_at,
-            expires_at=license_data.expires_at,
+            company_name="",
+            license_type="",
+            starts_at="",
+            expires_at="",
             days_remaining=None,
-            message=signature_validation_error,
+            message=(
+                "Bu lisans dosyası eski formatta veya imzasız görünüyor. "
+                "FTM artık yalnızca version 2 Ed25519 imzalı lisansları kabul eder."
+            ),
+        )
+
+    try:
+        signed_payload = verify_signed_license_file_data(license_file_data)
+        signature_text = str(license_file_data.get("signature") or "").strip()
+        license_data = _license_data_from_signed_payload(
+            signed_payload,
+            signature_text=signature_text,
+        )
+
+    except LicenseServiceError as exc:
+        error_message = str(exc)
+
+        if "imza" in error_message.lower():
+            return LicenseCheckResult(
+                status=LICENSE_STATUS_SIGNATURE_INVALID,
+                status_label="Lisans İmzası Geçersiz",
+                is_valid=False,
+                allow_app_open=True,
+                allow_data_entry=False,
+                license_file=target_file,
+                device_code=current_device_code,
+                company_name="",
+                license_type="",
+                starts_at="",
+                expires_at="",
+                days_remaining=None,
+                message=error_message,
+            )
+
+        return LicenseCheckResult(
+            status=LICENSE_STATUS_INVALID,
+            status_label="Lisans Geçersiz",
+            is_valid=False,
+            allow_app_open=True,
+            allow_data_entry=False,
+            license_file=target_file,
+            device_code=current_device_code,
+            company_name="",
+            license_type="",
+            starts_at="",
+            expires_at="",
+            days_remaining=None,
+            message=error_message,
         )
 
     if license_data.device_code != current_device_code:
@@ -406,8 +475,15 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
         )
 
     try:
-        start_date = _parse_license_date(license_data.starts_at, "Lisans başlangıç tarihi")
-        expire_date = _parse_license_date(license_data.expires_at, "Lisans bitiş tarihi")
+        start_date = _parse_license_date(
+            license_data.starts_at,
+            "Lisans başlangıç tarihi",
+        )
+        expire_date = _parse_license_date(
+            license_data.expires_at,
+            "Lisans bitiş tarihi",
+        )
+
     except LicenseServiceError as exc:
         return LicenseCheckResult(
             status=LICENSE_STATUS_INVALID,
@@ -477,7 +553,7 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
             starts_at=license_data.starts_at,
             expires_at=license_data.expires_at,
             days_remaining=days_remaining,
-            message=f"Lisans aktif. Kalan süre: {days_remaining} gün.",
+            message=f"İmzalı lisans aktif. Kalan süre: {days_remaining} gün.",
         )
 
     return LicenseCheckResult(
@@ -493,7 +569,7 @@ def check_license(today: date | None = None) -> LicenseCheckResult:
         starts_at=license_data.starts_at,
         expires_at=license_data.expires_at,
         days_remaining=days_remaining,
-        message=f"Lisans aktif. Kalan süre: {days_remaining} gün.",
+        message=f"İmzalı lisans aktif. Kalan süre: {days_remaining} gün.",
     )
 
 
@@ -509,10 +585,19 @@ def license_check_result_to_dict(result: LicenseCheckResult) -> dict[str, Any]:
 
 
 def is_signed_license_file_data(data: dict[str, Any]) -> bool:
+    if not isinstance(data, dict):
+        return False
+
+    try:
+        version = int(data.get("version") or 0)
+    except (TypeError, ValueError):
+        return False
+
+    algorithm = str(data.get("algorithm") or "").strip()
+
     return (
-        isinstance(data, dict)
-        and int(data.get("version") or 0) == SIGNED_LICENSE_VERSION
-        and str(data.get("algorithm") or "").strip() == SIGNED_LICENSE_ALGORITHM
+        version == SIGNED_LICENSE_VERSION
+        and algorithm == SIGNED_LICENSE_ALGORITHM
         and isinstance(data.get("payload"), dict)
         and isinstance(data.get("signature"), str)
     )
@@ -543,7 +628,10 @@ def verify_signed_license_file_data(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise LicenseServiceError("Lisans dosyası geçersiz. JSON kök değeri nesne olmalıdır.")
 
-    version = int(data.get("version") or 0)
+    try:
+        version = int(data.get("version") or 0)
+    except (TypeError, ValueError) as exc:
+        raise LicenseServiceError("İmzalı lisans sürümü sayısal olmalıdır.") from exc
 
     if version != SIGNED_LICENSE_VERSION:
         raise LicenseServiceError(
@@ -595,6 +683,23 @@ def verify_signed_license_file_data(data: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     return payload
+
+
+def _license_data_from_signed_payload(
+    payload: dict[str, Any],
+    *,
+    signature_text: str,
+) -> LicenseData:
+    return LicenseData(
+        company_name=_clean_required_text(payload.get("company_name"), "Firma adı"),
+        license_type=_clean_text(payload.get("license_type"), "annual"),
+        device_code=_clean_device_code(payload.get("device_code")),
+        starts_at=_clean_required_text(payload.get("starts_at"), "Lisans başlangıç tarihi"),
+        expires_at=_clean_required_text(payload.get("expires_at"), "Lisans bitiş tarihi"),
+        issued_at=_clean_text(payload.get("issued_at"), ""),
+        notes=_clean_text(payload.get("notes"), ""),
+        signature=_clean_required_text(signature_text, "Lisans imzası"),
+    )
 
 
 def _license_data_from_dict(data: dict[str, Any]) -> LicenseData:

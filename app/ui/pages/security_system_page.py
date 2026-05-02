@@ -21,7 +21,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services.license_service import check_license, license_file_path
+from app.services.license_service import (
+    LicenseServiceError,
+    check_license,
+    is_signed_license_file_data,
+    license_file_path,
+    verify_signed_license_file_data,
+)
 from app.ui.navigation import role_to_text, username_to_text
 from app.ui.pages.placeholder_page import AccessDeniedPage
 from app.ui.pages.security_system import (
@@ -338,7 +344,7 @@ class LicenseTabPage(QWidget):
 
         description = QLabel(
             "Müşteri cihaz kodunu buradan kopyalayabilir. "
-            "Gönderilen lisans dosyası yine bu ekrandan seçilerek yüklenebilir."
+            "Version 2 Ed25519 imzalı .ftmlic lisans dosyası yine bu ekrandan seçilerek yüklenebilir."
         )
         description.setObjectName("SecuritySystemSubTitle")
         description.setWordWrap(True)
@@ -353,7 +359,7 @@ class LicenseTabPage(QWidget):
             lambda: self.copy_device_code(license_result.device_code)
         )
 
-        load_license_button = QPushButton("Lisans Dosyası Yükle")
+        load_license_button = QPushButton("İmzalı Lisans Dosyası Yükle")
         load_license_button.setObjectName("RefreshButton")
         load_license_button.setMinimumHeight(40)
         load_license_button.clicked.connect(self.load_license_file)
@@ -434,9 +440,9 @@ class LicenseTabPage(QWidget):
         info_title.setObjectName("SecuritySystemTitle")
 
         info_text = QLabel(
-            "Bu aşamada lisans sistemi uyarı modundadır. "
-            "Lisans yoksa veya süresi dolmuşsa bilgi verir; programı henüz tamamen kilitlemez. "
-            "Müşteri lisans dosyasını bu ekrandan yükleyebilir."
+            "FTM artık yalnızca version 2 Ed25519 imzalı lisans dosyalarını kabul eder. "
+            "Eski format lisanslar geçersiz sayılır. "
+            "Lisans yoksa veya geçersizse uygulama açılabilir; ancak veri girişi güvenlik politikası gereği sınırlandırılır."
         )
         info_text.setObjectName("SecuritySystemSubTitle")
         info_text.setWordWrap(True)
@@ -471,9 +477,9 @@ class LicenseTabPage(QWidget):
     def load_license_file(self) -> None:
         selected_file, _ = QFileDialog.getOpenFileName(
             self,
-            "Lisans Dosyası Seç",
+            "İmzalı Lisans Dosyası Seç",
             "",
-            "FTM Lisans Dosyası (*.json *.ftmlic);;JSON Dosyası (*.json);;Tüm Dosyalar (*.*)",
+            "FTM Lisans Dosyası (*.ftmlic *.json);;JSON Dosyası (*.json);;Tüm Dosyalar (*.*)",
         )
 
         if not selected_file:
@@ -517,8 +523,8 @@ class LicenseTabPage(QWidget):
         if refreshed_result.is_valid:
             QMessageBox.information(
                 self,
-                "Lisans Dosyası Yüklendi",
-                "Lisans dosyası başarıyla yüklendi.\n\n"
+                "İmzalı Lisans Dosyası Yüklendi",
+                "Version 2 imzalı lisans dosyası başarıyla yüklendi.\n\n"
                 f"Durum: {refreshed_result.status_label}\n"
                 f"Firma: {refreshed_result.company_name or '-'}\n"
                 f"Bitiş Tarihi: {_format_license_date(refreshed_result.expires_at)}",
@@ -528,7 +534,7 @@ class LicenseTabPage(QWidget):
         QMessageBox.warning(
             self,
             "Lisans Dosyası Yüklendi Ancak Aktif Değil",
-            "Lisans dosyası doğru klasöre yüklendi fakat geçerli görünmüyor.\n\n"
+            "Lisans dosyası doğru klasöre yüklendi fakat aktif görünmüyor.\n\n"
             f"Durum: {refreshed_result.status_label}\n"
             f"Açıklama: {refreshed_result.message}",
         )
@@ -567,28 +573,20 @@ def _validate_license_file_for_install(source_path: Path) -> str | None:
     if not isinstance(loaded_data, dict):
         return "Lisans dosyası geçersiz. Dosya içeriği JSON nesnesi olmalıdır."
 
-    required_fields = [
-        "company_name",
-        "license_type",
-        "device_code",
-        "starts_at",
-        "expires_at",
-        "issued_at",
-        "notes",
-        "signature",
-    ]
-
-    missing_fields = [
-        field_name
-        for field_name in required_fields
-        if field_name not in loaded_data
-    ]
-
-    if missing_fields:
+    if not is_signed_license_file_data(loaded_data):
         return (
-            "Lisans dosyası eksik alanlar içeriyor.\n\n"
-            "Eksik alanlar: " + ", ".join(missing_fields)
+            "Lisans dosyası eski formatta veya imzasız görünüyor.\n\n"
+            "FTM artık yalnızca version 2 Ed25519 imzalı lisans dosyalarını kabul eder."
         )
+
+    try:
+        verify_signed_license_file_data(loaded_data)
+
+    except LicenseServiceError as exc:
+        return str(exc)
+
+    except Exception as exc:
+        return f"Lisans dosyası doğrulanırken beklenmeyen hata oluştu:\n\n{exc}"
 
     return None
 
