@@ -1,10 +1,15 @@
+import json
+import shutil
 import sys
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -24,6 +29,16 @@ from app.services.auth_service import (
     authenticate_user,
     hash_password,
 )
+from app.services.license_service import (
+    LICENSE_STATUS_ACTIVE,
+    LICENSE_STATUS_EXPIRING_SOON,
+    LicenseServiceError,
+    check_license,
+    get_device_code,
+    is_signed_license_file_data,
+    license_file_path,
+    verify_signed_license_file_data,
+)
 from app.services.setup_service import is_setup_completed
 from app.services.sqlite_setup_apply_service import (
     SqliteSetupApplyServiceError,
@@ -32,6 +47,398 @@ from app.services.sqlite_setup_apply_service import (
 from app.ui.desktop_app import FtmDesktopWindow
 from app.ui.setup_wizard_dialog import SetupWizardDialog
 from app.ui.styles import get_application_stylesheet
+
+
+VALID_LOGIN_LICENSE_STATUSES = {
+    LICENSE_STATUS_ACTIVE,
+    LICENSE_STATUS_EXPIRING_SOON,
+}
+
+
+class LicenseRequiredDialog(QDialog):
+    def __init__(self, initial_license_result: Any | None = None) -> None:
+        super().__init__()
+
+        self.license_result = initial_license_result or check_license()
+        self.detail_value_labels: dict[str, QLabel] = {}
+
+        self.setWindowTitle("FTM Lisans Gerekli")
+        self.setModal(True)
+        self.setMinimumSize(1024, 700)
+        self.setWindowFlags(self.windowFlags() | Qt.Window)
+
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.availableGeometry())
+
+        self.setWindowState(Qt.WindowMaximized)
+
+        self.status_badge = QLabel()
+        self.status_badge.setAlignment(Qt.AlignCenter)
+        self.status_badge.setMinimumHeight(36)
+
+        self.message_label = QLabel()
+        self.message_label.setObjectName("LoginSubtitle")
+        self.message_label.setWordWrap(True)
+        self.message_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self.device_code_input = QLineEdit()
+        self.device_code_input.setReadOnly(True)
+        self.device_code_input.setMinimumHeight(44)
+        self.device_code_input.setCursorPosition(0)
+
+        self._build_ui()
+        self.refresh_license_status(show_success_message=False)
+
+    def _build_ui(self) -> None:
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(28, 28, 28, 28)
+        root_layout.setSpacing(0)
+
+        card = QFrame()
+        card.setObjectName("LoginOuterCard")
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(30, 28, 30, 28)
+        card_layout.setSpacing(16)
+
+        logo = QLabel("FTM")
+        logo.setObjectName("LoginLogo")
+        logo.setAlignment(Qt.AlignCenter)
+
+        title = QLabel("FTM Lisans Gerekli")
+        title.setObjectName("LoginTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        subtitle = QLabel(
+            "Bu bilgisayarda geçerli bir FTM lisansı bulunamadı. "
+            "Uygulamaya giriş yapabilmek için version 2 imzalı lisans dosyası yüklenmelidir."
+        )
+        subtitle.setObjectName("LoginSubtitle")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+
+        status_card = QFrame()
+        status_card.setObjectName("Card")
+
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(18, 16, 18, 16)
+        status_layout.setSpacing(10)
+
+        status_title_row = QHBoxLayout()
+        status_title_row.setSpacing(10)
+
+        status_title = QLabel("Lisans Durumu")
+        status_title.setObjectName("LoginLabel")
+
+        status_title_row.addWidget(status_title, 1)
+        status_title_row.addWidget(self.status_badge, 0, Qt.AlignVCenter)
+
+        status_layout.addLayout(status_title_row)
+        status_layout.addWidget(self.message_label)
+
+        device_card = QFrame()
+        device_card.setObjectName("Card")
+
+        device_layout = QVBoxLayout(device_card)
+        device_layout.setContentsMargins(18, 16, 18, 16)
+        device_layout.setSpacing(10)
+
+        device_title = QLabel("Cihaz Kodu")
+        device_title.setObjectName("LoginLabel")
+
+        device_description = QLabel(
+            "Lisans üretimi için bu cihaz kodu kullanılacak. "
+            "Kodu kopyalayıp lisans oluşturacak kişiye gönderebilirsin."
+        )
+        device_description.setObjectName("LoginFooter")
+        device_description.setWordWrap(True)
+
+        device_layout.addWidget(device_title)
+        device_layout.addWidget(self.device_code_input)
+        device_layout.addWidget(device_description)
+
+        detail_card = QFrame()
+        detail_card.setObjectName("Card")
+
+        detail_layout = QVBoxLayout(detail_card)
+        detail_layout.setContentsMargins(18, 16, 18, 16)
+        detail_layout.setSpacing(10)
+
+        detail_title = QLabel("Lisans Bilgileri")
+        detail_title.setObjectName("LoginLabel")
+
+        detail_grid = QGridLayout()
+        detail_grid.setHorizontalSpacing(14)
+        detail_grid.setVerticalSpacing(8)
+
+        detail_rows = [
+            ("status", "Durum"),
+            ("company", "Firma"),
+            ("license_type", "Lisans Tipi"),
+            ("starts_at", "Başlangıç Tarihi"),
+            ("expires_at", "Bitiş Tarihi"),
+            ("days_remaining", "Kalan Süre"),
+            ("license_file", "Lisans Dosyası"),
+        ]
+
+        for row_index, (key, label_text) in enumerate(detail_rows):
+            label = QLabel(label_text)
+            label.setObjectName("LoginFooter")
+
+            value = QLabel("-")
+            value.setObjectName("LoginFooter")
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+            self.detail_value_labels[key] = value
+
+            detail_grid.addWidget(label, row_index, 0, Qt.AlignTop)
+            detail_grid.addWidget(value, row_index, 1)
+
+        detail_grid.setColumnStretch(0, 0)
+        detail_grid.setColumnStretch(1, 1)
+
+        detail_layout.addWidget(detail_title)
+        detail_layout.addLayout(detail_grid)
+
+        contact_card = QFrame()
+        contact_card.setObjectName("Card")
+
+        contact_layout = QVBoxLayout(contact_card)
+        contact_layout.setContentsMargins(18, 16, 18, 16)
+        contact_layout.setSpacing(8)
+
+        contact_title = QLabel("Lisans Yenileme / Yeni Lisans")
+        contact_title.setObjectName("LoginLabel")
+
+        contact_text = QLabel(
+            "Lisans yenilemek veya yeni lisans almak için lütfen iletişime geçin.\n\n"
+            "Telefon: \n"
+            "E-posta: "
+        )
+        contact_text.setObjectName("LoginFooter")
+        contact_text.setWordWrap(True)
+        contact_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        contact_layout.addWidget(contact_title)
+        contact_layout.addWidget(contact_text)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
+        copy_device_button = QPushButton("Cihaz Kodunu Kopyala")
+        copy_device_button.setObjectName("LoginButton")
+        copy_device_button.setAutoDefault(False)
+        copy_device_button.setDefault(False)
+        copy_device_button.clicked.connect(self.copy_device_code)
+
+        load_license_button = QPushButton("İmzalı Lisans Dosyası Yükle")
+        load_license_button.setObjectName("LoginButton")
+        load_license_button.setAutoDefault(False)
+        load_license_button.setDefault(False)
+        load_license_button.clicked.connect(self.load_license_file)
+
+        refresh_button = QPushButton("Lisans Durumunu Yenile")
+        refresh_button.setObjectName("CancelButton")
+        refresh_button.setAutoDefault(False)
+        refresh_button.setDefault(False)
+        refresh_button.clicked.connect(lambda: self.refresh_license_status(show_success_message=True))
+
+        exit_button = QPushButton("Uygulamadan Çık")
+        exit_button.setObjectName("CancelButton")
+        exit_button.setAutoDefault(False)
+        exit_button.setDefault(False)
+        exit_button.clicked.connect(self.reject)
+
+        button_row.addWidget(copy_device_button)
+        button_row.addWidget(load_license_button)
+        button_row.addWidget(refresh_button)
+        button_row.addWidget(exit_button)
+
+        footer = QLabel(
+            "Geçerli lisans yüklenmeden login ekranı açılmaz. "
+            "Bu ekran FTM girişinden önce güvenlik kapısı olarak çalışır."
+        )
+        footer.setObjectName("LoginFooter")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setWordWrap(True)
+
+        card_layout.addWidget(logo)
+        card_layout.addWidget(title)
+        card_layout.addWidget(subtitle)
+        card_layout.addWidget(status_card)
+        card_layout.addWidget(device_card)
+        card_layout.addWidget(detail_card)
+        card_layout.addWidget(contact_card)
+        card_layout.addStretch(1)
+        card_layout.addLayout(button_row)
+        card_layout.addWidget(footer)
+
+        root_layout.addWidget(card)
+
+    def copy_device_code(self) -> None:
+        device_code = self._current_device_code()
+
+        if not device_code:
+            QMessageBox.warning(
+                self,
+                "Cihaz Kodu Kopyalanamadı",
+                "Cihaz kodu boş görünüyor. Lisans durumunu yenileyip tekrar deneyin.",
+            )
+            return
+
+        clipboard = QApplication.clipboard()
+        clipboard.setText(device_code)
+
+        QMessageBox.information(
+            self,
+            "Cihaz Kodu Kopyalandı",
+            "Cihaz kodu panoya kopyalandı.\n\n"
+            f"{device_code}",
+        )
+
+    def load_license_file(self) -> None:
+        selected_file, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "İmzalı Lisans Dosyası Seç",
+            "",
+            "FTM Lisans Dosyası (*.ftmlic *.json);;JSON Dosyası (*.json);;Tüm Dosyalar (*.*)",
+        )
+
+        if not selected_file:
+            return
+
+        source_path = Path(selected_file)
+
+        validation_error = _validate_license_file_for_install(source_path)
+
+        if validation_error:
+            QMessageBox.critical(
+                self,
+                "Lisans Dosyası Yüklenemedi",
+                validation_error,
+            )
+            return
+
+        try:
+            ensure_core_runtime_folders()
+            target_path = license_file_path()
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            same_file = False
+            try:
+                same_file = source_path.resolve() == target_path.resolve()
+            except OSError:
+                same_file = False
+
+            if not same_file:
+                if target_path.exists():
+                    backup_path = _build_existing_license_backup_path(target_path)
+                    shutil.copy2(target_path, backup_path)
+
+                shutil.copy2(source_path, target_path)
+
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Lisans Dosyası Yüklenemedi",
+                f"Lisans dosyası kopyalanırken hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_license_status(show_success_message=False)
+
+        if _is_license_valid_for_login(self.license_result):
+            QMessageBox.information(
+                self,
+                "İmzalı Lisans Dosyası Yüklendi",
+                "Version 2 imzalı lisans dosyası başarıyla yüklendi.\n\n"
+                f"Durum: {self.license_result.status_label}\n"
+                f"Firma: {self.license_result.company_name or '-'}\n"
+                f"Bitiş Tarihi: {_format_license_date(self.license_result.expires_at)}\n\n"
+                "Şimdi giriş ekranına geçilecek.",
+            )
+            self.accept()
+            return
+
+        QMessageBox.warning(
+            self,
+            "Lisans Dosyası Yüklendi Ancak Aktif Değil",
+            "Lisans dosyası doğru klasöre yüklendi fakat login için geçerli görünmüyor.\n\n"
+            f"Durum: {self.license_result.status_label}\n"
+            f"Açıklama: {self.license_result.message}",
+        )
+
+    def refresh_license_status(self, *, show_success_message: bool) -> None:
+        try:
+            self.license_result = check_license()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Lisans Durumu Okunamadı",
+                f"Lisans durumu kontrol edilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self._render_license_result()
+
+        if not show_success_message:
+            return
+
+        if _is_license_valid_for_login(self.license_result):
+            QMessageBox.information(
+                self,
+                "Lisans Aktif",
+                "Geçerli lisans bulundu. Şimdi giriş ekranına geçilecek.",
+            )
+            self.accept()
+            return
+
+        QMessageBox.warning(
+            self,
+            "Lisans Gerekli",
+            "Login ekranına geçmek için geçerli bir lisans bulunamadı.\n\n"
+            f"Durum: {self.license_result.status_label}\n"
+            f"Açıklama: {self.license_result.message}",
+        )
+
+    def _render_license_result(self) -> None:
+        status_label = str(self.license_result.status_label or "Lisans Durumu")
+        status_object_name = "HealthOk" if _is_license_valid_for_login(self.license_result) else "HealthFail"
+
+        self.status_badge.setText(status_label)
+        self.status_badge.setObjectName(status_object_name)
+        _refresh_widget_style(self.status_badge)
+
+        self.message_label.setText(str(self.license_result.message or "-"))
+        self.device_code_input.setText(self._current_device_code())
+
+        detail_values = {
+            "status": status_label,
+            "company": self.license_result.company_name or "-",
+            "license_type": self.license_result.license_type or "-",
+            "starts_at": _format_license_date(self.license_result.starts_at),
+            "expires_at": _format_license_date(self.license_result.expires_at),
+            "days_remaining": _format_days_remaining(self.license_result.days_remaining),
+            "license_file": str(self.license_result.license_file),
+        }
+
+        for key, value in detail_values.items():
+            value_label = self.detail_value_labels.get(key)
+            if value_label is not None:
+                value_label.setText(str(value))
+
+    def _current_device_code(self) -> str:
+        result_device_code = str(getattr(self.license_result, "device_code", "") or "").strip()
+
+        if result_device_code:
+            return result_device_code
+
+        try:
+            return get_device_code()
+        except Exception:
+            return ""
 
 
 class ForcedPasswordChangeDialog(QDialog):
@@ -456,7 +863,7 @@ def _run_initial_setup_if_needed() -> bool:
             f"Firma: {result.company_name}\n"
             f"ADMIN kullanıcı: {result.admin_username}\n"
             f"Veritabanı: {result.sqlite_database_path}\n\n"
-            "Şimdi giriş ekranına geçilecek.",
+            "Şimdi lisans kontrolü yapılacak.",
         )
 
         return True
@@ -478,12 +885,136 @@ def _run_initial_setup_if_needed() -> bool:
         return False
 
 
+def _run_license_gate_if_needed() -> bool:
+    try:
+        ensure_core_runtime_folders()
+        license_result = check_license()
+
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "FTM Lisans Kontrolü",
+            f"Lisans durumu kontrol edilirken hata oluştu:\n\n{exc}",
+        )
+        return False
+
+    if _is_license_valid_for_login(license_result):
+        return True
+
+    license_dialog = LicenseRequiredDialog(license_result)
+    license_dialog.setWindowModality(Qt.ApplicationModal)
+    license_dialog.setWindowState(Qt.WindowMaximized)
+    license_dialog.raise_()
+    license_dialog.activateWindow()
+
+    return license_dialog.exec() == QDialog.Accepted
+
+
+def _is_license_valid_for_login(license_result: Any) -> bool:
+    status = str(getattr(license_result, "status", "") or "").strip()
+    is_valid = bool(getattr(license_result, "is_valid", False))
+
+    return is_valid and status in VALID_LOGIN_LICENSE_STATUSES
+
+
+def _validate_license_file_for_install(source_path: Path) -> str | None:
+    if not source_path.exists():
+        return f"Seçilen lisans dosyası bulunamadı:\n\n{source_path}"
+
+    if not source_path.is_file():
+        return f"Seçilen yol bir dosya değil:\n\n{source_path}"
+
+    if source_path.suffix.lower() not in {".json", ".ftmlic"}:
+        return (
+            "Lisans dosyası uzantısı geçersiz.\n\n"
+            "Beklenen dosya türü: .json veya .ftmlic"
+        )
+
+    try:
+        with source_path.open("r", encoding="utf-8") as file:
+            loaded_data = json.load(file)
+
+    except json.JSONDecodeError:
+        return (
+            "Lisans dosyası okunamadı.\n\n"
+            "Dosya JSON formatında değil veya bozuk görünüyor."
+        )
+
+    except OSError as exc:
+        return f"Lisans dosyası okunamadı:\n\n{exc}"
+
+    if not isinstance(loaded_data, dict):
+        return "Lisans dosyası geçersiz. Dosya içeriği JSON nesnesi olmalıdır."
+
+    if not is_signed_license_file_data(loaded_data):
+        return (
+            "Lisans dosyası eski formatta veya imzasız görünüyor.\n\n"
+            "FTM artık yalnızca version 2 Ed25519 imzalı lisans dosyalarını kabul eder."
+        )
+
+    try:
+        verify_signed_license_file_data(loaded_data)
+
+    except LicenseServiceError as exc:
+        return str(exc)
+
+    except Exception as exc:
+        return f"Lisans dosyası doğrulanırken beklenmeyen hata oluştu:\n\n{exc}"
+
+    return None
+
+
+def _build_existing_license_backup_path(target_path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    return target_path.with_name(
+        f"{target_path.stem}.backup_{timestamp}{target_path.suffix}"
+    )
+
+
+def _format_license_date(value: str) -> str:
+    cleaned_value = str(value or "").strip()
+
+    if not cleaned_value:
+        return "-"
+
+    try:
+        parsed_date = datetime.strptime(cleaned_value, "%Y-%m-%d")
+    except ValueError:
+        return cleaned_value
+
+    return parsed_date.strftime("%d.%m.%Y")
+
+
+def _format_days_remaining(value: int | None) -> str:
+    if value is None:
+        return "-"
+
+    if value < 0:
+        return f"Süresi {abs(value)} gün önce doldu"
+
+    if value == 0:
+        return "Bugün bitiyor"
+
+    return f"{value} gün"
+
+
+def _refresh_widget_style(widget: Any) -> None:
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(get_application_stylesheet())
 
     if not _run_initial_setup_if_needed():
+        sys.exit(0)
+
+    if not _run_license_gate_if_needed():
         sys.exit(0)
 
     login_dialog = LoginDialog()
