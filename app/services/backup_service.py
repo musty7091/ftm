@@ -21,9 +21,11 @@ from app.services.app_settings_service import (
 )
 from app.services.mail_service import MailServiceError, parse_mail_recipients, send_mail
 
+
 def _apply_sqlite_backup_connection_pragmas(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 10000")
+
 
 @dataclass
 class BackupResult:
@@ -382,7 +384,17 @@ def _build_backup_success_mail_body(
     started_at: datetime,
     finished_at: datetime,
     backup_sha256: str,
+    attach_backup: bool,
 ) -> str:
+    attachment_note = (
+        "Yedek dosyası bu maile eklenmiştir."
+        if attach_backup
+        else (
+            "Güvenlik politikası gereği yedek dosyası bu maile eklenmemiştir. "
+            "Yedek yalnızca uygulamanın yedek klasöründe tutulmuştur."
+        )
+    )
+
     if _is_sqlite_mode():
         sqlite_path = _sqlite_database_path()
 
@@ -394,7 +406,8 @@ def _build_backup_success_mail_body(
             f"SHA256             : {backup_sha256}\n"
             f"Silinen eski yedek : {deleted_old_backup_count}\n"
             f"Başlangıç zamanı   : {started_at}\n"
-            f"Bitiş zamanı       : {finished_at}\n\n"
+            f"Bitiş zamanı       : {finished_at}\n"
+            f"Mail eki durumu    : {attachment_note}\n\n"
             "Bu mail FTM yedekleme sistemi tarafından otomatik oluşturulmuştur."
         )
 
@@ -412,7 +425,8 @@ def _build_backup_success_mail_body(
         f"SHA256            : {backup_sha256}\n"
         f"Silinen eski yedek: {deleted_old_backup_count}\n"
         f"Başlangıç zamanı  : {started_at}\n"
-        f"Bitiş zamanı      : {finished_at}\n\n"
+        f"Bitiş zamanı      : {finished_at}\n"
+        f"Mail eki durumu   : {attachment_note}\n\n"
         "Bu mail FTM yedekleme sistemi tarafından otomatik oluşturulmuştur."
     )
 
@@ -439,6 +453,10 @@ def _is_backup_mail_enabled() -> bool:
     return _env_bool("BACKUP_MAIL_ENABLED", True)
 
 
+def _is_backup_mail_attachment_enabled() -> bool:
+    return _env_bool("BACKUP_MAIL_ATTACH_BACKUP", False)
+
+
 def _send_backup_success_mail(
     *,
     backup_file: Path,
@@ -457,7 +475,7 @@ def _send_backup_success_mail(
     if not mail_recipients:
         return False, "Yedekleme bilgi maili için alıcı tanımlı değil.", mail_recipients
 
-    attach_backup = _env_bool("BACKUP_MAIL_ATTACH_BACKUP", True)
+    attach_backup = _is_backup_mail_attachment_enabled()
     attachment_path = backup_file if attach_backup else None
 
     subject = _build_backup_mail_subject(success=True)
@@ -468,6 +486,7 @@ def _send_backup_success_mail(
         started_at=started_at,
         finished_at=finished_at,
         backup_sha256=backup_sha256,
+        attach_backup=attach_backup,
     )
 
     try:
@@ -477,6 +496,20 @@ def _send_backup_success_mail(
             recipients=mail_recipients,
             attachment_path=attachment_path,
         )
+
+        if mail_result.success and not attach_backup:
+            return (
+                True,
+                f"{mail_result.message} Yedek dosyası mail eki olarak gönderilmedi.",
+                mail_result.recipients,
+            )
+
+        if mail_result.success and attach_backup:
+            return (
+                True,
+                f"{mail_result.message} Yedek dosyası mail eki olarak gönderildi.",
+                mail_result.recipients,
+            )
 
         return mail_result.success, mail_result.message, mail_result.recipients
 
@@ -564,6 +597,7 @@ def _write_backup_metadata(
         "mail_sent": mail_sent,
         "mail_message": mail_message,
         "mail_recipients": mail_recipients,
+        "mail_attachment_enabled": _is_backup_mail_attachment_enabled(),
     }
 
     with metadata_file.open("w", encoding="utf-8") as file:
