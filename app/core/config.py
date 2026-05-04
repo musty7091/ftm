@@ -23,6 +23,10 @@ SUPPORTED_DATABASE_ENGINES = {
 }
 
 
+class AppSetupConfigError(RuntimeError):
+    pass
+
+
 def _get_env(name: str, default: str = "") -> str:
     value = os.getenv(name)
 
@@ -40,14 +44,47 @@ def _load_setup_config_data() -> dict[str, Any]:
     if not SETUP_CONFIG_FILE.exists():
         return {}
 
+    if not SETUP_CONFIG_FILE.is_file():
+        raise AppSetupConfigError(
+            "FTM kurulum ayar dosyası geçersiz.\n\n"
+            f"Beklenen dosya:\n{SETUP_CONFIG_FILE}\n\n"
+            "Bu yol bir dosya değil. Uygulama yanlış ayarlarla devam ettirilmedi."
+        )
+
     try:
-        with SETUP_CONFIG_FILE.open("r", encoding="utf-8") as file:
+        with SETUP_CONFIG_FILE.open("r", encoding="utf-8-sig") as file:
             loaded_data = json.load(file)
-    except Exception:
-        return {}
+
+    except json.JSONDecodeError as exc:
+        raise AppSetupConfigError(
+            "FTM kurulum ayar dosyası bozuk JSON içeriyor.\n\n"
+            f"Dosya:\n{SETUP_CONFIG_FILE}\n\n"
+            f"Satır: {exc.lineno}, Sütun: {exc.colno}\n"
+            f"Hata: {exc.msg}\n\n"
+            "Finans verisini korumak için uygulama varsayılan ayarlara düşürülmedi. "
+            "Lütfen app_setup.json dosyasını düzeltin veya bilinçli olarak yeniden kurulum yapın."
+        ) from exc
+
+    except OSError as exc:
+        raise AppSetupConfigError(
+            "FTM kurulum ayar dosyası okunamadı.\n\n"
+            f"Dosya:\n{SETUP_CONFIG_FILE}\n\n"
+            f"Hata: {exc}\n\n"
+            "Finans verisini korumak için uygulama varsayılan ayarlara düşürülmedi."
+        ) from exc
 
     if not isinstance(loaded_data, dict):
-        return {}
+        raise AppSetupConfigError(
+            "FTM kurulum ayar dosyası geçersiz formatta.\n\n"
+            f"Dosya:\n{SETUP_CONFIG_FILE}\n\n"
+            "app_setup.json en üst seviyede JSON object olmalıdır.\n"
+            "Örnek doğru yapı:\n"
+            '{\n'
+            '  "setup_completed": true,\n'
+            '  "database_engine": "sqlite"\n'
+            '}\n\n'
+            "Finans verisini korumak için uygulama varsayılan ayarlara düşürülmedi."
+        )
 
     return loaded_data
 
