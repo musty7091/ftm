@@ -126,7 +126,7 @@ def get_database_migration_status() -> DatabaseMigrationStatus:
 
         if tracking_table_exists:
             applied_migrations = _get_applied_migrations(connection)
-            _verify_applied_migration_checksums(applied_migrations)
+            _verify_applied_migration_records(applied_migrations)
         else:
             applied_migrations = []
 
@@ -140,7 +140,7 @@ def get_database_migration_status() -> DatabaseMigrationStatus:
     is_up_to_date = (
         tracking_table_exists
         and not pending_migration_ids
-        and current_user_version >= expected_schema_version
+        and current_user_version == expected_schema_version
     )
 
     return DatabaseMigrationStatus(
@@ -154,6 +154,19 @@ def get_database_migration_status() -> DatabaseMigrationStatus:
         pending_migration_ids=pending_migration_ids,
         is_up_to_date=is_up_to_date,
     )
+
+
+def assert_database_migration_readiness() -> DatabaseMigrationStatus:
+    ensure_sqlite_mode()
+    _validate_migration_definitions()
+
+    status = get_database_migration_status()
+    _assert_database_migration_status_is_ready(status)
+
+    with engine.connect() as connection:
+        _assert_required_migrations_are_applied(connection)
+
+    return status
 
 
 def run_database_migrations(*, require_backup: bool = True) -> DatabaseMigrationResult:
@@ -170,12 +183,14 @@ def run_database_migrations(*, require_backup: bool = True) -> DatabaseMigration
     status_before = get_database_migration_status()
 
     if status_before.is_up_to_date:
+        ready_status = assert_database_migration_readiness()
+
         return DatabaseMigrationResult(
             database_path=str(database_path),
             backup_file=None,
             applied_migration_ids=[],
-            current_user_version=status_before.current_user_version,
-            expected_schema_version=status_before.expected_schema_version,
+            current_user_version=ready_status.current_user_version,
+            expected_schema_version=ready_status.expected_schema_version,
             message="Veritabanı şeması güncel. Çalıştırılacak migration yok.",
         )
 
@@ -194,7 +209,7 @@ def run_database_migrations(*, require_backup: bool = True) -> DatabaseMigration
             _ensure_tracking_table(connection)
 
             applied_migrations = _get_applied_migrations(connection)
-            _verify_applied_migration_checksums(applied_migrations)
+            _verify_applied_migration_records(applied_migrations)
 
             pending_migrations = _get_pending_migrations_from_applied(applied_migrations)
 
@@ -206,7 +221,7 @@ def run_database_migrations(*, require_backup: bool = True) -> DatabaseMigration
                 applied_migration_ids.append(migration.migration_id)
                 _set_sqlite_user_version(connection, migration.target_version)
 
-        status_after = get_database_migration_status()
+        status_after = assert_database_migration_readiness()
 
         return DatabaseMigrationResult(
             database_path=str(database_path),
@@ -289,6 +304,111 @@ def _validate_migration_definitions() -> None:
         migration_ids.add(migration_id)
         target_versions.add(migration.target_version)
         previous_target_version = migration.target_version
+
+    expected_schema_version = _expected_schema_version()
+
+    if CURRENT_SCHEMA_VERSION != expected_schema_version:
+        raise DatabaseMigrationServiceError(
+            "CURRENT_SCHEMA_VERSION ile migration hedef sürümü uyuşmuyor.\n\n"
+            f"CURRENT_SCHEMA_VERSION: {CURRENT_SCHEMA_VERSION}\n"
+            f"Migration hedef sürümü: {expected_schema_version}"
+        )
+
+
+def _assert_database_migration_status_is_ready(
+    status: DatabaseMigrationStatus,
+) -> None:
+    if not status.database_file_exists:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. SQLite veritabanı dosyası bulunamadı.\n\n"
+            f"Beklenen veritabanı yolu:\n{status.database_path}"
+        )
+
+    if not status.tracking_table_exists:
+        raise DatabaseMigrationServiceError(
+            f"Migration doğrulaması başarısız. {MIGRATION_TRACKING_TABLE} tablosu bulunamadı."
+        )
+
+    if status.pending_migration_ids:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. Bekleyen migration kayıtları var:\n"
+            + "\n".join(f"- {migration_id}" for migration_id in status.pending_migration_ids)
+        )
+
+    if status.current_user_version < status.expected_schema_version:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. SQLite user_version beklenen sürümden eski.\n\n"
+            f"Mevcut user_version: {status.current_user_version}\n"
+            f"Beklenen schema version: {status.expected_schema_version}"
+        )
+
+    if status.current_user_version > status.expected_schema_version:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. SQLite user_version uygulamanın bildiği sürümden yeni.\n\n"
+            f"Mevcut user_version: {status.current_user_version}\n"
+            f"Uygulamanın beklediği schema version: {status.expected_schema_version}\n\n"
+            "Bu veritabanı daha yeni bir FTM sürümüyle güncellenmiş olabilir."
+        )
+
+    if not status.is_up_to_date:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. Veritabanı güncel görünmüyor."
+        )
+
+
+def _assert_required_migrations_are_applied(connection: Any) -> None:
+    if not _tracking_table_exists(connection):
+        raise DatabaseMigrationServiceError(
+            f"Migration doğrulaması başarısız. {MIGRATION_TRACKING_TABLE} tablosu yok."
+        )
+
+    applied_migrations = _get_applied_migrations(connection)
+    _verify_applied_migration_records(applied_migrations)
+
+    applied_map = {
+        migration.migration_id: migration
+        for migration in applied_migrations
+    }
+
+    for migration in MIGRATIONS:
+        applied_migration = applied_map.get(migration.migration_id)
+
+        if applied_migration is None:
+            raise DatabaseMigrationServiceError(
+                "Migration doğrulaması başarısız. Zorunlu migration kaydı bulunamadı.\n\n"
+                f"Migration ID: {migration.migration_id}"
+            )
+
+        if not applied_migration.success:
+            raise DatabaseMigrationServiceError(
+                "Migration doğrulaması başarısız. Zorunlu migration başarısız kayıtlı görünüyor.\n\n"
+                f"Migration ID: {migration.migration_id}\n"
+                f"Hata: {applied_migration.error_message or '-'}"
+            )
+
+        if applied_migration.target_version != migration.target_version:
+            raise DatabaseMigrationServiceError(
+                "Migration doğrulaması başarısız. Migration hedef sürümü değişmiş görünüyor.\n\n"
+                f"Migration ID: {migration.migration_id}\n"
+                f"Beklenen target_version: {migration.target_version}\n"
+                f"Bulunan target_version: {applied_migration.target_version}"
+            )
+
+        if applied_migration.checksum != migration.checksum:
+            raise DatabaseMigrationServiceError(
+                "Migration doğrulaması başarısız. Migration checksum değeri uyuşmuyor.\n\n"
+                f"Migration ID: {migration.migration_id}"
+            )
+
+    current_user_version = _get_sqlite_user_version(connection)
+    expected_schema_version = _expected_schema_version()
+
+    if current_user_version != expected_schema_version:
+        raise DatabaseMigrationServiceError(
+            "Migration doğrulaması başarısız. SQLite user_version beklenen değerle uyuşmuyor.\n\n"
+            f"Mevcut user_version: {current_user_version}\n"
+            f"Beklenen schema version: {expected_schema_version}"
+        )
 
 
 def _tracking_table_exists(connection: Any) -> bool:
@@ -402,7 +522,7 @@ def _get_applied_migrations(connection: Any) -> list[AppliedMigrationInfo]:
     return result
 
 
-def _verify_applied_migration_checksums(
+def _verify_applied_migration_records(
     applied_migrations: list[AppliedMigrationInfo],
 ) -> None:
     migration_map = {
@@ -410,17 +530,67 @@ def _verify_applied_migration_checksums(
         for migration in MIGRATIONS
     }
 
+    seen_ids: set[str] = set()
+    seen_target_versions: set[int] = set()
+
     for applied_migration in applied_migrations:
+        if not applied_migration.migration_id.strip():
+            raise DatabaseMigrationServiceError(
+                "schema_migrations içinde boş migration_id bulundu."
+            )
+
+        if applied_migration.migration_id in seen_ids:
+            raise DatabaseMigrationServiceError(
+                "schema_migrations içinde tekrarlanan migration_id bulundu.\n\n"
+                f"Migration ID: {applied_migration.migration_id}"
+            )
+
+        if applied_migration.target_version in seen_target_versions:
+            raise DatabaseMigrationServiceError(
+                "schema_migrations içinde tekrarlanan target_version bulundu.\n\n"
+                f"Target version: {applied_migration.target_version}"
+            )
+
+        seen_ids.add(applied_migration.migration_id)
+        seen_target_versions.add(applied_migration.target_version)
+
         expected_migration = migration_map.get(applied_migration.migration_id)
 
         if expected_migration is None:
-            continue
+            raise DatabaseMigrationServiceError(
+                "schema_migrations içinde bu uygulama sürümünün tanımadığı bir migration kaydı var.\n\n"
+                f"Migration ID: {applied_migration.migration_id}\n"
+                "Bu veritabanı farklı veya daha yeni bir FTM sürümüyle güncellenmiş olabilir."
+            )
+
+        if applied_migration.migration_name != expected_migration.name:
+            raise DatabaseMigrationServiceError(
+                "Daha önce uygulanmış migration adı değişmiş görünüyor.\n\n"
+                f"Migration ID: {applied_migration.migration_id}\n"
+                f"Beklenen: {expected_migration.name}\n"
+                f"Bulunan: {applied_migration.migration_name}"
+            )
+
+        if applied_migration.target_version != expected_migration.target_version:
+            raise DatabaseMigrationServiceError(
+                "Daha önce uygulanmış migration target_version değeri değişmiş görünüyor.\n\n"
+                f"Migration ID: {applied_migration.migration_id}\n"
+                f"Beklenen: {expected_migration.target_version}\n"
+                f"Bulunan: {applied_migration.target_version}"
+            )
 
         if applied_migration.checksum != expected_migration.checksum:
             raise DatabaseMigrationServiceError(
-                "Daha önce uygulanmış bir migration dosyası değiştirilmiş görünüyor.\n\n"
+                "Daha önce uygulanmış bir migration tanımı değiştirilmiş görünüyor.\n\n"
                 f"Migration ID: {applied_migration.migration_id}\n"
                 "Bu güvenlik nedeniyle durduruldu."
+            )
+
+        if not applied_migration.success:
+            raise DatabaseMigrationServiceError(
+                "schema_migrations içinde başarısız migration kaydı bulundu.\n\n"
+                f"Migration ID: {applied_migration.migration_id}\n"
+                f"Hata: {applied_migration.error_message or '-'}"
             )
 
 
@@ -528,5 +698,6 @@ __all__ = [
     "DatabaseMigrationServiceError",
     "ensure_sqlite_mode",
     "get_database_migration_status",
+    "assert_database_migration_readiness",
     "run_database_migrations",
 ]

@@ -25,6 +25,9 @@ from PySide6.QtWidgets import (
 )
 
 
+DEFAULT_SQLITE_DATABASE_PATH = "data/ftm_local.db"
+
+
 SETUP_WIZARD_STYLE = """
 QDialog {
     background-color: #0f172a;
@@ -138,6 +141,12 @@ QTextEdit::placeholder {
     color: #64748b;
 }
 
+QLineEdit[readOnly="true"] {
+    background-color: #111827;
+    color: #cbd5e1;
+    border: 1px solid #475569;
+}
+
 QComboBox::drop-down {
     border: none;
     width: 30px;
@@ -246,8 +255,13 @@ class SetupWizardDialog(QDialog):
         self.database_stack = QStackedWidget()
 
         self.sqlite_database_path_input = QLineEdit()
-        self.sqlite_database_path_input.setPlaceholderText("data/ftm_local.db")
-        self.sqlite_database_path_input.setText("data/ftm_local.db")
+        self.sqlite_database_path_input.setPlaceholderText(DEFAULT_SQLITE_DATABASE_PATH)
+        self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
+        self.sqlite_database_path_input.setReadOnly(True)
+        self.sqlite_database_path_input.setToolTip(
+            "SQLite Local kurulumda veritabanı yolu sabittir. "
+            "FTM bu dosyayı AppData\\Local\\FTM altında oluşturur."
+        )
 
         self.database_host_input = QLineEdit()
         self.database_host_input.setPlaceholderText("localhost veya 192.168.1.100")
@@ -436,7 +450,8 @@ class SetupWizardDialog(QDialog):
         layout.setSpacing(4)
 
         info = QLabel(
-            "Not: SQLite seçeneği tek bilgisayar ve pilot kullanım için uygundur. "
+            "Not: SQLite Local seçeneğinde veritabanı yolu güvenlik ve veri bütünlüğü için sabittir. "
+            "FTM dosyayı AppData\\Local\\FTM\\data altında yönetir. "
             "PostgreSQL seçeneği, PostgreSQL sunucusunun önceden kurulu ve çalışır durumda olmasını gerektirir."
         )
         info.setObjectName("SetupWizardWarningText")
@@ -520,8 +535,9 @@ class SetupWizardDialog(QDialog):
             return
 
         self.database_stack.setCurrentIndex(0)
+        self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
         self.status_label.setText(
-            "SQLite seçildi. Küçük işletme ve tek bilgisayar kullanımı için önerilen kolay kurulum modudur."
+            "SQLite Local seçildi. Veritabanı yolu sabittir ve FTM tarafından güvenli AppData klasöründe yönetilir."
         )
 
     def _selected_database_engine(self) -> str:
@@ -530,7 +546,8 @@ class SetupWizardDialog(QDialog):
     def _build_payload(self) -> SetupWizardPayload:
         database_engine = self._selected_database_engine()
 
-        sqlite_database_path = self.sqlite_database_path_input.text().strip()
+        sqlite_database_path = DEFAULT_SQLITE_DATABASE_PATH
+        self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
         database_host = self.database_host_input.text().strip()
         database_port_text = self.database_port_input.text().strip()
         database_name = self.database_name_input.text().strip()
@@ -552,11 +569,8 @@ class SetupWizardDialog(QDialog):
             raise ValueError("Geçerli bir veritabanı tipi seçilmelidir.")
 
         if database_engine == "sqlite":
-            if not sqlite_database_path:
-                raise ValueError("SQLite veritabanı yolu boş olamaz.")
-
-            if ".." in sqlite_database_path.replace("\\", "/").split("/"):
-                raise ValueError("SQLite veritabanı yolunda '..' kullanılamaz.")
+            if sqlite_database_path != DEFAULT_SQLITE_DATABASE_PATH:
+                raise ValueError("SQLite Local veritabanı yolu sistem tarafından sabitlenmiştir.")
 
         if database_engine == "postgresql":
             if not database_host:
@@ -648,4 +662,5 @@ class SetupWizardDialog(QDialog):
 __all__ = [
     "SetupWizardDialog",
     "SetupWizardPayload",
+    "DEFAULT_SQLITE_DATABASE_PATH",
 ]

@@ -6,10 +6,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
-LICENSE_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA0OJYXhw/+CLsKR0Vy6HN6dah3Fk1eQeKxoZvPBKgenk=
+LICENSE_PUBLIC_KEY_PEM = b""" -----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA2KHyVtElLTzfdErddPKJcOXNK76QfMZDPcGRvwcV3aI=
 -----END PUBLIC KEY-----
-"""
+""".replace(b" ", b"", 1)
 
 
 class LicensePublicKeyError(ValueError):

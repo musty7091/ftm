@@ -20,6 +20,9 @@ from app.services.sqlite_setup_apply_service import (
 )
 
 
+VALID_ADMIN_PASSWORD = "Admin1234"
+
+
 def _configure_temp_setup_paths(
     *,
     monkeypatch: pytest.MonkeyPatch,
@@ -29,7 +32,8 @@ def _configure_temp_setup_paths(
     setup_config_file = config_folder / "app_setup.json"
     app_settings_file = config_folder / "app_settings.json"
 
-    monkeypatch.setattr(setup_service, "BASE_DIR", tmp_path)
+    monkeypatch.setenv("FTM_RUNTIME_DIR", str(tmp_path))
+
     monkeypatch.setattr(setup_service, "SETUP_CONFIG_FOLDER", config_folder)
     monkeypatch.setattr(setup_service, "SETUP_CONFIG_FILE", setup_config_file)
 
@@ -69,7 +73,7 @@ def test_apply_sqlite_initial_setup_creates_database_admin_and_config_files(
         company_email="firma@ftm.com",
         admin_username="admin",
         admin_full_name="Sistem Yöneticisi",
-        admin_password="123456",
+        admin_password=VALID_ADMIN_PASSWORD,
         admin_email="admin@ftm.com",
     )
 
@@ -116,7 +120,7 @@ def test_apply_sqlite_initial_setup_writes_admin_user_and_permissions(
         company_email="firma@ftm.com",
         admin_username="admin",
         admin_full_name="Sistem Yöneticisi",
-        admin_password="123456",
+        admin_password=VALID_ADMIN_PASSWORD,
         admin_email="admin@ftm.com",
     )
 
@@ -138,31 +142,35 @@ def test_apply_sqlite_initial_setup_writes_admin_user_and_permissions(
         future=True,
     )
 
-    with TestSessionLocal() as session:
-        admin_user = session.execute(
-            select(User).where(User.username == "admin")
-        ).scalar_one()
+    try:
+        with TestSessionLocal() as session:
+            admin_user = session.execute(
+                select(User).where(User.username == "admin")
+            ).scalar_one()
 
-        role_permission_rows = session.execute(
-            select(RolePermission)
-        ).scalars().all()
+            role_permission_rows = session.execute(
+                select(RolePermission)
+            ).scalars().all()
 
-        admin_allowed_permission_rows = session.execute(
-            select(RolePermission).where(
-                RolePermission.role == UserRole.ADMIN,
-                RolePermission.is_allowed.is_(True),
-            )
-        ).scalars().all()
+            admin_allowed_permission_rows = session.execute(
+                select(RolePermission).where(
+                    RolePermission.role == UserRole.ADMIN,
+                    RolePermission.is_allowed.is_(True),
+                )
+            ).scalars().all()
 
-    assert admin_user.full_name == "Sistem Yöneticisi"
-    assert admin_user.email == "admin@ftm.com"
-    assert admin_user.role == UserRole.ADMIN
-    assert admin_user.is_active is True
-    assert admin_user.password_hash != "123456"
-    assert verify_password("123456", admin_user.password_hash) is True
+        assert admin_user.full_name == "Sistem Yöneticisi"
+        assert admin_user.email == "admin@ftm.com"
+        assert admin_user.role == UserRole.ADMIN
+        assert admin_user.is_active is True
+        assert admin_user.password_hash != VALID_ADMIN_PASSWORD
+        assert verify_password(VALID_ADMIN_PASSWORD, admin_user.password_hash) is True
 
-    assert len(role_permission_rows) == len(UserRole) * len(Permission)
-    assert len(admin_allowed_permission_rows) == len(Permission)
+        assert len(role_permission_rows) == len(UserRole) * len(Permission)
+        assert len(admin_allowed_permission_rows) == len(Permission)
+
+    finally:
+        engine.dispose()
 
 
 def test_apply_sqlite_initial_setup_rejects_second_admin_creation(
@@ -182,7 +190,7 @@ def test_apply_sqlite_initial_setup_rejects_second_admin_creation(
         company_email="firma@ftm.com",
         admin_username="admin",
         admin_full_name="Sistem Yöneticisi",
-        admin_password="123456",
+        admin_password=VALID_ADMIN_PASSWORD,
         admin_email="admin@ftm.com",
     )
 
@@ -195,7 +203,7 @@ def test_apply_sqlite_initial_setup_rejects_second_admin_creation(
             company_email="firma@ftm.com",
             admin_username="admin2",
             admin_full_name="İkinci Admin",
-            admin_password="123456",
+            admin_password="Admin5678",
             admin_email="admin2@ftm.com",
         )
 

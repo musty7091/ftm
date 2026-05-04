@@ -12,12 +12,18 @@ from app.db.session import Base
 from app.models.enums import UserRole
 from app.models.role_permission import RolePermission
 from app.models.user import User
-from app.services.app_settings_service import update_app_settings
+from app.services.app_settings_service import (
+    app_settings_file_path,
+    load_app_settings,
+    update_app_settings,
+)
 from app.services.auth_service import AuthServiceError, hash_password
 from app.services.permission_service import Permission, get_permissions_for_role
 from app.services.setup_service import (
-    save_sqlite_setup_config,
+    load_setup_config,
     resolve_sqlite_database_path,
+    save_sqlite_setup_config,
+    setup_config_file_path,
 )
 
 
@@ -103,54 +109,255 @@ def apply_sqlite_initial_setup(
         future=True,
     )
 
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
 
-    with SessionLocal() as session:
-        try:
-            role_permission_row_count = _ensure_default_role_permissions(session)
-            admin_user = _create_initial_admin_user(
-                session=session,
-                username=cleaned_admin_username,
-                full_name=cleaned_admin_full_name,
-                password_hash=admin_password_hash,
-                email=cleaned_admin_email,
+        with SessionLocal() as session:
+            try:
+                role_permission_row_count = _ensure_default_role_permissions(session)
+                admin_user = _create_initial_admin_user(
+                    session=session,
+                    username=cleaned_admin_username,
+                    full_name=cleaned_admin_full_name,
+                    password_hash=admin_password_hash,
+                    email=cleaned_admin_email,
+                )
+                session.flush()
+
+                admin_user_id = int(admin_user.id)
+                admin_username_value = str(admin_user.username)
+
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+        inspector = inspect(engine)
+        table_count = len(inspector.get_table_names())
+
+        save_sqlite_setup_config(
+            sqlite_database_path=cleaned_sqlite_database_path,
+            setup_completed=True,
+        )
+
+        update_app_settings(
+            company_name=cleaned_company_name,
+            company_address=cleaned_company_address,
+            company_phone=cleaned_company_phone,
+            company_email=cleaned_company_email,
+            backup_folder="backups",
+            export_folder="exports",
+            log_folder="logs",
+            control_mail_enabled=True,
+            control_mail_to="",
+            report_footer_note="FTM tarafından oluşturulmuştur.",
+        )
+
+        _verify_sqlite_initial_setup(
+            sqlite_path=sqlite_path,
+            expected_sqlite_database_path=cleaned_sqlite_database_path,
+            expected_company_name=cleaned_company_name,
+            expected_company_address=cleaned_company_address,
+            expected_company_phone=cleaned_company_phone,
+            expected_company_email=cleaned_company_email,
+            expected_admin_user_id=admin_user_id,
+            expected_admin_username=admin_username_value,
+            expected_admin_full_name=cleaned_admin_full_name,
+            expected_admin_email=cleaned_admin_email,
+            expected_role_permission_row_count=role_permission_row_count,
+            session_factory=SessionLocal,
+        )
+
+        return SqliteSetupApplyResult(
+            sqlite_database_path=str(sqlite_path),
+            table_count=table_count,
+            role_permission_row_count=role_permission_row_count,
+            admin_user_id=admin_user_id,
+            admin_username=admin_username_value,
+            company_name=cleaned_company_name,
+            setup_config_saved=True,
+            app_settings_saved=True,
+        )
+
+    finally:
+        engine.dispose()
+
+
+def _verify_sqlite_initial_setup(
+    *,
+    sqlite_path: Path,
+    expected_sqlite_database_path: str,
+    expected_company_name: str,
+    expected_company_address: str,
+    expected_company_phone: str,
+    expected_company_email: str,
+    expected_admin_user_id: int,
+    expected_admin_username: str,
+    expected_admin_full_name: str,
+    expected_admin_email: str,
+    expected_role_permission_row_count: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    if not sqlite_path.exists():
+        raise SqliteSetupApplyServiceError(
+            f"SQLite veritabanı dosyası oluşturulamadı: {sqlite_path}"
+        )
+
+    if not sqlite_path.is_file():
+        raise SqliteSetupApplyServiceError(
+            f"SQLite veritabanı yolu dosya değil: {sqlite_path}"
+        )
+
+    if sqlite_path.stat().st_size <= 0:
+        raise SqliteSetupApplyServiceError(
+            f"SQLite veritabanı dosyası boş görünüyor: {sqlite_path}"
+        )
+
+    current_setup_config_file = setup_config_file_path()
+
+    if not current_setup_config_file.exists():
+        raise SqliteSetupApplyServiceError(
+            f"Kurulum ayar dosyası oluşturulamadı: {current_setup_config_file}"
+        )
+
+    setup_config = load_setup_config()
+
+    if not setup_config.setup_completed:
+        raise SqliteSetupApplyServiceError(
+            "Kurulum ayar dosyasında setup_completed=true değeri doğrulanamadı."
+        )
+
+    if setup_config.database_engine != "sqlite":
+        raise SqliteSetupApplyServiceError(
+            "Kurulum ayar dosyasında veritabanı tipi SQLite olarak doğrulanamadı."
+        )
+
+    if setup_config.sqlite_database_path != expected_sqlite_database_path:
+        raise SqliteSetupApplyServiceError(
+            "Kurulum ayar dosyasındaki SQLite yolu beklenen değerle uyuşmuyor.\n\n"
+            f"Beklenen: {expected_sqlite_database_path}\n"
+            f"Bulunan: {setup_config.sqlite_database_path}"
+        )
+
+    resolved_config_sqlite_path = resolve_sqlite_database_path(
+        setup_config.sqlite_database_path
+    )
+
+    if resolved_config_sqlite_path != sqlite_path:
+        raise SqliteSetupApplyServiceError(
+            "Kurulum ayar dosyasındaki SQLite yolu gerçek veritabanı dosyasıyla uyuşmuyor.\n\n"
+            f"Beklenen: {sqlite_path}\n"
+            f"Bulunan: {resolved_config_sqlite_path}"
+        )
+
+    current_app_settings_file = app_settings_file_path()
+
+    if not current_app_settings_file.exists():
+        raise SqliteSetupApplyServiceError(
+            f"Uygulama ayar dosyası oluşturulamadı: {current_app_settings_file}"
+        )
+
+    app_settings = load_app_settings()
+
+    if app_settings.company_name != expected_company_name:
+        raise SqliteSetupApplyServiceError(
+            "Uygulama ayar dosyasındaki firma adı beklenen değerle uyuşmuyor."
+        )
+
+    if app_settings.company_address != expected_company_address:
+        raise SqliteSetupApplyServiceError(
+            "Uygulama ayar dosyasındaki firma adresi beklenen değerle uyuşmüyor."
+        )
+
+    if app_settings.company_phone != expected_company_phone:
+        raise SqliteSetupApplyServiceError(
+            "Uygulama ayar dosyasındaki firma telefonu beklenen değerle uyuşmuyor."
+        )
+
+    if app_settings.company_email != expected_company_email:
+        raise SqliteSetupApplyServiceError(
+            "Uygulama ayar dosyasındaki firma e-posta adresi beklenen değerle uyuşmuyor."
+        )
+
+    with session_factory() as session:
+        admin_user = session.execute(
+            select(User).where(User.id == expected_admin_user_id)
+        ).scalar_one_or_none()
+
+        if admin_user is None:
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN kullanıcısı veritabanında doğrulanamadı."
             )
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
 
-    inspector = inspect(engine)
-    table_count = len(inspector.get_table_names())
+        if admin_user.username != expected_admin_username:
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN kullanıcı adı beklenen değerle uyuşmuyor."
+            )
 
-    save_sqlite_setup_config(
-        sqlite_database_path=cleaned_sqlite_database_path,
-        setup_completed=True,
-    )
+        if admin_user.full_name != expected_admin_full_name:
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN ad soyad bilgisi beklenen değerle uyuşmuyor."
+            )
 
-    update_app_settings(
-        company_name=cleaned_company_name,
-        company_address=cleaned_company_address,
-        company_phone=cleaned_company_phone,
-        company_email=cleaned_company_email,
-        backup_folder="backups",
-        export_folder="exports",
-        log_folder="logs",
-        control_mail_enabled=True,
-        control_mail_to="",
-        report_footer_note="FTM tarafından oluşturulmuştur.",
-    )
+        if admin_user.email != (expected_admin_email or None):
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN e-posta bilgisi beklenen değerle uyuşmuyor."
+            )
 
-    return SqliteSetupApplyResult(
-        sqlite_database_path=str(sqlite_path),
-        table_count=table_count,
-        role_permission_row_count=role_permission_row_count,
-        admin_user_id=int(admin_user.id),
-        admin_username=str(admin_user.username),
-        company_name=cleaned_company_name,
-        setup_config_saved=True,
-        app_settings_saved=True,
-    )
+        if admin_user.role != UserRole.ADMIN:
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN kullanıcısının rolü ADMIN olarak doğrulanamadı."
+            )
+
+        if not admin_user.is_active:
+            raise SqliteSetupApplyServiceError(
+                "İlk ADMIN kullanıcısı aktif olarak doğrulanamadı."
+            )
+
+        active_admin_count = session.execute(
+            select(User).where(
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+            )
+        ).scalars().all()
+
+        if len(active_admin_count) != 1:
+            raise SqliteSetupApplyServiceError(
+                "İlk kurulum sonrası aktif ADMIN kullanıcı sayısı 1 olmalıdır."
+            )
+
+        role_permission_rows = session.execute(
+            select(RolePermission)
+        ).scalars().all()
+
+        actual_role_permission_row_count = len(role_permission_rows)
+
+        if actual_role_permission_row_count != expected_role_permission_row_count:
+            raise SqliteSetupApplyServiceError(
+                "Rol/yetki satır sayısı beklenen değerle uyuşmuyor.\n\n"
+                f"Beklenen: {expected_role_permission_row_count}\n"
+                f"Bulunan: {actual_role_permission_row_count}"
+            )
+
+        minimum_required_role_permission_count = len(UserRole) * len(Permission)
+
+        if actual_role_permission_row_count < minimum_required_role_permission_count:
+            raise SqliteSetupApplyServiceError(
+                "Rol/yetki kurulumu eksik görünüyor.\n\n"
+                f"Beklenen minimum: {minimum_required_role_permission_count}\n"
+                f"Bulunan: {actual_role_permission_row_count}"
+            )
+
+        admin_allowed_permission_rows = [
+            row
+            for row in role_permission_rows
+            if row.role == UserRole.ADMIN and row.is_allowed
+        ]
+
+        if len(admin_allowed_permission_rows) != len(Permission):
+            raise SqliteSetupApplyServiceError(
+                "ADMIN rolünün tüm yetkilere sahip olduğu doğrulanamadı."
+            )
 
 
 def _ensure_default_role_permissions(session: Session) -> int:

@@ -1724,6 +1724,7 @@ class ChecksPage(QWidget):
                 build_operation_button(
                     "Alınan Çekleri İskontoya Ver / Kırdır",
                     [
+                        "_open_discount_received_check_dialog",
                         "_open_received_check_discount_batch_dialog",
                         "_show_received_check_discount_batch_dialog",
                         "_discount_received_checks_batch",
