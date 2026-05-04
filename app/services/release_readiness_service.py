@@ -5,8 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from sqlalchemy import select
+
 from app.core.runtime_paths import ensure_runtime_folders
 from app.db.session import session_scope
+from app.models.enums import UserRole
+from app.models.role_permission import RolePermission
 from app.services.backup_standard_service import (
     BackupStandardServiceError,
     validate_latest_backup_against_standard,
@@ -25,6 +29,7 @@ from app.services.license_service import (
     LicenseServiceError,
     check_license,
 )
+from app.services.permission_service import Permission
 from app.services.system_health_service import run_system_health_check
 from app.services.version_compatibility_service import (
     DatabaseVersionCompatibilityError,
@@ -107,6 +112,11 @@ def run_release_readiness_check() -> ReleaseReadinessReport:
     _run_check_safely(
         checks=checks,
         check_function=_check_database_version_compatibility,
+    )
+
+    _run_check_safely(
+        checks=checks,
+        check_function=_check_role_permission_matrix,
     )
 
     _run_check_safely(
@@ -334,6 +344,125 @@ def _check_database_version_compatibility() -> ReleaseReadinessCheck:
         name="Uygulama / DB sürüm uyumu",
         status=RELEASE_READINESS_STATUS_FAIL,
         message="; ".join(compatibility_status.blocking_reasons),
+    )
+
+
+def _check_role_permission_matrix() -> ReleaseReadinessCheck:
+    expected_roles = list(UserRole)
+    expected_permission_names = {
+        permission.value
+        for permission in Permission
+    }
+    expected_permission_count = len(expected_permission_names)
+    expected_total_count = len(expected_roles) * expected_permission_count
+
+    existing_permissions_by_role: dict[UserRole, set[str]] = {
+        role: set()
+        for role in expected_roles
+    }
+    invalid_role_values: list[str] = []
+    invalid_permission_values: list[str] = []
+
+    with session_scope() as session:
+        rows = session.execute(
+            select(RolePermission)
+        ).scalars().all()
+
+    for row in rows:
+        row_role = getattr(row, "role", None)
+
+        if isinstance(row_role, UserRole):
+            normalized_role = row_role
+        else:
+            try:
+                normalized_role = UserRole(str(row_role or "").strip().upper())
+            except ValueError:
+                invalid_role_values.append(str(row_role or ""))
+                continue
+
+        permission_name = str(getattr(row, "permission", "") or "").strip().upper()
+
+        if permission_name not in expected_permission_names:
+            invalid_permission_values.append(
+                f"{normalized_role.value}:{permission_name or '-'}"
+            )
+            continue
+
+        existing_permissions_by_role[normalized_role].add(permission_name)
+
+    missing_parts: list[str] = []
+
+    for role in expected_roles:
+        missing_permissions = sorted(
+            expected_permission_names - existing_permissions_by_role[role]
+        )
+
+        if missing_permissions:
+            missing_parts.append(
+                f"{role.value}: {', '.join(missing_permissions[:8])}"
+                + (
+                    f" ... (+{len(missing_permissions) - 8})"
+                    if len(missing_permissions) > 8
+                    else ""
+                )
+            )
+
+    if invalid_role_values:
+        return ReleaseReadinessCheck(
+            category="Yetki",
+            name="Rol / yetki matrisi",
+            status=RELEASE_READINESS_STATUS_FAIL,
+            message=(
+                "role_permissions tablosunda geçersiz rol değeri var: "
+                + ", ".join(sorted(set(invalid_role_values))[:10])
+            ),
+        )
+
+    if invalid_permission_values:
+        return ReleaseReadinessCheck(
+            category="Yetki",
+            name="Rol / yetki matrisi",
+            status=RELEASE_READINESS_STATUS_FAIL,
+            message=(
+                "role_permissions tablosunda geçersiz yetki değeri var: "
+                + ", ".join(sorted(set(invalid_permission_values))[:10])
+            ),
+        )
+
+    if missing_parts:
+        return ReleaseReadinessCheck(
+            category="Yetki",
+            name="Rol / yetki matrisi",
+            status=RELEASE_READINESS_STATUS_FAIL,
+            message=(
+                f"Yetki matrisi eksik. Beklenen kayıt: {expected_total_count}, "
+                f"mevcut kayıt: {len(rows)}. Eksikler: "
+                + " | ".join(missing_parts)
+            ),
+        )
+
+    if len(rows) != expected_total_count:
+        return ReleaseReadinessCheck(
+            category="Yetki",
+            name="Rol / yetki matrisi",
+            status=RELEASE_READINESS_STATUS_WARN,
+            message=(
+                f"Yetki matrisi beklenen yetkileri içeriyor ancak kayıt sayısı farklı. "
+                f"Beklenen: {expected_total_count}, mevcut: {len(rows)}. "
+                "Tekrarlı veya pasif/ek kayıt ihtimali kontrol edilmelidir."
+            ),
+        )
+
+    return ReleaseReadinessCheck(
+        category="Yetki",
+        name="Rol / yetki matrisi",
+        status=RELEASE_READINESS_STATUS_OK,
+        message=(
+            f"Rol/yetki matrisi eksiksiz. "
+            f"Rol sayısı: {len(expected_roles)}, "
+            f"rol başına yetki: {expected_permission_count}, "
+            f"toplam kayıt: {len(rows)}"
+        ),
     )
 
 
