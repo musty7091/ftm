@@ -3,9 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import platform
-import socket
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -14,7 +12,7 @@ from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 
-from app.core.runtime_paths import get_runtime_paths
+from app.core.runtime_paths import ensure_runtime_folders, get_runtime_paths
 from app.services.license_public_key import load_license_public_key
 from app.services.license_event_log_service import (
     LICENSE_EVENT_ACTIVE,
@@ -41,6 +39,9 @@ LICENSE_WARNING_DAYS = 30
 
 SIGNED_LICENSE_VERSION = 2
 SIGNED_LICENSE_ALGORITHM = "Ed25519"
+
+DEVICE_IDENTITY_FILE_NAME = "device_identity.json"
+DEVICE_CODE_ALGORITHM_VERSION = "FTM_DEVICE_CODE_STABLE_V2"
 
 LICENSE_STATUS_MISSING = "missing"
 LICENSE_STATUS_ACTIVE = "active"
@@ -104,23 +105,20 @@ def license_file_exists() -> bool:
 
 def get_device_code() -> str:
     """
-    Bu bilgisayar için sade bir cihaz kodu üretir.
+    Bu bilgisayar için stabil FTM cihaz kodu üretir.
 
-    Ham MAC adresini veya bilgisayar bilgilerini dışarı vermez.
-    Bilgileri hash'leyip okunabilir kısa bir koda çevirir.
+    Yeni güvenli davranış:
+        - Windows üzerinde MachineGuid kullanılır.
+        - Ağ kartı, MAC adresi, Docker, WSL, VPN, bilgisayar adı ve hostname kullanılmaz.
+        - Windows dışı veya MachineGuid okunamayan özel ortamlarda AppData altındaki
+          kalıcı FTM device_identity.json dosyası kullanılır.
+
+    Bu fonksiyon ham sistem kimliğini dışarı vermez.
+    Kimliği SHA256 ile hash'leyip okunabilir FTM-XXXX formatına çevirir.
     """
 
-    machine_parts = [
-        platform.system(),
-        platform.machine(),
-        platform.node(),
-        socket.gethostname(),
-        os.getenv("COMPUTERNAME", ""),
-        str(uuid.getnode()),
-    ]
-
-    machine_text = "|".join(str(part or "").strip().lower() for part in machine_parts)
-    machine_hash = hashlib.sha256(machine_text.encode("utf-8")).hexdigest().upper()
+    stable_identity_text = _get_stable_device_identity_text()
+    machine_hash = hashlib.sha256(stable_identity_text.encode("utf-8")).hexdigest().upper()
 
     return _format_device_code(machine_hash)
 
@@ -735,6 +733,140 @@ def _license_data_from_signed_payload(
     )
 
 
+def _get_stable_device_identity_text() -> str:
+    windows_machine_guid = _read_windows_machine_guid()
+
+    if windows_machine_guid:
+        return (
+            f"{DEVICE_CODE_ALGORITHM_VERSION}|"
+            f"WINDOWS_MACHINE_GUID|"
+            f"{windows_machine_guid}"
+        )
+
+    local_identity = _load_or_create_local_device_identity()
+
+    return (
+        f"{DEVICE_CODE_ALGORITHM_VERSION}|"
+        f"FTM_LOCAL_DEVICE_IDENTITY|"
+        f"{local_identity}"
+    )
+
+
+def _read_windows_machine_guid() -> str:
+    if platform.system().strip().lower() != "windows":
+        return ""
+
+    try:
+        import winreg
+
+    except ImportError:
+        return ""
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+        ) as registry_key:
+            value, _value_type = winreg.QueryValueEx(registry_key, "MachineGuid")
+
+    except OSError:
+        return ""
+
+    return _clean_device_identity_value(value)
+
+
+def _device_identity_file_path() -> Path:
+    runtime_paths = ensure_runtime_folders()
+
+    return runtime_paths.config_folder / DEVICE_IDENTITY_FILE_NAME
+
+
+def _load_or_create_local_device_identity() -> str:
+    identity_file = _device_identity_file_path()
+
+    if identity_file.exists():
+        try:
+            loaded_data = json.loads(identity_file.read_text(encoding="utf-8"))
+
+        except json.JSONDecodeError as exc:
+            raise LicenseServiceError(
+                "FTM cihaz kimliği dosyası bozuk JSON formatında.\n"
+                f"Dosya: {identity_file}\n"
+                "Güvenlik nedeniyle yeni cihaz kimliği otomatik oluşturulmadı."
+            ) from exc
+
+        except OSError as exc:
+            raise LicenseServiceError(
+                "FTM cihaz kimliği dosyası okunamadı.\n"
+                f"Dosya: {identity_file}\n"
+                f"Hata: {exc}"
+            ) from exc
+
+        if not isinstance(loaded_data, dict):
+            raise LicenseServiceError(
+                "FTM cihaz kimliği dosyası geçersiz formatta.\n"
+                f"Dosya: {identity_file}"
+            )
+
+        identity_value = _clean_device_identity_value(
+            loaded_data.get("device_identity")
+        )
+
+        if not identity_value:
+            raise LicenseServiceError(
+                "FTM cihaz kimliği dosyasında geçerli kimlik bulunamadı.\n"
+                f"Dosya: {identity_file}"
+            )
+
+        return identity_value
+
+    identity_value = str(uuid.uuid4())
+
+    payload = {
+        "algorithm": DEVICE_CODE_ALGORITHM_VERSION,
+        "device_identity": identity_value,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "note": (
+            "Bu dosya yalnızca MachineGuid okunamayan özel ortamlarda "
+            "FTM cihaz kodunu stabil tutmak için kullanılır."
+        ),
+    }
+
+    try:
+        identity_file.write_text(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    except OSError as exc:
+        raise LicenseServiceError(
+            "FTM cihaz kimliği dosyası oluşturulamadı.\n"
+            f"Dosya: {identity_file}\n"
+            f"Hata: {exc}"
+        ) from exc
+
+    return identity_value
+
+
+def _clean_device_identity_value(value: Any) -> str:
+    cleaned_value = str(value or "").strip().lower()
+    cleaned_value = cleaned_value.strip("{}").strip()
+
+    allowed_chars: list[str] = []
+
+    for char in cleaned_value:
+        if char.isalnum() or char in {"-", "_"}:
+            allowed_chars.append(char)
+
+    return "".join(allowed_chars).strip("-_")
+
+
 def _parse_license_date(value: str, label: str) -> date:
     try:
         return datetime.strptime(value, LICENSE_DATE_FORMAT).date()
@@ -954,6 +1086,8 @@ __all__ = [
     "LICENSE_WARNING_DAYS",
     "SIGNED_LICENSE_VERSION",
     "SIGNED_LICENSE_ALGORITHM",
+    "DEVICE_IDENTITY_FILE_NAME",
+    "DEVICE_CODE_ALGORITHM_VERSION",
     "LICENSE_STATUS_MISSING",
     "LICENSE_STATUS_ACTIVE",
     "LICENSE_STATUS_EXPIRING_SOON",
