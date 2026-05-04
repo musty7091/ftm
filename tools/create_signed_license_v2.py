@@ -54,6 +54,40 @@ class SignedLicenseGeneratorError(ValueError):
 def main() -> None:
     args = _parse_args()
 
+    try:
+        _run(args)
+
+    except SignedLicenseGeneratorError as exc:
+        print("")
+        print("FTM İMZALI LİSANS ÜRETİCİ HATASI", file=sys.stderr)
+        print("-" * 72, file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        print("", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _run(args: argparse.Namespace) -> None:
+    private_key = _load_private_key_for_requested_operation(
+        allow_create=bool(args.init_key)
+    )
+    public_key = private_key.public_key()
+
+    public_key_synced = False
+
+    if args.sync_public_key:
+        _write_public_key_module(public_key)
+        public_key_synced = True
+
+    license_requested = _is_license_generation_requested(args)
+
+    if not license_requested:
+        _print_key_operation_summary(
+            public_key=public_key,
+            private_key_created_allowed=bool(args.init_key),
+            public_key_synced=public_key_synced,
+        )
+        return
+
     company_name = _clean_required_text(args.company_name, "Firma adı")
     device_code = _clean_device_code(args.device_code or get_device_code())
     license_type = _clean_required_text(args.license_type, "Lisans tipi")
@@ -61,11 +95,6 @@ def main() -> None:
     valid_days = _parse_positive_int(args.days, "Lisans günü")
     starts_at = _parse_start_date(args.starts_at)
     expires_at = starts_at + timedelta(days=valid_days)
-
-    private_key = _load_or_create_private_key()
-    public_key = private_key.public_key()
-
-    _write_public_key_module(public_key)
 
     payload = {
         "company_name": company_name,
@@ -103,30 +132,17 @@ def main() -> None:
             payload=signed_license_data,
         )
 
-    print("")
-    print("FTM VERSION 2 İMZALI LİSANS OLUŞTURULDU")
-    print("-" * 72)
-    print(f"Firma             : {company_name}")
-    print(f"Cihaz kodu        : {device_code}")
-    print(f"Lisans tipi       : {license_type}")
-    print(f"Başlangıç         : {payload['starts_at']}")
-    print(f"Bitiş             : {payload['expires_at']}")
-    print(f"Gün               : {valid_days}")
-    print(f"Çıktı lisans      : {output_file}")
-    print(f"Private key       : {PRIVATE_KEY_FILE}")
-    print(f"Public key modülü : {PUBLIC_KEY_MODULE_FILE}")
-    print(f"Public fingerprint: {_public_key_fingerprint(public_key)}")
-
-    if installed_license_file is not None:
-        print(f"Runtime lisans    : {installed_license_file}")
-
-    print("")
-    print("ÖNEMLİ:")
-    print("- Private key dosyasını kimseyle paylaşma.")
-    print("- Private key GitHub'a konulmayacak.")
-    print("- app/services/license_public_key.py uygulamanın doğrulama anahtarıdır.")
-    print("- Bu public key ile üretilen lisanslar, bu private key ile imzalanır.")
-    print("")
+    _print_license_summary(
+        company_name=company_name,
+        device_code=device_code,
+        license_type=license_type,
+        payload=payload,
+        valid_days=valid_days,
+        output_file=output_file,
+        installed_license_file=installed_license_file,
+        public_key=public_key,
+        public_key_synced=public_key_synced,
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -136,8 +152,12 @@ def _parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--company-name",
-        required=True,
-        help="Lisansın ait olduğu firma adı.",
+        default="",
+        help=(
+            "Lisansın ait olduğu firma adı. "
+            "Lisans üretiminde zorunludur. "
+            "Sadece --init-key veya --sync-public-key işlemlerinde boş bırakılabilir."
+        ),
     )
 
     parser.add_argument(
@@ -192,30 +212,103 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--init-key",
+        action="store_true",
+        help=(
+            "Private key dosyası yoksa bilinçli olarak oluşturur. "
+            "Normal lisans üretiminde kullanılmaz. "
+            "Mevcut private key dosyasının üstüne yazmaz."
+        ),
+    )
+
+    parser.add_argument(
+        "--sync-public-key",
+        action="store_true",
+        help=(
+            "Private key dosyasından public key üretip "
+            "app/services/license_public_key.py dosyasını bilinçli olarak günceller. "
+            "Normal lisans üretiminde otomatik çalışmaz."
+        ),
+    )
+
     return parser.parse_args()
 
 
-def _load_or_create_private_key() -> Ed25519PrivateKey:
-    PRIVATE_KEY_FOLDER.mkdir(parents=True, exist_ok=True)
+def _is_license_generation_requested(args: argparse.Namespace) -> bool:
+    if str(args.company_name or "").strip():
+        return True
 
+    license_related_values = [
+        str(args.device_code or "").strip(),
+        str(args.output or "").strip(),
+        str(args.notes or "").strip(),
+        str(args.starts_at or "").strip(),
+    ]
+
+    if any(license_related_values):
+        raise SignedLicenseGeneratorError(
+            "Lisans bilgileri girilmiş ancak --company-name boş bırakılmış.\n"
+            "Lisans üretmek için --company-name zorunludur."
+        )
+
+    if args.install:
+        raise SignedLicenseGeneratorError(
+            "--install yalnızca lisans üretimi sırasında kullanılabilir.\n"
+            "Lisans üretmek için --company-name parametresini gir."
+        )
+
+    return False
+
+
+def _load_private_key_for_requested_operation(
+    *,
+    allow_create: bool,
+) -> Ed25519PrivateKey:
     if PRIVATE_KEY_FILE.exists():
-        try:
-            loaded_key = serialization.load_pem_private_key(
-                PRIVATE_KEY_FILE.read_bytes(),
-                password=None,
-            )
+        return _load_existing_private_key(PRIVATE_KEY_FILE)
 
-        except Exception as exc:
-            raise SignedLicenseGeneratorError(
-                f"Private key okunamadı: {PRIVATE_KEY_FILE}\nHata: {exc}"
-            ) from exc
+    if not allow_create:
+        raise SignedLicenseGeneratorError(
+            "Private key dosyası bulunamadı ve güvenli mod nedeniyle otomatik oluşturulmadı.\n\n"
+            f"Beklenen private key yolu:\n{PRIVATE_KEY_FILE}\n\n"
+            "İlk kurulumda bilinçli olarak anahtar oluşturmak için:\n"
+            "python tools\\create_signed_license_v2.py --init-key\n\n"
+            "Public key dosyasını da bilinçli güncellemek için:\n"
+            "python tools\\create_signed_license_v2.py --init-key --sync-public-key"
+        )
 
-        if not isinstance(loaded_key, Ed25519PrivateKey):
-            raise SignedLicenseGeneratorError(
-                f"Private key Ed25519 formatında değil: {PRIVATE_KEY_FILE}"
-            )
+    return _create_private_key(PRIVATE_KEY_FILE)
 
-        return loaded_key
+
+def _load_existing_private_key(private_key_file: Path) -> Ed25519PrivateKey:
+    try:
+        loaded_key = serialization.load_pem_private_key(
+            private_key_file.read_bytes(),
+            password=None,
+        )
+
+    except Exception as exc:
+        raise SignedLicenseGeneratorError(
+            f"Private key okunamadı: {private_key_file}\nHata: {exc}"
+        ) from exc
+
+    if not isinstance(loaded_key, Ed25519PrivateKey):
+        raise SignedLicenseGeneratorError(
+            f"Private key Ed25519 formatında değil: {private_key_file}"
+        )
+
+    return loaded_key
+
+
+def _create_private_key(private_key_file: Path) -> Ed25519PrivateKey:
+    if private_key_file.exists():
+        raise SignedLicenseGeneratorError(
+            "Private key dosyası zaten var. Güvenlik nedeniyle üzerine yazılmadı.\n"
+            f"Mevcut dosya:\n{private_key_file}"
+        )
+
+    private_key_file.parent.mkdir(parents=True, exist_ok=True)
 
     private_key = Ed25519PrivateKey.generate()
 
@@ -225,7 +318,7 @@ def _load_or_create_private_key() -> Ed25519PrivateKey:
         encryption_algorithm=serialization.NoEncryption(),
     )
 
-    PRIVATE_KEY_FILE.write_bytes(private_key_pem)
+    private_key_file.write_bytes(private_key_pem)
 
     return private_key
 
@@ -238,9 +331,9 @@ def _write_public_key_module(public_key: Ed25519PublicKey) -> None:
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    public_key_text = public_key_pem.decode("ascii").strip()
+    public_key_literal = repr(public_key_pem)
 
-    module_content = f'''from __future__ import annotations
+    module_content = f"""from __future__ import annotations
 
 import hashlib
 
@@ -248,8 +341,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
-LICENSE_PUBLIC_KEY_PEM = b""" {public_key_text}
-""".replace(b" ", b"", 1)
+LICENSE_PUBLIC_KEY_PEM = {public_key_literal}
 
 
 class LicensePublicKeyError(ValueError):
@@ -302,7 +394,7 @@ __all__ = [
     "load_license_public_key",
     "get_license_public_key_fingerprint",
 ]
-'''
+"""
 
     PUBLIC_KEY_MODULE_FILE.write_text(
         module_content,
@@ -494,6 +586,68 @@ def _safe_file_name(value: str) -> str:
         return "license"
 
     return cleaned_value[:80]
+
+
+def _print_key_operation_summary(
+    *,
+    public_key: Ed25519PublicKey,
+    private_key_created_allowed: bool,
+    public_key_synced: bool,
+) -> None:
+    print("")
+    print("FTM LİSANS ANAHTARI İŞLEMİ TAMAMLANDI")
+    print("-" * 72)
+    print(f"Private key       : {PRIVATE_KEY_FILE}")
+    print(f"Public key modülü : {PUBLIC_KEY_MODULE_FILE}")
+    print(f"Public fingerprint: {_public_key_fingerprint(public_key)}")
+    print(f"Init key modu     : {'AÇIK' if private_key_created_allowed else 'KAPALI'}")
+    print(f"Public key sync   : {'YAPILDI' if public_key_synced else 'YAPILMADI'}")
+    print("")
+    print("GÜVENLİ MOD:")
+    print("- Private key sadece --init-key ile yoktan oluşturulur.")
+    print("- Public key dosyası sadece --sync-public-key ile yazılır.")
+    print("- Normal lisans üretimi public key dosyasını otomatik değiştirmez.")
+    print("")
+
+
+def _print_license_summary(
+    *,
+    company_name: str,
+    device_code: str,
+    license_type: str,
+    payload: dict[str, Any],
+    valid_days: int,
+    output_file: Path,
+    installed_license_file: Path | None,
+    public_key: Ed25519PublicKey,
+    public_key_synced: bool,
+) -> None:
+    print("")
+    print("FTM VERSION 2 İMZALI LİSANS OLUŞTURULDU")
+    print("-" * 72)
+    print(f"Firma             : {company_name}")
+    print(f"Cihaz kodu        : {device_code}")
+    print(f"Lisans tipi       : {license_type}")
+    print(f"Başlangıç         : {payload['starts_at']}")
+    print(f"Bitiş             : {payload['expires_at']}")
+    print(f"Gün               : {valid_days}")
+    print(f"Çıktı lisans      : {output_file}")
+    print(f"Private key       : {PRIVATE_KEY_FILE}")
+    print(f"Public key modülü : {PUBLIC_KEY_MODULE_FILE}")
+    print(f"Public fingerprint: {_public_key_fingerprint(public_key)}")
+    print(f"Public key sync   : {'YAPILDI' if public_key_synced else 'YAPILMADI'}")
+
+    if installed_license_file is not None:
+        print(f"Runtime lisans    : {installed_license_file}")
+
+    print("")
+    print("ÖNEMLİ:")
+    print("- Private key dosyasını kimseyle paylaşma.")
+    print("- Private key GitHub'a konulmayacak.")
+    print("- Normal lisans üretimi public key dosyasını otomatik değiştirmez.")
+    print("- Public key güncellemesi gerekiyorsa bunu sadece --sync-public-key ile bilinçli yap.")
+    print("- Bu public key ile üretilen lisanslar, bu private key ile imzalanır.")
+    print("")
 
 
 if __name__ == "__main__":
