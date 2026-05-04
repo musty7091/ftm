@@ -593,7 +593,7 @@ class RolesTab(QWidget):
                 selected_permissions = get_permissions_for_role_from_db(
                     session,
                     selected_role,
-                    fallback_to_code_defaults=True,
+                    fallback_to_code_defaults=False,
                 )
 
             self.permission_state = {

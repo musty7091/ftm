@@ -115,7 +115,7 @@ def require_permission_with_audit(
                 session,
                 getattr(acting_user, "role", None),
                 normalized_permission,
-                fallback_to_code_defaults=True,
+                fallback_to_code_defaults=False,
             )
 
     except PermissionServiceError as exc:

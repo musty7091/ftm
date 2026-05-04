@@ -230,7 +230,7 @@ class FtmDesktopWindow(QMainWindow):
                         session,
                         self.current_role,
                         required_permissions,
-                        fallback_to_code_defaults=True,
+                        fallback_to_code_defaults=False,
                     ):
                         allowed_pages.append(page_title)
 
