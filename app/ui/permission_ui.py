@@ -69,7 +69,7 @@ def user_has_permission(
                 session,
                 normalized_role,
                 permission,
-                fallback_to_code_defaults=True,
+                fallback_to_code_defaults=False,
             )
     except Exception:
         return False
@@ -95,7 +95,7 @@ def user_has_any_permission(
                 session,
                 normalized_role,
                 permissions,
-                fallback_to_code_defaults=True,
+                fallback_to_code_defaults=False,
             )
     except Exception:
         return False
@@ -121,7 +121,7 @@ def user_has_all_permissions(
                 session,
                 normalized_role,
                 permissions,
-                fallback_to_code_defaults=True,
+                fallback_to_code_defaults=False,
             )
     except Exception:
         return False

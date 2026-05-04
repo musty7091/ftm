@@ -223,7 +223,7 @@ def get_permissions_for_role_from_db(
     session: Session,
     role: UserRole | str,
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> frozenset[Permission]:
     normalized_role = normalize_role(role)
 
@@ -258,7 +258,7 @@ def has_permission_from_db(
     role: UserRole | str,
     permission: Permission | str,
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> bool:
     normalized_permission = normalize_permission(permission)
 
@@ -276,7 +276,7 @@ def has_any_permission_from_db(
     role: UserRole | str,
     permissions: Iterable[Permission | str],
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> bool:
     return any(
         has_permission_from_db(
@@ -294,7 +294,7 @@ def has_all_permissions_from_db(
     role: UserRole | str,
     permissions: Iterable[Permission | str],
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> bool:
     return all(
         has_permission_from_db(
@@ -312,7 +312,7 @@ def require_permission_from_db(
     role: UserRole | str,
     permission: Permission | str,
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> None:
     normalized_role = normalize_role(role)
     normalized_permission = normalize_permission(permission)
@@ -332,7 +332,7 @@ def get_role_permission_names_from_db(
     session: Session,
     role: UserRole | str,
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> list[str]:
     permissions = get_permissions_for_role_from_db(
         session,
@@ -346,7 +346,7 @@ def get_role_permission_names_from_db(
 def get_all_role_permission_matrix_from_db(
     session: Session,
     *,
-    fallback_to_code_defaults: bool = True,
+    fallback_to_code_defaults: bool = False,
 ) -> dict[str, list[str]]:
     matrix: dict[str, list[str]] = {}
 
