@@ -89,3 +89,8 @@ dist/
 # Runtime config files
 config/app_settings.json
 config/app_setup.json
+
+# Local audit outputs
+audit_snapshot.txt
+*_snapshot.txt
+*_audit.txt
