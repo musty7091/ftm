@@ -30,19 +30,14 @@ def _print_payload(payload: SetupWizardPayload) -> None:
 
     print("")
     print("=" * 80)
-    print("FTM Kurulum Sihirbazı Önizleme Sonucu")
+    print("FTM Kurulum Sihirbazı Sonucu")
     print("=" * 80)
 
     print("")
-    print("Veritabanı")
+    print("Yerel Veritabanı")
     print("-" * 80)
     print(f"database_engine       : {payload_dict['database_engine']}")
     print(f"sqlite_database_path  : {payload_dict['sqlite_database_path']}")
-    print(f"database_host         : {payload_dict['database_host']}")
-    print(f"database_port         : {payload_dict['database_port']}")
-    print(f"database_name         : {payload_dict['database_name']}")
-    print(f"database_user         : {payload_dict['database_user']}")
-    print(f"database_password     : {payload_dict['database_password']}")
 
     print("")
     print("Firma")
@@ -62,7 +57,7 @@ def _print_payload(payload: SetupWizardPayload) -> None:
 
     print("")
     print("=" * 80)
-    print("Önizleme tamamlandı.")
+    print("Kurulum bilgileri okundu.")
     print("=" * 80)
     print("")
 
@@ -70,7 +65,7 @@ def _print_payload(payload: SetupWizardPayload) -> None:
 def _print_sqlite_apply_result(result: SqliteSetupApplyResult) -> None:
     print("")
     print("=" * 80)
-    print("FTM SQLite Gerçek Kurulum Sonucu")
+    print("FTM SQLite Kurulum Sonucu")
     print("=" * 80)
 
     print("")
@@ -103,8 +98,8 @@ def _confirm_sqlite_real_setup(
         "- AppData\\Local\\FTM\\config\\app_setup.json dosyasını yazacak\n"
         "- AppData\\Local\\FTM\\config\\app_settings.json dosyasını yazacak\n"
         "- SQLite veritabanı dosyasını oluşturacak\n"
-        "- Tabloları oluşturacak\n"
-        "- Role/yetki kayıtlarını oluşturacak\n"
+        "- Veritabanı tablolarını oluşturacak\n"
+        "- Rol / yetki kayıtlarını oluşturacak\n"
         "- İlk ADMIN kullanıcısını oluşturacak\n\n"
         f"SQLite dosyası:\n{payload.sqlite_database_path}\n\n"
         "Devam etmek istiyor musun?"
@@ -112,7 +107,7 @@ def _confirm_sqlite_real_setup(
 
     answer = QMessageBox.question(
         dialog,
-        "SQLite Gerçek Kurulum Onayı",
+        "SQLite Kurulum Onayı",
         message,
         QMessageBox.Yes | QMessageBox.No,
         QMessageBox.No,
@@ -126,9 +121,20 @@ def _apply_sqlite_setup(
     dialog: SetupWizardDialog,
     payload: SetupWizardPayload,
 ) -> SqliteSetupApplyResult | None:
+    if payload.database_engine != "sqlite":
+        QMessageBox.warning(
+            dialog,
+            "Geçersiz Veritabanı Tipi",
+            (
+                "FTM artık yalnızca SQLite local desktop kurulumunu destekler.\n\n"
+                f"Gelen değer: {payload.database_engine}"
+            ),
+        )
+        return None
+
     if not _confirm_sqlite_real_setup(dialog=dialog, payload=payload):
         print("")
-        print("SQLite gerçek kurulum kullanıcı tarafından iptal edildi.")
+        print("SQLite kurulumu kullanıcı tarafından iptal edildi.")
         print("Herhangi bir kurulum işlemi uygulanmadı.")
         print("")
         return None
@@ -173,23 +179,12 @@ def _apply_sqlite_setup(
         "- AppData\\Local\\FTM\\config\\app_settings.json\n"
         "- SQLite veritabanı dosyası\n"
         "- Veritabanı tabloları\n"
-        "- Role/yetki kayıtları\n"
+        "- Rol / yetki kayıtları\n"
         "- İlk ADMIN kullanıcısı\n\n"
         "Detayları PowerShell ekranında görebilirsin.",
     )
 
     return result
-
-
-def _show_postgresql_preview_only_message(dialog: SetupWizardDialog) -> None:
-    QMessageBox.information(
-        dialog,
-        "PostgreSQL Önizleme Modu",
-        "PostgreSQL seçildi.\n\n"
-        "Bu adımda PostgreSQL için gerçek kurulum yapılmaz.\n"
-        "Sadece girilen bilgiler önizleme olarak PowerShell ekranına yazdırıldı.\n\n"
-        "Ana uygulama açılış akışı değiştirilmedi.",
-    )
 
 
 def main() -> None:
@@ -217,27 +212,18 @@ def main() -> None:
 
     _print_payload(payload)
 
-    if payload.database_engine == "sqlite":
-        try:
-            _apply_sqlite_setup(
-                dialog=dialog,
-                payload=payload,
-            )
-        except Exception:
-            sys.exit(1)
+    try:
+        setup_result = _apply_sqlite_setup(
+            dialog=dialog,
+            payload=payload,
+        )
+    except Exception:
+        sys.exit(1)
 
+    if setup_result is None:
         sys.exit(0)
 
-    if payload.database_engine == "postgresql":
-        _show_postgresql_preview_only_message(dialog)
-        sys.exit(0)
-
-    QMessageBox.warning(
-        dialog,
-        "Geçersiz Veritabanı Tipi",
-        f"Desteklenmeyen veritabanı tipi: {payload.database_engine}",
-    )
-    sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
