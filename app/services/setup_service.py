@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
 
 from app.core.runtime_paths import (
     ensure_runtime_folders as ensure_core_runtime_folders,
@@ -20,7 +19,6 @@ SETUP_CONFIG_FILE = RUNTIME_PATHS.config_folder / "app_setup.json"
 
 SUPPORTED_SETUP_DATABASE_ENGINES = {
     "sqlite",
-    "postgresql",
 }
 
 
@@ -49,10 +47,10 @@ DEFAULT_SETUP_CONFIG = SetupConfig(
     setup_completed=False,
     database_engine="sqlite",
     sqlite_database_path="data/ftm_local.db",
-    database_host="localhost",
-    database_port=5432,
-    database_name="ftm_db",
-    database_user="ftm_user",
+    database_host="",
+    database_port=0,
+    database_name="ftm_local",
+    database_user="",
     database_password="",
     created_at="",
     updated_at="",
@@ -84,18 +82,7 @@ def is_setup_completed() -> bool:
 def load_setup_config() -> SetupConfig:
     raw_config = load_setup_config_dict()
 
-    return SetupConfig(
-        setup_completed=bool(raw_config["setup_completed"]),
-        database_engine=str(raw_config["database_engine"]),
-        sqlite_database_path=str(raw_config["sqlite_database_path"]),
-        database_host=str(raw_config["database_host"]),
-        database_port=int(raw_config["database_port"]),
-        database_name=str(raw_config["database_name"]),
-        database_user=str(raw_config["database_user"]),
-        database_password=str(raw_config["database_password"]),
-        created_at=str(raw_config["created_at"]),
-        updated_at=str(raw_config["updated_at"]),
-    )
+    return _setup_config_from_dict(raw_config)
 
 
 def load_setup_config_dict() -> dict[str, Any]:
@@ -105,7 +92,7 @@ def load_setup_config_dict() -> dict[str, Any]:
         return normalize_setup_config_payload(default_setup_config_dict())
 
     try:
-        with SETUP_CONFIG_FILE.open("r", encoding="utf-8") as file:
+        with SETUP_CONFIG_FILE.open("r", encoding="utf-8-sig") as file:
             loaded_data = json.load(file)
 
     except json.JSONDecodeError as exc:
@@ -178,33 +165,11 @@ def save_sqlite_setup_config(
         "setup_completed": setup_completed,
         "database_engine": "sqlite",
         "sqlite_database_path": sqlite_database_path,
-    }
-
-    saved_data = save_setup_config_dict(payload)
-
-    return _setup_config_from_dict(saved_data)
-
-
-def save_postgresql_setup_config(
-    *,
-    database_host: str,
-    database_port: int,
-    database_name: str,
-    database_user: str,
-    database_password: str,
-    setup_completed: bool = True,
-) -> SetupConfig:
-    current_config = load_setup_config_dict()
-
-    payload = {
-        **current_config,
-        "setup_completed": setup_completed,
-        "database_engine": "postgresql",
-        "database_host": database_host,
-        "database_port": database_port,
-        "database_name": database_name,
-        "database_user": database_user,
-        "database_password": database_password,
+        "database_host": "",
+        "database_port": 0,
+        "database_name": "ftm_local",
+        "database_user": "",
+        "database_password": "",
     }
 
     saved_data = save_setup_config_dict(payload)
@@ -233,30 +198,6 @@ def normalize_setup_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("sqlite_database_path", default_data["sqlite_database_path"])
     )
 
-    database_host = _clean_text(
-        payload.get("database_host", default_data["database_host"]),
-        default_data["database_host"],
-    )
-
-    database_port = _clean_port(
-        payload.get("database_port", default_data["database_port"]),
-        default_data["database_port"],
-    )
-
-    database_name = _clean_text(
-        payload.get("database_name", default_data["database_name"]),
-        default_data["database_name"],
-    )
-
-    database_user = _clean_text(
-        payload.get("database_user", default_data["database_user"]),
-        default_data["database_user"],
-    )
-
-    database_password = str(
-        payload.get("database_password", default_data["database_password"]) or ""
-    )
-
     created_at = str(payload.get("created_at", default_data["created_at"]) or "")
     updated_at = str(payload.get("updated_at", default_data["updated_at"]) or "")
 
@@ -264,11 +205,11 @@ def normalize_setup_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "setup_completed": setup_completed,
         "database_engine": database_engine,
         "sqlite_database_path": sqlite_database_path,
-        "database_host": database_host,
-        "database_port": database_port,
-        "database_name": database_name,
-        "database_user": database_user,
-        "database_password": database_password,
+        "database_host": "",
+        "database_port": 0,
+        "database_name": "ftm_local",
+        "database_user": "",
+        "database_password": "",
         "created_at": created_at,
         "updated_at": updated_at,
     }
@@ -277,21 +218,15 @@ def normalize_setup_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def build_database_url_from_setup_config(setup_config: SetupConfig | None = None) -> str:
     config = setup_config or load_setup_config()
 
-    if config.database_engine == "sqlite":
-        sqlite_path = resolve_sqlite_database_path(config.sqlite_database_path)
+    if config.database_engine != "sqlite":
+        raise SetupServiceError(
+            "FTM artık yalnızca SQLite local desktop kurulumunu destekler. "
+            f"Geçersiz veritabanı tipi: {config.database_engine}"
+        )
 
-        return f"sqlite:///{sqlite_path.as_posix()}"
+    sqlite_path = resolve_sqlite_database_path(config.sqlite_database_path)
 
-    database_user = quote_plus(config.database_user)
-    database_password = quote_plus(config.database_password)
-    database_host = config.database_host
-    database_port = config.database_port
-    database_name = config.database_name
-
-    return (
-        f"postgresql+psycopg://{database_user}:{database_password}"
-        f"@{database_host}:{database_port}/{database_name}"
-    )
+    return f"sqlite:///{sqlite_path.as_posix()}"
 
 
 def resolve_sqlite_database_path(sqlite_database_path: str) -> Path:
@@ -316,35 +251,18 @@ def validate_setup_config_for_completion(payload: dict[str, Any]) -> None:
 
     database_engine = normalized["database_engine"]
 
-    if database_engine == "sqlite":
-        sqlite_path = resolve_sqlite_database_path(normalized["sqlite_database_path"])
+    if database_engine != "sqlite":
+        raise SetupServiceError(
+            "FTM artık yalnızca SQLite local desktop kurulumunu destekler. "
+            f"Geçersiz veritabanı tipi: {database_engine}"
+        )
 
-        if not sqlite_path.parent.exists():
-            raise SetupServiceError(
-                f"SQLite klasörü bulunamadı: {sqlite_path.parent}"
-            )
+    sqlite_path = resolve_sqlite_database_path(normalized["sqlite_database_path"])
 
-        return
-
-    if database_engine == "postgresql":
-        required_fields = {
-            "database_host": "PostgreSQL sunucu",
-            "database_name": "PostgreSQL veritabanı adı",
-            "database_user": "PostgreSQL kullanıcı adı",
-            "database_password": "PostgreSQL şifre",
-        }
-
-        missing_fields: list[str] = []
-
-        for key, label in required_fields.items():
-            if not str(normalized.get(key) or "").strip():
-                missing_fields.append(label)
-
-        if missing_fields:
-            raise SetupServiceError(
-                "PostgreSQL kurulumu tamamlanamaz. Eksik alanlar: "
-                + ", ".join(missing_fields)
-            )
+    if not sqlite_path.parent.exists():
+        raise SetupServiceError(
+            f"SQLite klasörü bulunamadı: {sqlite_path.parent}"
+        )
 
 
 def _setup_config_from_dict(data: dict[str, Any]) -> SetupConfig:
@@ -371,7 +289,8 @@ def _clean_database_engine(value: Any) -> str:
     if database_engine not in SUPPORTED_SETUP_DATABASE_ENGINES:
         supported_values = ", ".join(sorted(SUPPORTED_SETUP_DATABASE_ENGINES))
         raise SetupServiceError(
-            f"Veritabanı tipi geçersiz: {database_engine}. "
+            "FTM artık yalnızca SQLite local desktop kurulumunu destekler. "
+            f"Geçersiz veritabanı tipi: {database_engine}. "
             f"Desteklenen değerler: {supported_values}"
         )
 
@@ -396,27 +315,6 @@ def _clean_sqlite_database_path(value: Any) -> str:
         return DEFAULT_SETUP_CONFIG.sqlite_database_path
 
     return cleaned_value
-
-
-def _clean_text(value: Any, default: str = "") -> str:
-    cleaned_value = str(value or "").strip()
-
-    if not cleaned_value:
-        return default
-
-    return cleaned_value
-
-
-def _clean_port(value: Any, default: int) -> int:
-    try:
-        cleaned_port = int(value)
-    except (TypeError, ValueError):
-        return default
-
-    if cleaned_port <= 0 or cleaned_port > 65535:
-        return default
-
-    return cleaned_port
 
 
 def _clean_bool(value: Any) -> bool:
@@ -469,7 +367,6 @@ __all__ = [
     "load_setup_config_dict",
     "save_setup_config_dict",
     "save_sqlite_setup_config",
-    "save_postgresql_setup_config",
     "reset_setup_config",
     "normalize_setup_config_payload",
     "build_database_url_from_setup_config",
