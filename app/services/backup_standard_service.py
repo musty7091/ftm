@@ -132,23 +132,23 @@ def validate_backup_against_standard(
     sqlite_quick_check = ""
 
     if settings.is_sqlite:
-        if backup_validation is not None and backup_validation.is_postgresql_custom_dump:
+        if backup_validation is not None and backup_validation.success:
             checks.append(
                 BackupStandardCheck(
                     name="engine_match",
-                    success=False,
-                    message=(
-                        "Uygulama SQLite modda çalışıyor ancak seçilen yedek "
-                        "PostgreSQL dump dosyası gibi görünüyor."
-                    ),
+                    success=True,
+                    message="Uygulama SQLite modda ve yedek SQLite kontrolüne alındı.",
                 )
             )
         else:
             checks.append(
                 BackupStandardCheck(
                     name="engine_match",
-                    success=True,
-                    message="Uygulama SQLite modda ve yedek SQLite kontrolüne alındı.",
+                    success=False,
+                    message=(
+                        "Uygulama SQLite modda ancak yedek dosyasının SQLite uyumu "
+                        "temel doğrulamada onaylanamadı."
+                    ),
                 )
             )
 
@@ -165,7 +165,7 @@ def validate_backup_against_standard(
 
     else:
         warnings.append(
-            "Bu standart doğrulama adımı şu anda özellikle SQLite Local kurulum için hazırlanmıştır."
+            "Bu standart doğrulama adımı şu anda SQLite Local kurulum için hazırlanmıştır."
         )
 
     success = all(check.success for check in checks)
