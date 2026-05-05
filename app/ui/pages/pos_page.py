@@ -31,11 +31,9 @@ from app.services.pos_settlement_service import (
     realize_pos_settlement,
 )
 from app.ui.components.info_card import InfoCard
-from app.ui.components.summary_card import SummaryCard
 from app.ui.pages.pos.pos_admin_data import load_admin_pos_bank_accounts
 from app.ui.pages.pos.pos_cancel_dialog import PosCancelDialog
 from app.ui.pages.pos.pos_data import (
-    build_currency_totals_text,
     format_currency_amount,
     format_rate_percent,
     load_pos_page_data,
@@ -50,11 +48,26 @@ from app.ui.pages.pos.pos_settlement_dialog import PosSettlementDialog
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
+CURRENCY_DISPLAY_ORDER = ["TRY", "USD", "EUR", "GBP"]
+
+
 def _role_text(role: Any) -> str:
     if hasattr(role, "value"):
         return str(role.value)
 
     return str(role or "").strip().upper()
+
+
+def _currency_sort_key(currency_code: str) -> tuple[int, str]:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code in CURRENCY_DISPLAY_ORDER:
+        return (
+            CURRENCY_DISPLAY_ORDER.index(normalized_currency_code),
+            normalized_currency_code,
+        )
+
+    return (999, normalized_currency_code)
 
 
 class PosPage(QWidget):
@@ -78,7 +91,7 @@ class PosPage(QWidget):
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(16)
+        self.main_layout.setSpacing(12)
 
         self._render_page()
 
@@ -99,9 +112,9 @@ class PosPage(QWidget):
             self.main_layout.addWidget(self._build_error_card())
             return
 
-        self.main_layout.addLayout(self._build_summary_cards())
+        self.main_layout.addWidget(self._build_pos_finance_radar())
         self.main_layout.addWidget(self._build_settlement_table_card(), 1)
-        self.main_layout.addLayout(self._build_action_area())
+        self.main_layout.addLayout(self._build_action_area(), 0)
         self._refresh_operation_controls()
 
     def _reload_page_data(self) -> None:
@@ -113,7 +126,7 @@ class PosPage(QWidget):
         card.setObjectName("CardRisk")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
 
         title = QLabel("POS verileri okunamadı")
@@ -128,114 +141,226 @@ class PosPage(QWidget):
 
         return card
 
-    def _build_summary_cards(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setSpacing(16)
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
+    def _build_pos_finance_radar(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setMinimumHeight(148)
+        card.setMaximumHeight(178)
 
-        grid.addWidget(
-            SummaryCard(
-                "BEKLEYEN POS YATIŞLARI",
-                build_currency_totals_text(self.data.planned_currency_totals),
-                "Planlanan POS net yatış toplamı",
-                "highlight",
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("POS Finans Radarı")
+        title.setObjectName("SectionTitle")
+
+        radar_grid = QGridLayout()
+        radar_grid.setSpacing(10)
+        radar_grid.setColumnStretch(0, 3)
+        radar_grid.setColumnStretch(1, 3)
+        radar_grid.setColumnStretch(2, 2)
+        radar_grid.setColumnStretch(3, 2)
+
+        radar_grid.addWidget(
+            self._build_currency_radar_block(
+                title_text="BEKLEYEN POS YATIŞLARI",
+                currency_totals=self.data.planned_currency_totals,
+                hint_text="Planlanan net yatış toplamı",
+                accent="blue",
             ),
             0,
             0,
         )
 
-        grid.addWidget(
-            SummaryCard(
-                "SON GERÇEKLEŞEN POS",
-                build_currency_totals_text(self.data.realized_currency_totals),
-                f"Son {self.data.visible_realized_days} gün gerçekleşen POS net yatış toplamı",
-                "success",
+        radar_grid.addWidget(
+            self._build_currency_radar_block(
+                title_text="SON GERÇEKLEŞEN POS",
+                currency_totals=self.data.realized_currency_totals,
+                hint_text=f"Son {self.data.visible_realized_days} gün net yatış toplamı",
+                accent="green",
             ),
             0,
             1,
         )
 
-        grid.addWidget(
-            self._build_pos_status_card(),
+        radar_grid.addWidget(
+            self._build_metric_radar_block(
+                title_text="CİHAZLAR",
+                first_title="AKTİF",
+                first_value=tr_number(self.data.active_device_count),
+                first_hint="Cihaz",
+                second_title="PASİF",
+                second_value=tr_number(self.data.passive_device_count),
+                second_hint="Cihaz",
+            ),
             0,
             2,
         )
 
-        return grid
+        radar_grid.addWidget(
+            self._build_metric_radar_block(
+                title_text="MUTABAKAT",
+                first_title="BEKLEYEN",
+                first_value=tr_number(self.data.planned_settlement_count),
+                first_hint="Yatış",
+                second_title="FARK",
+                second_value=tr_number(self.data.mismatch_settlement_count),
+                second_hint="Kayıt",
+            ),
+            0,
+            3,
+        )
 
-    def _build_pos_status_card(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("Card")
-        card.setMinimumHeight(145)
+        layout.addWidget(title)
+        layout.addLayout(radar_grid)
 
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(8)
+        return card
 
-        title = QLabel("POS DURUMU")
+    def _build_radar_block_base(self, accent: str = "normal") -> QFrame:
+        block = QFrame()
+        block.setObjectName("PosRadarBlock")
+        block.setMinimumHeight(92)
+
+        if accent == "blue":
+            border_color = "#2f6da3"
+            background_color = "#13243a"
+        elif accent == "green":
+            border_color = "#1f7a68"
+            background_color = "#102823"
+        else:
+            border_color = "#243247"
+            background_color = "#111827"
+
+        block.setStyleSheet(
+            f"""
+            QFrame#PosRadarBlock {{
+                background-color: {background_color};
+                border: 1px solid {border_color};
+                border-radius: 14px;
+            }}
+            """
+        )
+
+        return block
+
+    def _build_currency_radar_block(
+        self,
+        *,
+        title_text: str,
+        currency_totals: dict[str, Any],
+        hint_text: str,
+        accent: str,
+    ) -> QWidget:
+        block = self._build_radar_block_base(accent=accent)
+
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(14, 11, 14, 11)
+        layout.setSpacing(6)
+
+        title = QLabel(title_text)
         title.setObjectName("CardTitle")
 
-        metrics_layout = QGridLayout()
-        metrics_layout.setSpacing(10)
+        totals_grid = QGridLayout()
+        totals_grid.setHorizontalSpacing(18)
+        totals_grid.setVerticalSpacing(3)
+        totals_grid.setColumnStretch(0, 1)
+        totals_grid.setColumnStretch(1, 1)
 
-        metrics_layout.addWidget(
-            self._build_compact_metric(
-                "AKTİF",
-                tr_number(self.data.active_device_count),
-                "Cihaz",
-            ),
-            0,
-            0,
-        )
+        if not currency_totals:
+            empty_label = QLabel("Kayıt yok")
+            empty_label.setObjectName("CardValue")
+            totals_grid.addWidget(empty_label, 0, 0, 1, 2)
 
-        metrics_layout.addWidget(
-            self._build_compact_metric(
-                "PASİF",
-                tr_number(self.data.passive_device_count),
-                "Cihaz",
-            ),
-            0,
-            1,
-        )
+        else:
+            sorted_currency_codes = sorted(
+                currency_totals.keys(),
+                key=_currency_sort_key,
+            )
 
-        metrics_layout.addWidget(
-            self._build_compact_metric(
-                "BEKLEYEN",
-                tr_number(self.data.planned_settlement_count),
-                "Yatış",
-            ),
-            1,
-            0,
-        )
+            for index, currency_code in enumerate(sorted_currency_codes):
+                row_index = index // 2
+                column_index = index % 2
 
-        metrics_layout.addWidget(
-            self._build_compact_metric(
-                "FARK",
-                tr_number(self.data.mismatch_settlement_count),
-                "Kayıt",
-            ),
-            1,
-            1,
-        )
+                amount_text = format_currency_amount(
+                    currency_totals[currency_code],
+                    currency_code,
+                )
 
-        hint = QLabel("POS cihazı ve güncel mutabakat kayıt özeti.")
+                value_label = QLabel(f"{currency_code}: {amount_text}")
+                value_label.setObjectName("CardValue")
+                value_label.setWordWrap(False)
+                value_label.setToolTip(f"{currency_code}: {amount_text}")
+
+                totals_grid.addWidget(value_label, row_index, column_index)
+
+        hint = QLabel(hint_text)
         hint.setObjectName("CardHint")
         hint.setWordWrap(True)
 
         layout.addWidget(title)
-        layout.addLayout(metrics_layout)
+        layout.addLayout(totals_grid)
         layout.addWidget(hint)
 
-        return card
+        return block
+
+    def _build_metric_radar_block(
+        self,
+        *,
+        title_text: str,
+        first_title: str,
+        first_value: str,
+        first_hint: str,
+        second_title: str,
+        second_value: str,
+        second_hint: str,
+    ) -> QWidget:
+        block = self._build_radar_block_base(accent="normal")
+
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(14, 11, 14, 11)
+        layout.setSpacing(6)
+
+        title = QLabel(title_text)
+        title.setObjectName("CardTitle")
+
+        metrics_layout = QGridLayout()
+        metrics_layout.setHorizontalSpacing(12)
+        metrics_layout.setVerticalSpacing(2)
+        metrics_layout.setColumnStretch(0, 1)
+        metrics_layout.setColumnStretch(1, 1)
+
+        metrics_layout.addWidget(
+            self._build_compact_metric(
+                first_title,
+                first_value,
+                first_hint,
+            ),
+            0,
+            0,
+        )
+
+        metrics_layout.addWidget(
+            self._build_compact_metric(
+                second_title,
+                second_value,
+                second_hint,
+            ),
+            0,
+            1,
+        )
+
+        layout.addWidget(title)
+        layout.addLayout(metrics_layout)
+        layout.addStretch(1)
+
+        return block
 
     def _build_compact_metric(self, title_text: str, value_text: str, hint_text: str) -> QWidget:
         box = QWidget()
 
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout.setSpacing(1)
 
         title = QLabel(title_text)
         title.setObjectName("CardTitle")
@@ -258,18 +383,18 @@ class PosPage(QWidget):
     def _build_settlement_table_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
+        card.setMinimumHeight(300)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         title = QLabel("Güncel POS Mutabakat Kayıtları")
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            f"Bu listede planlanan kayıtlar, fark olan kayıtlar ve son "
-            f"{self.data.visible_realized_days} gün içinde gerçekleşen POS yatışları görünür. "
-            f"Eski gerçekleşen kayıtlar Geçmiş İşlemler / Filtreler alanından çağrılabilir."
+            f"Planlanan kayıtlar, fark kayıtları ve son "
+            f"{self.data.visible_realized_days} gün içinde gerçekleşen POS yatışları."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -298,10 +423,29 @@ class PosPage(QWidget):
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setSelectionMode(QTableWidget.SingleSelection)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.horizontalHeader().setSectionResizeMode(11, QHeaderView.Fixed)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table.setMinimumHeight(230)
+
+        table.setColumnHidden(0, True)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(10, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(11, QHeaderView.Fixed)
+
         table.setColumnWidth(11, 72)
-        table.setMinimumHeight(250)
+
         table.cellClicked.connect(
             lambda row, column: self._handle_settlement_table_cell_clicked(row, column)
         )
@@ -364,6 +508,24 @@ class PosPage(QWidget):
                     font = QFont()
                     font.setBold(True)
                     item.setFont(font)
+
+                item.setToolTip(
+                    "\n".join(
+                        [
+                            f"Kayıt ID: {settlement.pos_settlement_id}",
+                            f"POS: {settlement.pos_device_name}",
+                            f"Terminal: {settlement.terminal_no or '-'}",
+                            f"Banka: {settlement.bank_name}",
+                            f"Hesap: {settlement.bank_account_name}",
+                            f"İşlem Tarihi: {settlement.transaction_date_text}",
+                            f"Beklenen Yatış: {settlement.expected_settlement_date_text}",
+                            f"Brüt: {format_currency_amount(settlement.gross_amount, settlement.currency_code)}",
+                            f"Komisyon: {commission_text}",
+                            f"Net: {format_currency_amount(settlement.net_amount, settlement.currency_code)}",
+                            f"Durum: {status_text(settlement.status)}",
+                        ]
+                    )
+                )
 
                 table.setItem(row_index, column_index, item)
 
@@ -461,9 +623,9 @@ class PosPage(QWidget):
             )
 
             if self.selected_settlement is not None and self.selected_settlement.status == "PLANNED":
-                self.realize_settlement_button.setText("Seçili POS Yatışını Gerçekleştir")
+                self.realize_settlement_button.setText("Seçili POS Yatışını Onayla")
             else:
-                self.realize_settlement_button.setText("POS Yatışını Gerçekleştir")
+                self.realize_settlement_button.setText("Bekleyen POS Yatışlarını Onayla")
 
         if self.cancel_settlement_button is not None:
             self.cancel_settlement_button.setEnabled(
@@ -481,7 +643,7 @@ class PosPage(QWidget):
         if self.selected_record_info_label is not None:
             if self.selected_settlement is None:
                 self.selected_record_info_label.setText(
-                    "Seçili kayıt yok. Satır seçmezsen Gerçekleştir / İptal işlemleri "
+                    "Seçili kayıt yok. Satır seçmezsen onay / iptal işlemleri "
                     "uygun planlanan kayıt listesini açar."
                 )
             elif self.selected_settlement.status == "PLANNED":
@@ -497,7 +659,7 @@ class PosPage(QWidget):
                     f"Seçili kayıt: #{self.selected_settlement.pos_settlement_id} / "
                     f"{self.selected_settlement.pos_device_name} / "
                     f"{status_text(self.selected_settlement.status)}. "
-                    f"Bu kayıt planlanan durumda değil. Gerçekleştir / İptal butonları "
+                    f"Bu kayıt planlanan durumda değil. Onay / iptal butonları "
                     f"uygun planlanan kayıt listesini açar."
                 )
 
@@ -551,7 +713,9 @@ class PosPage(QWidget):
 
     def _build_action_area(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(12)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         grid.addWidget(self._build_operation_card(), 0, 0)
 
@@ -567,14 +731,14 @@ class PosPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(9)
 
-        title = QLabel("Operasyon Alanı")
+        title = QLabel("POS Mutabakat İşlemleri")
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "POS satış/yatış kayıtları ve gerçekleşen yatış mutabakatı bu alandan yönetilecek."
+            "POS satış kayıtlarını oluşturabilir, bekleyen yatışları onaylayabilir ve gerektiğinde iptal işlemi yapabilirsin."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -582,7 +746,7 @@ class PosPage(QWidget):
         self.create_settlement_button = QPushButton("POS Yatış Kaydı Oluştur")
         self.create_settlement_button.clicked.connect(self._open_create_pos_settlement_dialog)
 
-        self.realize_settlement_button = QPushButton("POS Yatışını Gerçekleştir")
+        self.realize_settlement_button = QPushButton("Bekleyen POS Yatışlarını Onayla")
         self.realize_settlement_button.clicked.connect(self._open_realize_pos_settlement_dialog)
 
         self.cancel_settlement_button = QPushButton("POS Kaydı İptal Et")
@@ -597,12 +761,12 @@ class PosPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(6)
+        layout.addSpacing(4)
         layout.addWidget(self.create_settlement_button)
         layout.addWidget(self.realize_settlement_button)
         layout.addWidget(self.cancel_settlement_button)
         layout.addWidget(self.history_button)
-        layout.addSpacing(8)
+        layout.addSpacing(6)
         layout.addWidget(self.selected_record_info_label)
 
         return card
@@ -612,14 +776,14 @@ class PosPage(QWidget):
         card.setObjectName("CardHighlight")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(9)
 
-        title = QLabel("POS Tanım Yönetimi")
+        title = QLabel("POS Cihaz Tanımları")
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Bu alan sadece ADMIN rolünde görünür. POS cihazı tanımları ve banka hesabı bağlantıları burada yönetilecek."
+            "POS cihazlarını, terminal bilgilerini, komisyon oranlarını ve bağlı banka hesaplarını bu alandan yönetebilirsin."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -635,7 +799,7 @@ class PosPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(6)
+        layout.addSpacing(4)
         layout.addWidget(add_device_button)
         layout.addWidget(edit_device_button)
         layout.addWidget(deactivate_device_button)
@@ -784,43 +948,55 @@ class PosPage(QWidget):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        payload = dialog.get_payload()
+        payloads = dialog.get_payloads()
+
+        if not payloads:
+            QMessageBox.information(
+                self,
+                "Onay listesi boş",
+                "Onaylanacak POS yatış kaydı seçilmedi.",
+            )
+            return
+
+        realized_settlement_ids: list[int] = []
 
         try:
             with session_scope() as session:
-                pos_settlement = realize_pos_settlement(
-                    session,
-                    pos_settlement_id=payload["pos_settlement_id"],
-                    realized_settlement_date=payload["realized_settlement_date"],
-                    actual_net_amount=payload["actual_net_amount"],
-                    difference_reason=payload["difference_reason"],
-                    reference_no=payload["reference_no"],
-                    description=payload["description"],
-                    realized_by_user_id=getattr(self.current_user, "id", None),
-                    acting_user=self.current_user,
-                )
+                for payload in payloads:
+                    pos_settlement = realize_pos_settlement(
+                        session,
+                        pos_settlement_id=payload["pos_settlement_id"],
+                        realized_settlement_date=payload["realized_settlement_date"],
+                        actual_net_amount=payload["actual_net_amount"],
+                        difference_reason=payload["difference_reason"],
+                        reference_no=payload["reference_no"],
+                        description=payload["description"],
+                        realized_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
 
-                realized_settlement_id = pos_settlement.id
+                    realized_settlement_ids.append(pos_settlement.id)
 
             self._reload_page_data()
 
             QMessageBox.information(
                 self,
-                "POS yatışı işlendi",
-                f"POS yatış kaydı işlendi. Kayıt ID: {realized_settlement_id}",
+                "POS yatışları işlendi",
+                f"{len(realized_settlement_ids)} POS yatış kaydı başarıyla işlendi.\n"
+                f"Kayıt ID listesi: {', '.join(str(value) for value in realized_settlement_ids)}",
             )
 
         except PosSettlementServiceError as exc:
             QMessageBox.warning(
                 self,
-                "POS yatışı işlenemedi",
+                "POS yatışları işlenemedi",
                 str(exc),
             )
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Beklenmeyen hata",
-                f"POS yatışı işlenirken beklenmeyen bir hata oluştu:\n{exc}",
+                f"POS yatışları işlenirken beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _open_cancel_pos_settlement_dialog(self) -> None:
