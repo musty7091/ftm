@@ -12,25 +12,18 @@ class Base(DeclarativeBase):
 
 
 def _ensure_sqlite_parent_folder() -> None:
-    if not settings.is_sqlite:
-        return
-
     settings.sqlite_database_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _create_engine_kwargs() -> dict[str, Any]:
-    engine_kwargs: dict[str, Any] = {
+    return {
         "echo": settings.database_echo,
         "future": True,
         "pool_pre_ping": True,
-    }
-
-    if settings.is_sqlite:
-        engine_kwargs["connect_args"] = {
+        "connect_args": {
             "check_same_thread": False,
-        }
-
-    return engine_kwargs
+        },
+    }
 
 
 _ensure_sqlite_parent_folder()
@@ -41,13 +34,11 @@ engine = create_engine(
     **_create_engine_kwargs(),
 )
 
+
 def _apply_sqlite_connection_pragmas(
     dbapi_connection: Any,
     connection_record: Any,
 ) -> None:
-    if not settings.is_sqlite:
-        return
-
     cursor = dbapi_connection.cursor()
 
     try:
@@ -58,12 +49,12 @@ def _apply_sqlite_connection_pragmas(
         cursor.close()
 
 
-if settings.is_sqlite:
-    event.listen(
-        engine,
-        "connect",
-        _apply_sqlite_connection_pragmas,
-    )
+event.listen(
+    engine,
+    "connect",
+    _apply_sqlite_connection_pragmas,
+)
+
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -88,30 +79,6 @@ def session_scope() -> Generator[Session, None, None]:
         session.close()
 
 
-def _check_postgresql_connection() -> dict[str, Any]:
-    with engine.connect() as connection:
-        row = connection.execute(
-            text(
-                """
-                SELECT
-                    current_database() AS database_name,
-                    current_user AS user_name,
-                    inet_server_port() AS server_port,
-                    version() AS version_text
-                """
-            )
-        ).mappings().one()
-
-    return {
-        "database_engine": "postgresql",
-        "database_name": row["database_name"],
-        "user_name": row["user_name"],
-        "server_port": row["server_port"],
-        "version_text": row["version_text"],
-        "database_url": settings.database_url,
-    }
-
-
 def _check_sqlite_connection() -> dict[str, Any]:
     with engine.connect() as connection:
         sqlite_version = connection.execute(
@@ -129,7 +96,4 @@ def _check_sqlite_connection() -> dict[str, Any]:
 
 
 def check_database_connection() -> dict[str, Any]:
-    if settings.is_sqlite:
-        return _check_sqlite_connection()
-
-    return _check_postgresql_connection()
+    return _check_sqlite_connection()
