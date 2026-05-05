@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import func, select, text
@@ -84,26 +84,11 @@ def _env_text(name: str, default: str = "") -> str:
 
 
 def _database_engine() -> str:
-    env_database_engine = _env_text("DATABASE_ENGINE", "").strip().lower()
-
-    if env_database_engine in {"sqlite", "postgresql"}:
-        return env_database_engine
-
-    if settings.is_sqlite:
-        return "sqlite"
-
-    if settings.is_postgresql:
-        return "postgresql"
-
-    return "postgresql"
+    return "sqlite"
 
 
 def _is_sqlite_mode() -> bool:
-    return _database_engine() == "sqlite"
-
-
-def _is_postgresql_mode() -> bool:
-    return _database_engine() == "postgresql"
+    return True
 
 
 def _get_sqlite_database_path() -> Path:
@@ -154,23 +139,18 @@ def _read_last_non_empty_line(file_path: Path) -> str:
     return ""
 
 
-def _find_latest_backup_file(backup_folder: Path) -> Optional[Path]:
+def _find_latest_backup_file(backup_folder: Path) -> Path | None:
     if not backup_folder.exists():
         return None
 
-    if _is_sqlite_mode():
-        backup_patterns = [
-            "*_backup_*.db",
-            "*_backup_*.sqlite",
-            "*_backup_*.sqlite3",
-            "*.db",
-            "*.sqlite",
-            "*.sqlite3",
-        ]
-    else:
-        backup_patterns = [
-            "*_backup_*.dump",
-        ]
+    backup_patterns = [
+        "*_backup_*.db",
+        "*_backup_*.sqlite",
+        "*_backup_*.sqlite3",
+        "*.db",
+        "*.sqlite",
+        "*.sqlite3",
+    ]
 
     backup_files: list[Path] = []
 
@@ -242,31 +222,11 @@ def _count_permission_denied_logs(session: Session) -> int:
 
 
 def _check_database_mode(items: list[HealthCheckItem]) -> None:
-    database_engine = _database_engine()
-
-    if database_engine == "sqlite":
-        _add_item(
-            items,
-            "Veritabanı modu",
-            "OK",
-            "DATABASE_ENGINE=sqlite. FTM Local / SQLite modu aktif.",
-        )
-        return
-
-    if database_engine == "postgresql":
-        _add_item(
-            items,
-            "Veritabanı modu",
-            "OK",
-            "DATABASE_ENGINE=postgresql. PostgreSQL modu aktif.",
-        )
-        return
-
     _add_item(
         items,
         "Veritabanı modu",
-        "FAIL",
-        f"Desteklenmeyen veritabanı modu: {database_engine}",
+        "OK",
+        "FTM Local / SQLite modu aktif.",
     )
 
 
@@ -311,52 +271,26 @@ def _check_sqlite_database_file(items: list[HealthCheckItem]) -> None:
 
 
 def _check_database_connection(session: Session, items: list[HealthCheckItem]) -> None:
-    if _is_sqlite_mode():
-        try:
-            sqlite_version = session.execute(
-                text("SELECT sqlite_version()")
-            ).scalar_one()
-
-            sqlite_database_path = _get_sqlite_database_path()
-
-            _add_item(
-                items,
-                "SQLite bağlantısı",
-                "OK",
-                f"Bağlantı başarılı. SQLite sürümü: {sqlite_version} | Dosya: {sqlite_database_path}",
-            )
-
-        except Exception as exc:
-            _add_item(
-                items,
-                "SQLite bağlantısı",
-                "FAIL",
-                f"SQLite bağlantı hatası: {exc}",
-            )
-
-        return
-
     try:
-        row = session.execute(
-            text("SELECT current_database(), current_user")
-        ).one()
+        sqlite_version = session.execute(
+            text("SELECT sqlite_version()")
+        ).scalar_one()
 
-        database_name = row[0]
-        database_user = row[1]
+        sqlite_database_path = _get_sqlite_database_path()
 
         _add_item(
             items,
-            "PostgreSQL bağlantısı",
+            "SQLite bağlantısı",
             "OK",
-            f"Bağlantı başarılı. Veritabanı: {database_name}, Kullanıcı: {database_user}",
+            f"Bağlantı başarılı. SQLite sürümü: {sqlite_version} | Dosya: {sqlite_database_path}",
         )
 
     except Exception as exc:
         _add_item(
             items,
-            "PostgreSQL bağlantısı",
+            "SQLite bağlantısı",
             "FAIL",
-            f"Bağlantı hatası: {exc}",
+            f"SQLite bağlantı hatası: {exc}",
         )
 
 
@@ -422,13 +356,11 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
     backup_folder = _get_folder_from_env("BACKUP_FOLDER", "backups")
 
     if not backup_folder.exists():
-        status = "WARN" if _is_sqlite_mode() else "FAIL"
-
         _add_item(
             items,
             "Yedek klasörü",
-            status,
-            f"Yedek klasörü bulunamadı: {backup_folder}",
+            "WARN",
+            f"Yedek klasörü henüz bulunamadı: {backup_folder}",
         )
         return
 
@@ -444,21 +376,14 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
     latest_backup = _find_latest_backup_file(backup_folder)
 
     if latest_backup is None:
-        status = "WARN" if _is_sqlite_mode() else "FAIL"
-
-        if _is_sqlite_mode():
-            message = (
-                "SQLite yedek dosyası henüz bulunamadı. "
-                f"Bu, yeni kurulumda normaldir. Klasör: {backup_folder}"
-            )
-        else:
-            message = f"Yedek klasöründe .dump dosyası bulunamadı: {backup_folder}"
-
         _add_item(
             items,
             "Son yedek dosyası",
-            status,
-            message,
+            "WARN",
+            (
+                "SQLite yedek dosyası henüz bulunamadı. "
+                f"Bu, yeni kurulumda normaldir. Klasör: {backup_folder}"
+            ),
         )
         return
 
@@ -645,10 +570,7 @@ def run_system_health_check(session: Session) -> SystemHealthReport:
     items: list[HealthCheckItem] = []
 
     _check_database_mode(items)
-
-    if _is_sqlite_mode():
-        _check_sqlite_database_file(items)
-
+    _check_sqlite_database_file(items)
     _check_database_connection(session, items)
     _check_users(session, items)
     _check_backup_folder(items)
