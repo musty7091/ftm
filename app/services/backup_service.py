@@ -51,7 +51,7 @@ class BackupFileInfo:
     metadata_file: Optional[Path]
     database_name: str
     database_user: str
-    docker_container: str
+    source_label: str
     status: str
     status_message: str
 
@@ -62,7 +62,7 @@ class BackupValidationResult:
     backup_file: Path
     backup_size_bytes: int
     sha256: str
-    is_postgresql_custom_dump: bool
+    is_sqlite_database_file: bool
     message: str
 
 
@@ -490,14 +490,13 @@ def _write_backup_metadata(
         "backup_size_text": _format_backup_size(backup_size_bytes),
         "sha256": backup_sha256,
         "database_engine": _database_engine_label(),
-        "is_postgresql_custom_dump": False,
         "is_sqlite_database_file": _is_sqlite_database_file(backup_file),
         "deleted_old_backup_count": deleted_old_backup_count,
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": finished_at.isoformat(timespec="seconds"),
         "database_name": database_name,
         "database_user": database_user,
-        "docker_container": "",
+        "source_label": "SQLite Local",
         "source_database_path": source_database_path,
         "mail_enabled": mail_enabled,
         "mail_sent": mail_sent,
@@ -725,7 +724,7 @@ def list_database_backups() -> list[BackupFileInfo]:
 
         database_name = str(metadata.get("database_name") or _sqlite_database_path().name)
         database_user = str(metadata.get("database_user") or "local")
-        docker_container = "SQLite Local"
+        source_label = "SQLite Local"
 
         results.append(
             BackupFileInfo(
@@ -737,7 +736,7 @@ def list_database_backups() -> list[BackupFileInfo]:
                 metadata_file=metadata_file if metadata_file.exists() else None,
                 database_name=database_name,
                 database_user=database_user,
-                docker_container=docker_container,
+                source_label=source_label,
                 status=status,
                 status_message=status_message,
             )
@@ -769,7 +768,7 @@ def validate_backup_file(backup_file: str | Path) -> BackupValidationResult:
             backup_file=backup_path,
             backup_size_bytes=backup_size_bytes,
             sha256=backup_sha256,
-            is_postgresql_custom_dump=False,
+            is_sqlite_database_file=True,
             message="Yedek dosyası mevcut, boş değil ve SQLite veritabanı başlığı doğrulandı.",
         )
 
@@ -778,7 +777,7 @@ def validate_backup_file(backup_file: str | Path) -> BackupValidationResult:
         backup_file=backup_path,
         backup_size_bytes=backup_size_bytes,
         sha256=backup_sha256,
-        is_postgresql_custom_dump=False,
+        is_sqlite_database_file=False,
         message="Yedek dosyası mevcut ancak SQLite veritabanı başlığı doğrulanamadı.",
     )
 

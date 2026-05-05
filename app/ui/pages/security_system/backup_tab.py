@@ -327,9 +327,9 @@ def _manual_backup_confirm_text() -> str:
     )
 
 
-def _validation_file_type_text(*, message: str, is_postgresql_custom_dump: bool) -> str:
-    if is_postgresql_custom_dump:
-        return "Eski desteklenmeyen yedek formatı"
+def _validation_file_type_text(*, message: str, is_sqlite_database_file: bool) -> str:
+    if is_sqlite_database_file:
+        return "SQLite veritabanı dosyası"
 
     if "SQLite" in message:
         return "SQLite veritabanı dosyası"
@@ -646,7 +646,7 @@ class BackupTab(QWidget):
 
             file_type_text = _validation_file_type_text(
                 message=result.message,
-                is_postgresql_custom_dump=result.is_postgresql_custom_dump,
+                is_sqlite_database_file=result.is_sqlite_database_file,
             )
 
             QMessageBox.information(
@@ -838,7 +838,7 @@ class BackupTab(QWidget):
                     backup_info.created_at.strftime("%d.%m.%Y %H:%M:%S"),
                     backup_info.database_name or "-",
                     backup_info.database_user or "local",
-                    backup_info.docker_container or "SQLite Local",
+                    backup_info.source_label or "SQLite Local",
                     backup_info.status,
                     str(backup_info.file_path),
                 ]
@@ -849,7 +849,7 @@ class BackupTab(QWidget):
                     backup_info.created_at.strftime("%d.%m.%Y %H:%M:%S"),
                     backup_info.database_name or "-",
                     backup_info.database_user or "-",
-                    backup_info.docker_container or "-",
+                    backup_info.source_label or "-",
                     backup_info.status,
                     str(backup_info.file_path),
                 ]
