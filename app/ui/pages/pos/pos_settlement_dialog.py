@@ -1,8 +1,9 @@
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QEvent, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -95,11 +96,13 @@ class PosSettlementDialog(QDialog):
         self.gross_amount_input.setMinimumHeight(42)
         self.gross_amount_input.setPlaceholderText("Örn: 125000,00")
         self.gross_amount_input.textChanged.connect(self._refresh_preview)
+        self.gross_amount_input.returnPressed.connect(self.accept)
         form_layout.addRow("Brüt tutar", self.gross_amount_input)
 
         self.reference_no_input = QLineEdit()
         self.reference_no_input.setMinimumHeight(42)
         self.reference_no_input.setPlaceholderText("Slip / batch / referans no")
+        self.reference_no_input.returnPressed.connect(self.accept)
         form_layout.addRow("Referans no", self.reference_no_input)
 
         self.description_input = QTextEdit()
@@ -120,6 +123,12 @@ class PosSettlementDialog(QDialog):
         self.cancel_button.setMinimumHeight(40)
         self.save_button.setMinimumHeight(40)
 
+        self.cancel_button.setDefault(False)
+        self.cancel_button.setAutoDefault(False)
+
+        self.save_button.setDefault(True)
+        self.save_button.setAutoDefault(True)
+
         self.cancel_button.clicked.connect(self.reject)
         self.save_button.clicked.connect(self.accept)
 
@@ -135,7 +144,47 @@ class PosSettlementDialog(QDialog):
         main_layout.addStretch(1)
         main_layout.addLayout(button_layout)
 
+        self._install_enter_shortcuts()
         self._refresh_preview()
+
+    def _install_enter_shortcuts(self) -> None:
+        self.pos_device_combo.installEventFilter(self)
+        self.transaction_date_edit.installEventFilter(self)
+        self.gross_amount_input.installEventFilter(self)
+        self.reference_no_input.installEventFilter(self)
+        self.description_input.installEventFilter(self)
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        if event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if watched is self.description_input:
+                    if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                        self.accept()
+                        return True
+
+                    return False
+
+                self.accept()
+                return True
+
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            focused_widget = self.focusWidget()
+
+            if isinstance(focused_widget, QTextEdit):
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self.accept()
+                    return
+
+                super().keyPressEvent(event)
+                return
+
+            self.accept()
+            return
+
+        super().keyPressEvent(event)
 
     def _fill_pos_device_combo(self) -> None:
         self.pos_device_combo.clear()
