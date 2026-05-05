@@ -23,7 +23,7 @@ def _format_backup_size(size_bytes: int) -> str:
 
 
 def main() -> None:
-    print("FTM PostgreSQL yedekleme işlemi başladı...")
+    print("FTM SQLite yedekleme işlemi başladı...")
     print("")
 
     try:
@@ -34,7 +34,7 @@ def main() -> None:
             print(result.message)
             raise SystemExit(1)
 
-        print("PostgreSQL yedeği başarıyla alındı.")
+        print("SQLite yedeği başarıyla alındı.")
         print(f"Yedek dosyası       : {result.backup_file}")
         print(f"Yedek boyutu        : {_format_backup_size(result.backup_size_bytes)}")
         print(f"Silinen eski yedek  : {result.deleted_old_backup_count}")
@@ -47,7 +47,7 @@ def main() -> None:
         print(f"Mail alıcıları      : {', '.join(result.mail_recipients) if result.mail_recipients else '-'}")
         print(f"Mail durumu         : {result.mail_message}")
         print("")
-        print("Log dosyası         : logs\\backup_log.txt")
+        print("Log dosyası         : runtime logs klasöründeki backup_log.txt")
 
     except Exception:
         print("Yedekleme sırasında hata oluştu.")
