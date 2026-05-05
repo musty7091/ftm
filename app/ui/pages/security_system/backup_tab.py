@@ -254,11 +254,11 @@ def _backup_subtitle_text() -> str:
         return (
             "Bu sekmeden FTM Local / SQLite veritabanının güvenli .db yedeği alınır, "
             "mevcut SQLite yedekleri listelenir ve seçili yedeğin temel dosya doğrulaması yapılır. "
-            "Yedekleme PostgreSQL veya Docker gerektirmez."
+            "Yedekleme harici veritabanı sunucusu gerektirmez."
         )
 
     return (
-        "Bu sekmeden manuel PostgreSQL yedeği alınır, mevcut yedekler listelenir "
+        "Bu sekmeden manuel SQLite yedeği alınır, mevcut yedekler listelenir "
         "ve seçili yedeğin temel dosya doğrulaması yapılır. Geri yükleme işlemi şimdilik "
         "otomatik çalıştırılmaz; önce güvenli doğrulama yapılır."
     )
@@ -271,7 +271,7 @@ def _manual_backup_card_body() -> str:
             "Yedek dosyası backups klasörüne kaydedilir."
         )
 
-    return "Veritabanının PostgreSQL custom dump formatında yedeği alınır."
+    return "Aktif SQLite veritabanı dosyasının zaman damgalı .db yedeği alınır."
 
 
 def _validation_card_body() -> str:
@@ -292,7 +292,7 @@ def _restore_card_body() -> str:
         )
 
     return (
-        "PostgreSQL için otomatik geri yükleme bu aşamada kapalıdır. "
+        "Bu güvenli geri yükleme akışı SQLite Local yedekleri için hazırlanmıştır. "
         "SQLite Local restore akışı güvenli standartla ayrıca yönetilir."
     )
 
@@ -301,13 +301,13 @@ def _backup_hint_text() -> str:
     if _is_sqlite_mode():
         return (
             "Not: SQLite Local modda yedekleme, aktif .db veritabanı dosyasının güvenli kopyasını alır. "
-            "Docker, pg_dump veya PostgreSQL sunucusu gerekmez. "
+            "Harici veritabanı sunucusu gerekmez. "
             "Yedek klasörü Sistem Ayarları ekranındaki risksiz ayardan gelir."
         )
 
     return (
-        "Not: Yedekleme Docker içindeki pg_dump ile çalışır. "
-        "BACKUP_DOCKER_CONTAINER ve veritabanı bilgileri .env dosyasından okunur. "
+        "Not: Yedekleme SQLite yerel veri dosyası üzerinden çalışır. "
+        "Yedek klasörü Sistem Ayarları ekranındaki risksiz ayardan gelir. "
         "Yedek klasörü ise Sistem Ayarları ekranındaki risksiz ayardan gelir."
     )
 
@@ -317,7 +317,7 @@ def _manual_backup_confirm_text() -> str:
         return (
             "SQLite veritabanı yedeği alınacak.\n\n"
             "Bu işlem aktif .db veritabanı dosyasının güvenli bir kopyasını oluşturur.\n"
-            "PostgreSQL veya Docker kullanılmaz.\n\n"
+            "Harici veritabanı sunucusu kullanılmaz.\n\n"
             "Devam etmek istiyor musun?"
         )
 
@@ -329,7 +329,7 @@ def _manual_backup_confirm_text() -> str:
 
 def _validation_file_type_text(*, message: str, is_postgresql_custom_dump: bool) -> str:
     if is_postgresql_custom_dump:
-        return "PostgreSQL Custom Dump"
+        return "Eski desteklenmeyen yedek formatı"
 
     if "SQLite" in message:
         return "SQLite veritabanı dosyası"
