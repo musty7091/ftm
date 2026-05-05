@@ -123,14 +123,14 @@ MENU_ITEMS = [
     },
     {
         "key": "20",
-        "title": "PostgreSQL yedeği al",
+        "title": "SQLite yedeği al",
         "module": "app.db.backup_database",
         "category": "YEDEKLEME / GÜVENLİK",
     },
     {
         "key": "21",
-        "title": "Yedekten geri dönüş testi yap",
-        "module": "app.db.test_backup_restore",
+        "title": "SQLite yedekten geri dönüş testi yap",
+        "module": "app.db.test_sqlite_restore",
         "category": "YEDEKLEME / GÜVENLİK",
     },
     {
