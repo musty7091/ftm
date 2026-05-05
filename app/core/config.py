@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote_plus
 from typing import Any
 import json
 import os
@@ -18,7 +17,6 @@ load_dotenv(ENV_FILE)
 
 
 SUPPORTED_DATABASE_ENGINES = {
-    "postgresql",
     "sqlite",
 }
 
@@ -34,10 +32,6 @@ def _get_env(name: str, default: str = "") -> str:
         return default
 
     return value.strip()
-
-
-def _env_exists(name: str) -> bool:
-    return bool(_get_env(name))
 
 
 def _load_setup_config_data() -> dict[str, Any]:
@@ -79,10 +73,10 @@ def _load_setup_config_data() -> dict[str, Any]:
             f"Dosya:\n{SETUP_CONFIG_FILE}\n\n"
             "app_setup.json en üst seviyede JSON object olmalıdır.\n"
             "Örnek doğru yapı:\n"
-            '{\n'
+            "{\n"
             '  "setup_completed": true,\n'
             '  "database_engine": "sqlite"\n'
-            '}\n\n'
+            "}\n\n"
             "Finans verisini korumak için uygulama varsayılan ayarlara düşürülmedi."
         )
 
@@ -129,31 +123,21 @@ def _get_env_or_setup(
     return str(setup_value or default).strip()
 
 
-def _get_required_value(
-    *,
-    env_name: str,
-    setup_name: str,
-    label: str,
-) -> str:
-    value = _get_env_or_setup(
-        env_name=env_name,
-        setup_name=setup_name,
-        default="",
-    )
-
-    if not value:
-        raise RuntimeError(f"Zorunlu ayar eksik: {label}")
-
-    return value
-
-
 def _get_bool_env(name: str, default: bool = False) -> bool:
     value = _get_env(name)
 
     if not value:
         return default
 
-    return value.lower() in {"1", "true", "yes", "evet", "on"}
+    return value.lower() in {
+        "1",
+        "true",
+        "yes",
+        "evet",
+        "on",
+        "açık",
+        "acik",
+    }
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -168,37 +152,6 @@ def _get_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} sayısal olmalıdır. Gelen değer: {value}") from exc
 
 
-def _get_int_env_or_setup(
-    *,
-    env_name: str,
-    setup_name: str,
-    default: int,
-) -> int:
-    env_value = _get_env(env_name)
-
-    if env_value:
-        try:
-            return int(env_value)
-        except ValueError as exc:
-            raise RuntimeError(f"{env_name} sayısal olmalıdır. Gelen değer: {env_value}") from exc
-
-    setup_value = _get_setup_value(setup_name, default)
-
-    try:
-        return int(setup_value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _has_postgresql_env_values() -> bool:
-    return (
-        _env_exists("DATABASE_HOST")
-        and _env_exists("DATABASE_NAME")
-        and _env_exists("DATABASE_USER")
-        and _env_exists("DATABASE_PASSWORD")
-    )
-
-
 def _clean_database_engine(value: Any) -> str:
     database_engine = str(value or "").strip().lower()
 
@@ -208,7 +161,8 @@ def _clean_database_engine(value: Any) -> str:
     if database_engine not in SUPPORTED_DATABASE_ENGINES:
         supported_values = ", ".join(sorted(SUPPORTED_DATABASE_ENGINES))
         raise RuntimeError(
-            f"DATABASE_ENGINE geçersiz: {database_engine}. "
+            "FTM artık yalnızca SQLite local desktop veritabanı modunu destekler. "
+            f"Geçersiz DATABASE_ENGINE değeri: {database_engine}. "
             f"Desteklenen değerler: {supported_values}"
         )
 
@@ -228,9 +182,6 @@ def _get_database_engine() -> str:
 
         if setup_database_engine:
             return setup_database_engine
-
-    if _has_postgresql_env_values():
-        return "postgresql"
 
     return "sqlite"
 
@@ -290,7 +241,7 @@ class Settings:
 
     @property
     def is_postgresql(self) -> bool:
-        return self.database_engine == "postgresql"
+        return False
 
     @property
     def is_sqlite(self) -> bool:
@@ -298,53 +249,16 @@ class Settings:
 
     @property
     def database_url(self) -> str:
-        if self.is_sqlite:
-            return f"sqlite:///{self.sqlite_database_path.as_posix()}"
-
-        user = quote_plus(self.database_user)
-        password = quote_plus(self.database_password)
-        host = self.database_host
-        port = self.database_port
-        db_name = self.database_name
-
-        return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db_name}"
+        return f"sqlite:///{self.sqlite_database_path.as_posix()}"
 
 
 DATABASE_ENGINE = _get_database_engine()
 
-
-if DATABASE_ENGINE == "postgresql":
-    DATABASE_HOST = _get_required_value(
-        env_name="DATABASE_HOST",
-        setup_name="database_host",
-        label="PostgreSQL sunucu",
-    )
-    DATABASE_PORT = _get_int_env_or_setup(
-        env_name="DATABASE_PORT",
-        setup_name="database_port",
-        default=5433,
-    )
-    DATABASE_NAME = _get_required_value(
-        env_name="DATABASE_NAME",
-        setup_name="database_name",
-        label="PostgreSQL veritabanı adı",
-    )
-    DATABASE_USER = _get_required_value(
-        env_name="DATABASE_USER",
-        setup_name="database_user",
-        label="PostgreSQL kullanıcı adı",
-    )
-    DATABASE_PASSWORD = _get_required_value(
-        env_name="DATABASE_PASSWORD",
-        setup_name="database_password",
-        label="PostgreSQL şifre",
-    )
-else:
-    DATABASE_HOST = ""
-    DATABASE_PORT = 0
-    DATABASE_NAME = "ftm_local"
-    DATABASE_USER = ""
-    DATABASE_PASSWORD = ""
+DATABASE_HOST = ""
+DATABASE_PORT = 0
+DATABASE_NAME = "ftm_local"
+DATABASE_USER = ""
+DATABASE_PASSWORD = ""
 
 
 settings = Settings(
