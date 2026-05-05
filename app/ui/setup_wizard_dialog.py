@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from app.core.security import PasswordValidationError, validate_password_strength
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFormLayout,
     QFrame,
@@ -18,7 +16,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -117,8 +114,7 @@ QGroupBox::title {
 }
 
 QLineEdit,
-QTextEdit,
-QComboBox {
+QTextEdit {
     background-color: #0f172a;
     color: #f8fafc;
     border: 1px solid #334155;
@@ -130,8 +126,7 @@ QComboBox {
 }
 
 QLineEdit:focus,
-QTextEdit:focus,
-QComboBox:focus {
+QTextEdit:focus {
     border: 1px solid #38bdf8;
     background-color: #0b1220;
 }
@@ -145,21 +140,6 @@ QLineEdit[readOnly="true"] {
     background-color: #111827;
     color: #cbd5e1;
     border: 1px solid #475569;
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 30px;
-}
-
-QComboBox QAbstractItemView {
-    background-color: #111827;
-    color: #f8fafc;
-    border: 1px solid #334155;
-    selection-background-color: #2563eb;
-    selection-color: #ffffff;
-    outline: 0;
-    padding: 6px;
 }
 
 QPushButton {
@@ -234,54 +214,19 @@ class SetupWizardDialog(QDialog):
         self.payload: SetupWizardPayload | None = None
 
         self.setWindowTitle("FTM İlk Kurulum Sihirbazı")
-        self.resize(980, 760)
-        self.setMinimumSize(880, 680)
+        self.resize(980, 720)
+        self.setMinimumSize(880, 660)
         self.setStyleSheet(SETUP_WIZARD_STYLE)
         self.setSizeGripEnabled(True)
-
-        self.database_engine_combo = QComboBox()
-        self.database_engine_combo.addItem(
-            "SQLite - Tek bilgisayar / kolay kurulum",
-            "sqlite",
-        )
-        self.database_engine_combo.addItem(
-            "PostgreSQL - Çok kullanıcı / gelişmiş kurulum",
-            "postgresql",
-        )
-        self.database_engine_combo.currentIndexChanged.connect(
-            self._on_database_engine_changed
-        )
-
-        self.database_stack = QStackedWidget()
 
         self.sqlite_database_path_input = QLineEdit()
         self.sqlite_database_path_input.setPlaceholderText(DEFAULT_SQLITE_DATABASE_PATH)
         self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
         self.sqlite_database_path_input.setReadOnly(True)
         self.sqlite_database_path_input.setToolTip(
-            "SQLite Local kurulumda veritabanı yolu sabittir. "
-            "FTM bu dosyayı AppData\\Local\\FTM altında oluşturur."
+            "FTM yerel SQLite veritabanı kullanır. "
+            "Bu dosya AppData\\Local\\FTM altında güvenli şekilde yönetilir."
         )
-
-        self.database_host_input = QLineEdit()
-        self.database_host_input.setPlaceholderText("localhost veya 192.168.1.100")
-        self.database_host_input.setText("localhost")
-
-        self.database_port_input = QLineEdit()
-        self.database_port_input.setPlaceholderText("5432")
-        self.database_port_input.setText("5432")
-
-        self.database_name_input = QLineEdit()
-        self.database_name_input.setPlaceholderText("ftm_db")
-        self.database_name_input.setText("ftm_db")
-
-        self.database_user_input = QLineEdit()
-        self.database_user_input.setPlaceholderText("ftm_user")
-        self.database_user_input.setText("ftm_user")
-
-        self.database_password_input = QLineEdit()
-        self.database_password_input.setPlaceholderText("PostgreSQL şifresi")
-        self.database_password_input.setEchoMode(QLineEdit.Password)
 
         self.company_name_input = QLineEdit()
         self.company_name_input.setPlaceholderText("Firma adı")
@@ -316,7 +261,10 @@ class SetupWizardDialog(QDialog):
         self.admin_password_repeat_input.setPlaceholderText("Şifre tekrarı")
         self.admin_password_repeat_input.setEchoMode(QLineEdit.Password)
 
-        self.status_label = QLabel("")
+        self.status_label = QLabel(
+            "FTM yerel SQLite veritabanı ile kurulacaktır. "
+            "Veritabanı yolu sistem tarafından güvenli AppData klasöründe yönetilir."
+        )
         self.status_label.setObjectName("SetupWizardSubtitle")
         self.status_label.setWordWrap(True)
 
@@ -329,7 +277,6 @@ class SetupWizardDialog(QDialog):
         self.finish_button.clicked.connect(self.accept)
 
         self._build_ui()
-        self._on_database_engine_changed()
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -352,9 +299,9 @@ class SetupWizardDialog(QDialog):
         title.setObjectName("SetupWizardTitle")
 
         subtitle = QLabel(
-            "Bu ekran FTM'nin ilk kullanım ayarlarını hazırlamak için tasarlandı. "
-            "SQLite küçük işletme ve tek bilgisayar kullanımı için önerilir. "
-            "PostgreSQL ise çok kullanıcılı ve teknik kurulum isteyen yapı içindir."
+            "Bu ekran FTM'nin ilk kullanım ayarlarını hazırlar. "
+            "FTM yerel SQLite veritabanı ile çalışır; kullanıcıdan teknik veritabanı seçimi istenmez. "
+            "Firma bilgilerini ve ilk ADMIN kullanıcısını oluşturman yeterlidir."
         )
         subtitle.setObjectName("SetupWizardSubtitle")
         subtitle.setWordWrap(True)
@@ -380,66 +327,22 @@ class SetupWizardDialog(QDialog):
         return card
 
     def _build_database_group(self) -> QWidget:
-        group = QGroupBox("1. Veritabanı Seçimi")
+        group = QGroupBox("1. Yerel Veri Dosyası")
 
         layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(12)
 
-        engine_form = QFormLayout()
-        engine_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        engine_form.setHorizontalSpacing(18)
-        engine_form.setVerticalSpacing(12)
-        engine_form.addRow("Veritabanı tipi", self.database_engine_combo)
-
-        self.database_stack.addWidget(self._build_sqlite_database_page())
-        self.database_stack.addWidget(self._build_postgresql_database_page())
-
-        layout.addLayout(engine_form)
-        layout.addWidget(self.database_stack)
-        layout.addWidget(self._build_database_info_box())
-
-        return group
-
-    def _build_sqlite_database_page(self) -> QWidget:
-        page = QWidget()
-
-        form = QFormLayout(page)
+        form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(12)
-
         form.addRow("SQLite dosyası", self.sqlite_database_path_input)
 
-        return page
+        layout.addLayout(form)
+        layout.addWidget(self._build_database_info_box())
 
-    def _build_postgresql_database_page(self) -> QWidget:
-        page = QWidget()
-
-        grid = QGridLayout(page)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(12)
-
-        grid.addWidget(QLabel("Sunucu"), 0, 0)
-        grid.addWidget(self.database_host_input, 0, 1)
-
-        grid.addWidget(QLabel("Port"), 0, 2)
-        grid.addWidget(self.database_port_input, 0, 3)
-
-        grid.addWidget(QLabel("Veritabanı"), 1, 0)
-        grid.addWidget(self.database_name_input, 1, 1)
-
-        grid.addWidget(QLabel("Kullanıcı"), 1, 2)
-        grid.addWidget(self.database_user_input, 1, 3)
-
-        grid.addWidget(QLabel("Şifre"), 2, 0)
-        grid.addWidget(self.database_password_input, 2, 1, 1, 3)
-
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-
-        return page
+        return group
 
     def _build_database_info_box(self) -> QWidget:
         box = QFrame()
@@ -450,9 +353,9 @@ class SetupWizardDialog(QDialog):
         layout.setSpacing(4)
 
         info = QLabel(
-            "Not: SQLite Local seçeneğinde veritabanı yolu güvenlik ve veri bütünlüğü için sabittir. "
-            "FTM dosyayı AppData\\Local\\FTM\\data altında yönetir. "
-            "PostgreSQL seçeneği, PostgreSQL sunucusunun önceden kurulu ve çalışır durumda olmasını gerektirir."
+            "FTM bu kurulumda yerel SQLite veritabanı kullanır. "
+            "Veri dosyası AppData\\Local\\FTM\\data altında yönetilir. "
+            "Bu yapı tek bilgisayar kullanılan masaüstü finans takip sistemi için sade, güvenli ve taşınabilir bir kurulum sağlar."
         )
         info.setObjectName("SetupWizardWarningText")
         info.setWordWrap(True)
@@ -524,35 +427,17 @@ class SetupWizardDialog(QDialog):
 
         return layout
 
-    def _on_database_engine_changed(self) -> None:
-        selected_engine = self._selected_database_engine()
-
-        if selected_engine == "postgresql":
-            self.database_stack.setCurrentIndex(1)
-            self.status_label.setText(
-                "PostgreSQL seçildi. Bu seçenek için PostgreSQL sunucusu önceden kurulmuş ve erişilebilir olmalıdır."
-            )
-            return
-
-        self.database_stack.setCurrentIndex(0)
-        self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
-        self.status_label.setText(
-            "SQLite Local seçildi. Veritabanı yolu sabittir ve FTM tarafından güvenli AppData klasöründe yönetilir."
-        )
-
-    def _selected_database_engine(self) -> str:
-        return str(self.database_engine_combo.currentData() or "sqlite").strip().lower()
-
     def _build_payload(self) -> SetupWizardPayload:
-        database_engine = self._selected_database_engine()
+        database_engine = "sqlite"
 
         sqlite_database_path = DEFAULT_SQLITE_DATABASE_PATH
         self.sqlite_database_path_input.setText(DEFAULT_SQLITE_DATABASE_PATH)
-        database_host = self.database_host_input.text().strip()
-        database_port_text = self.database_port_input.text().strip()
-        database_name = self.database_name_input.text().strip()
-        database_user = self.database_user_input.text().strip()
-        database_password = self.database_password_input.text()
+
+        database_host = ""
+        database_port = 0
+        database_name = "ftm_local"
+        database_user = ""
+        database_password = ""
 
         company_name = self.company_name_input.text().strip()
         company_address = self.company_address_input.toPlainText().strip()
@@ -565,35 +450,8 @@ class SetupWizardDialog(QDialog):
         admin_password = self.admin_password_input.text()
         admin_password_repeat = self.admin_password_repeat_input.text()
 
-        if database_engine not in {"sqlite", "postgresql"}:
-            raise ValueError("Geçerli bir veritabanı tipi seçilmelidir.")
-
-        if database_engine == "sqlite":
-            if sqlite_database_path != DEFAULT_SQLITE_DATABASE_PATH:
-                raise ValueError("SQLite Local veritabanı yolu sistem tarafından sabitlenmiştir.")
-
-        if database_engine == "postgresql":
-            if not database_host:
-                raise ValueError("PostgreSQL sunucu bilgisi boş olamaz.")
-
-            if not database_name:
-                raise ValueError("PostgreSQL veritabanı adı boş olamaz.")
-
-            if not database_user:
-                raise ValueError("PostgreSQL kullanıcı adı boş olamaz.")
-
-            if not database_password:
-                raise ValueError("PostgreSQL şifre boş olamaz.")
-
-            try:
-                database_port = int(database_port_text)
-            except ValueError as exc:
-                raise ValueError("PostgreSQL port sayısal olmalıdır.") from exc
-
-            if database_port <= 0 or database_port > 65535:
-                raise ValueError("PostgreSQL port 1 ile 65535 arasında olmalıdır.")
-        else:
-            database_port = 0
+        if sqlite_database_path != DEFAULT_SQLITE_DATABASE_PATH:
+            raise ValueError("SQLite Local veritabanı yolu sistem tarafından sabitlenmiştir.")
 
         if not company_name:
             raise ValueError("Firma adı boş olamaz.")
