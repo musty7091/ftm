@@ -6,7 +6,6 @@ FTM, çok banka, çok hesap, çek, POS, nakit, transfer ve finansal risk takibi 
 
 - Python 3.12
 - PySide6
-- PostgreSQL
 - SQLAlchemy
 - Alembic
 - Decimal

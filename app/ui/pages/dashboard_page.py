@@ -33,6 +33,7 @@ class ClickableSummaryCard(SummaryCard):
         card_type: str,
         target_page: str,
         navigate_to_page: Callable[[str], None] | None,
+        minimum_height: int = 112,
     ) -> None:
         super().__init__(
             title=title,
@@ -44,7 +45,7 @@ class ClickableSummaryCard(SummaryCard):
         self.target_page = target_page
         self.navigate_to_page = navigate_to_page
 
-        self.setMinimumHeight(128)
+        self.setMinimumHeight(minimum_height)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(f"{target_page} ekranına gitmek için tıkla.")
 
@@ -174,11 +175,23 @@ class DashboardPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(10)
 
+        layout.addWidget(self._build_section_label("Kritik Finans Radarı"))
         layout.addLayout(self._build_due_radar_cards())
+
+        layout.addWidget(self._build_section_label("Yardımcı Göstergeler"))
         layout.addLayout(self._build_money_radar_cards())
-        layout.addWidget(self._build_action_items_card(), 1)
+
+        layout.addWidget(self._build_action_items_card(), 0)
+        layout.addStretch(1)
+
+    def _build_section_label(self, title: str) -> QLabel:
+        label = QLabel(title)
+        label.setObjectName("SectionTitle")
+        label.setMinimumHeight(22)
+
+        return label
 
     def _build_dashboard_card(
         self,
@@ -188,6 +201,7 @@ class DashboardPage(QWidget):
         hint: str,
         card_type: str,
         target_page: str,
+        minimum_height: int = 112,
     ) -> ClickableSummaryCard:
         return ClickableSummaryCard(
             title=title,
@@ -196,6 +210,7 @@ class DashboardPage(QWidget):
             card_type=card_type,
             target_page=target_page,
             navigate_to_page=self.navigate_to_page,
+            minimum_height=minimum_height,
         )
 
     def _calculate_bank_currency_totals(self) -> dict[str, Decimal]:
@@ -225,66 +240,80 @@ class DashboardPage(QWidget):
             key=_currency_sort_key,
         ):
             lines.append(
-                f"{currency_code}: {_format_currency_amount(self.dashboard_data.pending_pos_currency_totals[currency_code], currency_code)}"
+                _format_currency_amount(
+                    self.dashboard_data.pending_pos_currency_totals[currency_code],
+                    currency_code,
+                )
             )
 
         return "\n".join(lines)
 
+    def _build_today_and_risk_hint(self) -> str:
+        hint_parts: list[str] = []
+
+        if self.dashboard_data.due_today_count > 0:
+            hint_parts.append(
+                f"Bugün: {_format_currency_totals_inline(self.dashboard_data.due_today_currency_totals)}"
+            )
+
+        if self.dashboard_data.overdue_pending_count > 0:
+            hint_parts.append(
+                f"Geciken: {_format_currency_totals_inline(self.dashboard_data.overdue_pending_currency_totals)}"
+            )
+
+        if self.dashboard_data.problem_count > 0:
+            hint_parts.append(
+                f"Problem: {_format_currency_totals_inline(self.dashboard_data.problem_currency_totals)}"
+            )
+
+        if hint_parts:
+            return " | ".join(hint_parts)
+
+        return "Bugün vadeli, geciken veya problemli çek görünmüyor"
+
     def _build_due_radar_cards(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(10)
 
         overdue_and_problem_count = (
             self.dashboard_data.overdue_pending_count
             + self.dashboard_data.problem_count
         )
 
-        overdue_and_problem_hint_parts: list[str] = []
+        bank_currency_totals = self._calculate_bank_currency_totals()
 
-        if self.dashboard_data.overdue_pending_count > 0:
-            overdue_and_problem_hint_parts.append(
-                f"Vadesi geçmiş: {_format_currency_totals_inline(self.dashboard_data.overdue_pending_currency_totals)}"
-            )
-
-        if self.dashboard_data.problem_count > 0:
-            overdue_and_problem_hint_parts.append(
-                f"Problem: {_format_currency_totals_inline(self.dashboard_data.problem_currency_totals)}"
-            )
-
-        overdue_and_problem_hint = (
-            " | ".join(overdue_and_problem_hint_parts)
-            if overdue_and_problem_hint_parts
-            else "Vadesi geçmiş veya problemli çek görünmüyor"
+        today_or_risk_exists = (
+            self.dashboard_data.due_today_count > 0
+            or overdue_and_problem_count > 0
         )
 
         cards = [
             self._build_dashboard_card(
-                title="BUGÜN VADELİ",
-                value=f"{tr_number(self.dashboard_data.due_today_count)} çek",
-                hint=_format_currency_totals_inline(self.dashboard_data.due_today_currency_totals),
-                card_type="risk" if self.dashboard_data.due_today_count > 0 else "normal",
+                title="BUGÜN / RİSK",
+                value=(
+                    f"{tr_number(self.dashboard_data.due_today_count)} bugün\n"
+                    f"{tr_number(overdue_and_problem_count)} risk"
+                ),
+                hint=self._build_today_and_risk_hint(),
+                card_type="risk" if today_or_risk_exists else "success",
                 target_page="Vade Takvimi",
+                minimum_height=112,
             ),
             self._build_dashboard_card(
-                title="7 GÜN İÇİNDE ALINACAK",
-                value=f"{tr_number(self.dashboard_data.next_7_received_count)} çek",
-                hint=_format_currency_totals_inline(self.dashboard_data.next_7_received_currency_totals),
-                card_type="success",
-                target_page="Vade Takvimi",
-            ),
-            self._build_dashboard_card(
-                title="7 GÜN İÇİNDE ÖDENECEK",
+                title="7 GÜN ÖDEME RİSKİ",
                 value=f"{tr_number(self.dashboard_data.next_7_issued_count)} çek",
                 hint=_format_currency_totals_inline(self.dashboard_data.next_7_issued_currency_totals),
                 card_type="risk" if self.dashboard_data.next_7_issued_count > 0 else "normal",
                 target_page="Vade Takvimi",
+                minimum_height=112,
             ),
             self._build_dashboard_card(
-                title="RİSK / GECİKME",
-                value=f"{tr_number(overdue_and_problem_count)} kayıt",
-                hint=overdue_and_problem_hint,
-                card_type="risk" if overdue_and_problem_count > 0 else "success",
-                target_page="Vade Takvimi",
+                title="BANKA LİKİDİTESİ",
+                value=_format_currency_totals(bank_currency_totals),
+                hint="Aktif banka hesaplarının para birimi bazlı güncel toplamı",
+                card_type="highlight",
+                target_page="Bankalar",
+                minimum_height=112,
             ),
         ]
 
@@ -295,17 +324,16 @@ class DashboardPage(QWidget):
 
     def _build_money_radar_cards(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
-
-        bank_currency_totals = self._calculate_bank_currency_totals()
+        grid.setSpacing(10)
 
         cards = [
             self._build_dashboard_card(
-                title="BANKA BAKİYESİ",
-                value=_format_currency_totals(bank_currency_totals),
-                hint="Aktif banka hesaplarının para birimi bazlı güncel toplamı",
-                card_type="highlight",
-                target_page="Bankalar",
+                title="7 GÜN ALINACAK",
+                value=f"{tr_number(self.dashboard_data.next_7_received_count)} çek",
+                hint=_format_currency_totals_inline(self.dashboard_data.next_7_received_currency_totals),
+                card_type="success",
+                target_page="Vade Takvimi",
+                minimum_height=112,
             ),
             self._build_dashboard_card(
                 title="BEKLEYEN POS",
@@ -313,20 +341,23 @@ class DashboardPage(QWidget):
                 hint="Henüz gerçekleşmemiş POS yatışları",
                 card_type="normal",
                 target_page="POS Mutabakat",
+                minimum_height=124,
             ),
             self._build_dashboard_card(
-                title="BU AY ALINAN ÇEK",
+                title="AYLIK ALINAN ÇEK",
                 value=f"{tr_number(self.dashboard_data.month_received_count)} çek",
                 hint=_format_currency_totals_inline(self.dashboard_data.month_received_currency_totals),
                 card_type="success",
                 target_page="Vade Takvimi",
+                minimum_height=112,
             ),
             self._build_dashboard_card(
-                title="BU AY YAZILAN ÇEK",
+                title="AYLIK YAZILAN ÇEK",
                 value=f"{tr_number(self.dashboard_data.month_issued_count)} çek",
                 hint=_format_currency_totals_inline(self.dashboard_data.month_issued_currency_totals),
                 card_type="risk" if self.dashboard_data.month_issued_count > 0 else "normal",
                 target_page="Vade Takvimi",
+                minimum_height=112,
             ),
         ]
 
@@ -336,6 +367,51 @@ class DashboardPage(QWidget):
         return grid
 
     def _build_action_items_card(self) -> QWidget:
+        if not self.dashboard_data.due_action_items:
+            return self._build_empty_action_items_card()
+
+        return self._build_action_items_table_card()
+
+    def _build_empty_action_items_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setMaximumHeight(118)
+        card.setMinimumHeight(104)
+        card.setCursor(Qt.PointingHandCursor)
+        card.setToolTip("Vade Takvimi ekranına gitmek için çift tıkla.")
+
+        original_mouse_double_click_event = card.mouseDoubleClickEvent
+
+        def open_due_calendar(event: Any) -> None:
+            if self.navigate_to_page is not None:
+                self.navigate_to_page("Vade Takvimi")
+
+            original_mouse_double_click_event(event)
+
+        card.mouseDoubleClickEvent = open_due_calendar
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(6)
+
+        title = QLabel("Aksiyon Gerektiren Çekler")
+        title.setObjectName("SectionTitle")
+
+        message = QLabel("Bugün aksiyon gerektiren çek bulunmuyor. Finans radarı temiz görünüyor.")
+        message.setObjectName("CardHint")
+        message.setWordWrap(True)
+
+        helper = QLabel("Detaylı vade takvimi için bu karta çift tıklayabilirsin.")
+        helper.setObjectName("MutedText")
+        helper.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(message)
+        layout.addWidget(helper)
+
+        return card
+
+    def _build_action_items_table_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
         card.setCursor(Qt.PointingHandCursor)
@@ -352,14 +428,14 @@ class DashboardPage(QWidget):
         card.mouseDoubleClickEvent = open_due_calendar
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         title = QLabel("Aksiyon Gerektiren Çekler")
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Vadesi geçmiş, bugün vadeli, 7 gün içinde vadeli ve problemli/riskli çeklerin öncelikli listesi."
+            "Öncelikli takip listesi. Satıra çift tıklayarak Vade Takvimi ekranına geçebilirsin."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -384,7 +460,9 @@ class DashboardPage(QWidget):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setWordWrap(False)
         table.setTextElideMode(Qt.ElideRight)
-        table.setMinimumHeight(320)
+        table.setMinimumHeight(150)
+        table.setMaximumHeight(260)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         table.cellDoubleClicked.connect(lambda row, column: self._open_due_calendar_from_table())
 
         header = table.horizontalHeader()
@@ -401,7 +479,7 @@ class DashboardPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addWidget(table, 1)
+        layout.addWidget(table)
 
         return card
 
@@ -411,20 +489,6 @@ class DashboardPage(QWidget):
 
     def _fill_action_items_table(self, table: QTableWidget) -> None:
         action_items = self.dashboard_data.due_action_items
-
-        if not action_items:
-            table.setRowCount(1)
-
-            item = QTableWidgetItem(
-                "Aksiyon gerektiren çek bulunmuyor. Bugün radar temiz görünüyor."
-            )
-            item.setForeground(QColor("#a7f3d0"))
-            item.setTextAlignment(Qt.AlignCenter)
-
-            table.setItem(0, 0, item)
-            table.setSpan(0, 0, 1, 8)
-            table.resizeRowsToContents()
-            return
 
         table.setRowCount(len(action_items))
 

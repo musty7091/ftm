@@ -28,7 +28,6 @@ from app.services.license_service import (
     check_license,
 )
 from app.services.permission_service import Permission, has_any_permission_from_db
-from app.ui.components.status_badge import create_health_badge, create_user_badge
 from app.ui.dashboard_data import load_dashboard_data
 from app.ui.navigation import (
     ALL_NAV_ITEMS,
@@ -50,14 +49,14 @@ from app.ui.ui_helpers import clear_layout
 
 
 PAGE_SUBTITLES = {
-    "Genel Bakış": "Banka, POS, çek, güvenlik ve sistem sağlığını tek ekranda izle.",
+    "Genel Bakış": "Banka, POS ve çek takibini hızlıca izle.",
     "Bankalar": "Banka hesapları, bakiyeler, hareketler ve transfer yönetimi.",
-    "POS Mutabakat": "Beklenen POS yatışları, gerçekleşen tutarlar ve fark analizleri burada olacak.",
-    "Çek Yönetimi": "Yazılan çekler, alınan çekler, vade takvimi ve çek riskleri burada yönetilecek.",
-    "Vade Takvimi": "Gelen ve giden çeklerin vade tarihlerini masaüstü takvim görünümünde takip et.",
-    "Müşteri / Tedarikçi Kartları": "Çek aldığın müşteriler, çek verdiğin tedarikçiler ve nadir işlem yapılan taraflar burada yönetilecek.",
-    "Raporlar": "A4 baskı düzenine uygun profesyonel PDF ve Excel raporları oluştur.",
-    "Güvenlik ve Sistem": "Kullanıcılar, roller, yetkiler, audit log, yedekleme ve sistem ayarları burada yönetilecek.",
+    "POS Mutabakat": "Beklenen POS yatışları, gerçekleşen tutarlar ve fark analizleri.",
+    "Çek Yönetimi": "Yazılan çekler, alınan çekler ve çek işlem yönetimi.",
+    "Vade Takvimi": "Gelen ve giden çeklerin vade tarihlerini takip et.",
+    "Müşteri / Tedarikçi Kartları": "Müşteri, tedarikçi ve işlem yapılan tarafları yönet.",
+    "Raporlar": "PDF ve Excel raporlarını oluştur.",
+    "Güvenlik ve Sistem": "Kullanıcılar, roller, kayıtlar, yedekleme ve lisans yönetimi.",
     "Erişim Yok": "Bu ekran için mevcut rolün yetkili değil.",
 }
 
@@ -134,8 +133,8 @@ class FtmDesktopWindow(QMainWindow):
         self.setCentralWidget(root)
 
         main_layout = QHBoxLayout(root)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(12)
 
         sidebar = self._build_sidebar()
 
@@ -145,7 +144,7 @@ class FtmDesktopWindow(QMainWindow):
 
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.setSpacing(16)
+        self.content_layout.setSpacing(12)
 
         self.content_scroll_area = QScrollArea()
         self.content_scroll_area.setObjectName("ContentScrollArea")
@@ -270,11 +269,11 @@ class FtmDesktopWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(285)
+        sidebar.setFixedWidth(270)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         logo_box = self._build_logo_box()
         layout.addWidget(logo_box)
@@ -293,45 +292,38 @@ class FtmDesktopWindow(QMainWindow):
 
         layout.addStretch()
 
+        layout.addWidget(self._build_sidebar_status_panel())
+
         logout_button = QPushButton("Oturumu Kapat")
-        logout_button.setMinimumHeight(42)
+        logout_button.setMinimumHeight(38)
         logout_button.setCursor(Qt.PointingHandCursor)
         logout_button.clicked.connect(self.confirm_exit)
         logout_button.setStyleSheet(
             """
             QPushButton {
-                background-color: #7f1d1d;
-                color: #ffffff;
-                border: 1px solid #f87171;
-                border-radius: 12px;
-                padding: 10px 14px;
-                font-weight: 900;
+                background-color: #4c1d1d;
+                color: #fee2e2;
+                border: 1px solid #7f1d1d;
+                border-radius: 11px;
+                padding: 8px 12px;
+                font-weight: 800;
                 text-align: center;
             }
 
             QPushButton:hover {
-                background-color: #991b1b;
-                border: 1px solid #fca5a5;
+                background-color: #7f1d1d;
+                color: #ffffff;
+                border: 1px solid #ef4444;
             }
 
             QPushButton:pressed {
-                background-color: #5b0f0f;
+                background-color: #3f1515;
                 border: 1px solid #fecaca;
             }
             """
         )
 
         layout.addWidget(logout_button)
-
-        footer = QLabel(
-            f"v0.5 UI Modular\n"
-            f"Rol bazlı menü aktif.\n"
-            f"Gizlenen bölüm: {self._hidden_page_count()}"
-        )
-        footer.setObjectName("MutedText")
-        footer.setWordWrap(True)
-
-        layout.addWidget(footer)
 
         self.update_selected_nav_button()
 
@@ -342,14 +334,13 @@ class FtmDesktopWindow(QMainWindow):
         logo_box.setObjectName("LogoBox")
 
         logo_layout = QVBoxLayout(logo_box)
-        logo_layout.setContentsMargins(18, 18, 18, 18)
+        logo_layout.setContentsMargins(16, 14, 16, 14)
         logo_layout.setSpacing(2)
 
         logo_title = QLabel("FTM")
         logo_title.setObjectName("LogoTitle")
 
         logo_subtitle = QLabel("Finans Takip Merkezi")
-
         logo_subtitle.setObjectName("LogoSubtitle")
 
         user_text = QLabel(f"{self.current_username} / {self.current_role}")
@@ -357,10 +348,175 @@ class FtmDesktopWindow(QMainWindow):
 
         logo_layout.addWidget(logo_title)
         logo_layout.addWidget(logo_subtitle)
-        logo_layout.addSpacing(8)
+        logo_layout.addSpacing(6)
         logo_layout.addWidget(user_text)
 
         return logo_box
+
+    def _build_sidebar_status_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("SidebarStatusPanel")
+        panel.setStyleSheet(
+            """
+            QFrame#SidebarStatusPanel {
+                background-color: #0b1220;
+                border: 1px solid #1f2937;
+                border-radius: 14px;
+            }
+
+            QLabel {
+                background: transparent;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 9, 10, 9)
+        layout.setSpacing(7)
+
+        title = QLabel("Durum")
+        title.setStyleSheet(
+            """
+            QLabel {
+                color: #94a3b8;
+                font-size: 11px;
+                font-weight: 800;
+            }
+            """
+        )
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+
+        status_row.addWidget(self._build_health_status_indicator())
+        status_row.addWidget(self._build_license_status_indicator())
+
+        layout.addWidget(title)
+        layout.addLayout(status_row)
+
+        return panel
+
+    def _build_health_status_indicator(self) -> QLabel:
+        raw_status = str(getattr(self.dashboard_data, "health_status", "") or "").strip().upper()
+
+        if raw_status == "OK":
+            return self._build_compact_status_label(
+                text="Sistem OK",
+                level="ok",
+                tooltip="Sistem sağlığı: OK",
+            )
+
+        if raw_status == "WARN":
+            return self._build_compact_status_label(
+                text="Sistem Uyarı",
+                level="warn",
+                tooltip="Sistem sağlığı: WARN",
+            )
+
+        if raw_status == "FAIL":
+            return self._build_compact_status_label(
+                text="Sistem Hata",
+                level="fail",
+                tooltip="Sistem sağlığı: FAIL",
+            )
+
+        return self._build_compact_status_label(
+            text="Sistem ?",
+            level="warn",
+            tooltip=f"Sistem sağlığı okunamadı: {raw_status or '-'}",
+        )
+
+    def _build_license_status_indicator(self) -> QLabel:
+        try:
+            license_result = check_license()
+
+            badge_text = self._license_badge_text(
+                status=license_result.status,
+                days_remaining=license_result.days_remaining,
+            )
+            compact_text = badge_text.replace("Lisans: ", "").strip()
+
+            tooltip_text = (
+                f"{license_result.status_label}\n"
+                f"{license_result.message}\n\n"
+                f"Firma: {license_result.company_name or '-'}\n"
+                f"Cihaz Kodu: {license_result.device_code}\n"
+                f"Bitiş: {license_result.expires_at or '-'}\n"
+                f"Lisans Dosyası: {license_result.license_file}"
+            )
+
+            return self._build_compact_status_label(
+                text=f"Lisans {compact_text}",
+                level=self._license_status_level(license_result.status),
+                tooltip=tooltip_text,
+            )
+
+        except Exception as exc:
+            return self._build_compact_status_label(
+                text="Lisans Hata",
+                level="fail",
+                tooltip=f"Lisans durumu okunamadı: {exc}",
+            )
+
+    def _build_compact_status_label(
+        self,
+        *,
+        text: str,
+        level: str,
+        tooltip: str,
+    ) -> QLabel:
+        label = QLabel(f"● {text}")
+        label.setMinimumHeight(24)
+        label.setAlignment(Qt.AlignCenter)
+        label.setToolTip(tooltip)
+
+        if level == "ok":
+            label.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #052e2b;
+                    color: #bbf7d0;
+                    border: 1px solid #0f766e;
+                    border-radius: 10px;
+                    padding: 4px 7px;
+                    font-size: 10px;
+                    font-weight: 800;
+                }
+                """
+            )
+            return label
+
+        if level == "warn":
+            label.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #422006;
+                    color: #fde68a;
+                    border: 1px solid #a16207;
+                    border-radius: 10px;
+                    padding: 4px 7px;
+                    font-size: 10px;
+                    font-weight: 800;
+                }
+                """
+            )
+            return label
+
+        label.setStyleSheet(
+            """
+            QLabel {
+                background-color: #3f1d1d;
+                color: #fecaca;
+                border: 1px solid #991b1b;
+                border-radius: 10px;
+                padding: 4px 7px;
+                font-size: 10px;
+                font-weight: 800;
+            }
+            """
+        )
+
+        return label
 
     def update_selected_nav_button(self) -> None:
         for page_title, button in self.nav_buttons.items():
@@ -509,80 +665,85 @@ class FtmDesktopWindow(QMainWindow):
 
     def _build_top_bar(self) -> QWidget:
         top_bar = QFrame()
-        top_bar.setObjectName("TopBar")
-        top_bar.setMinimumHeight(105)
+        top_bar.setObjectName("CompactTopBar")
+        top_bar.setMinimumHeight(64)
+        top_bar.setMaximumHeight(76)
+        top_bar.setStyleSheet(
+            """
+            QFrame#CompactTopBar {
+                background-color: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 14px;
+            }
+            """
+        )
 
         layout = QHBoxLayout(top_bar)
-        layout.setContentsMargins(24, 18, 24, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 10, 18, 10)
+        layout.setSpacing(10)
 
         title_box = QVBoxLayout()
-        title_box.setSpacing(4)
+        title_box.setSpacing(1)
 
         title = QLabel(self.current_page)
-        title.setObjectName("PageTitle")
+        title.setStyleSheet(
+            """
+            QLabel {
+                color: #f8fafc;
+                font-size: 20px;
+                font-weight: 900;
+            }
+            """
+        )
 
         subtitle = QLabel(self._page_subtitle())
-        subtitle.setObjectName("PageSubtitle")
+        subtitle.setStyleSheet(
+            """
+            QLabel {
+                color: #94a3b8;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            """
+        )
 
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
 
-        user_badge = create_user_badge(
-            username=self.current_username,
-            role=self.current_role,
-        )
-
-        health_badge = create_health_badge(
-            status=self.dashboard_data.health_status,
-        )
-
-        license_badge = self._build_license_badge()
-
-        refresh_button = QPushButton("Verileri Yenile")
-        refresh_button.setObjectName("RefreshButton")
-        refresh_button.setFixedWidth(150)
+        refresh_button = QPushButton("Yenile")
+        refresh_button.setCursor(Qt.PointingHandCursor)
+        refresh_button.setFixedWidth(92)
+        refresh_button.setMinimumHeight(34)
         refresh_button.clicked.connect(self.refresh_dashboard)
+        refresh_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #1e293b;
+                color: #dbeafe;
+                border: 1px solid #334155;
+                border-radius: 11px;
+                padding: 7px 12px;
+                font-size: 12px;
+                font-weight: 800;
+                text-align: center;
+            }
+
+            QPushButton:hover {
+                background-color: #2563eb;
+                color: #ffffff;
+                border: 1px solid #3b82f6;
+            }
+
+            QPushButton:pressed {
+                background-color: #1d4ed8;
+            }
+            """
+        )
 
         layout.addLayout(title_box, 1)
-        layout.addWidget(user_badge)
-        layout.addWidget(health_badge)
-        layout.addWidget(license_badge)
-        layout.addWidget(refresh_button)
+        layout.addWidget(refresh_button, 0, Qt.AlignVCenter)
 
         return top_bar
-
-    def _build_license_badge(self) -> QLabel:
-        try:
-            license_result = check_license()
-
-            badge_text = self._license_badge_text(
-                status=license_result.status,
-                days_remaining=license_result.days_remaining,
-            )
-            tooltip_text = (
-                f"{license_result.status_label}\n"
-                f"{license_result.message}\n\n"
-                f"Firma: {license_result.company_name or '-'}\n"
-                f"Cihaz Kodu: {license_result.device_code}\n"
-                f"Bitiş: {license_result.expires_at or '-'}\n"
-                f"Lisans Dosyası: {license_result.license_file}"
-            )
-            style_text = self._license_badge_style(license_result.status)
-
-        except Exception as exc:
-            badge_text = "Lisans: Kontrol Hatası"
-            tooltip_text = f"Lisans durumu okunamadı: {exc}"
-            style_text = self._license_badge_style("error")
-
-        badge = QLabel(badge_text)
-        badge.setMinimumHeight(42)
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setToolTip(tooltip_text)
-        badge.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        badge.setStyleSheet(style_text)
-
-        return badge
 
     def _license_badge_text(
         self,
@@ -619,44 +780,17 @@ class FtmDesktopWindow(QMainWindow):
 
         return "Lisans: Kontrol Et"
 
-    def _license_badge_style(self, status: str) -> str:
+    def _license_status_level(self, status: str) -> str:
         if status == LICENSE_STATUS_ACTIVE:
-            return """
-                QLabel {
-                    background-color: #064e3b;
-                    color: #bbf7d0;
-                    border: 1px solid #22c55e;
-                    border-radius: 14px;
-                    padding: 9px 14px;
-                    font-size: 12px;
-                    font-weight: 900;
-                }
-            """
+            return "ok"
 
         if status == LICENSE_STATUS_EXPIRING_SOON:
-            return """
-                QLabel {
-                    background-color: #78350f;
-                    color: #fde68a;
-                    border: 1px solid #f59e0b;
-                    border-radius: 14px;
-                    padding: 9px 14px;
-                    font-size: 12px;
-                    font-weight: 900;
-                }
-            """
+            return "warn"
 
-        return """
-            QLabel {
-                background-color: #7f1d1d;
-                color: #fecaca;
-                border: 1px solid #f87171;
-                border-radius: 14px;
-                padding: 9px 14px;
-                font-size: 12px;
-                font-weight: 900;
-            }
-        """
+        if status == LICENSE_STATUS_FUTURE:
+            return "warn"
+
+        return "fail"
 
     def _page_subtitle(self) -> str:
         return PAGE_SUBTITLES.get(
