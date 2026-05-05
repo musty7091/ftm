@@ -379,15 +379,35 @@ def _check_users(session: Session, items: list[HealthCheckItem]) -> None:
                     "OK",
                     f"Aktif {role.value} kullanıcı sayısı: {count}",
                 )
-            else:
-                status = "FAIL" if role == UserRole.ADMIN else "WARN"
+                continue
 
+            if role == UserRole.ADMIN:
                 _add_item(
                     items,
                     label,
-                    status,
-                    f"Aktif {role.value} kullanıcı bulunamadı.",
+                    "FAIL",
+                    "Aktif ADMIN kullanıcı bulunamadı. En az bir aktif ADMIN kullanıcı zorunludur.",
                 )
+                continue
+
+            if role == UserRole.FINANCE:
+                _add_item(
+                    items,
+                    label,
+                    "WARN",
+                    "Aktif FINANCE kullanıcı bulunamadı. Finans işlemleri için en az bir FINANCE kullanıcı önerilir.",
+                )
+                continue
+
+            _add_item(
+                items,
+                label,
+                "OK",
+                (
+                    f"Aktif {role.value} kullanıcı bulunamadı. "
+                    "Bu rol opsiyoneldir; ihtiyaç olduğunda kullanıcı oluşturulabilir."
+                ),
+            )
 
         except Exception as exc:
             _add_item(
@@ -606,8 +626,8 @@ def _check_audit_logs(session: Session, items: list[HealthCheckItem]) -> None:
             _add_item(
                 items,
                 "PERMISSION_DENIED kayıtları",
-                "WARN",
-                "Henüz PERMISSION_DENIED kaydı yok.",
+                "OK",
+                "Henüz PERMISSION_DENIED kaydı yok. Bu normaldir; yetkisiz işlem denemesi kaydedilmemiş.",
             )
 
     except Exception as exc:
