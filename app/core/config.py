@@ -239,9 +239,6 @@ class Settings:
     mail_from: str
     mail_to: str
 
-    @property
-    def is_postgresql(self) -> bool:
-        return False
 
     @property
     def is_sqlite(self) -> bool:
