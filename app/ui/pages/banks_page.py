@@ -89,7 +89,7 @@ class BanksPage(QWidget):
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(16)
+        self.main_layout.setSpacing(12)
 
         self._render_page()
 
@@ -102,7 +102,7 @@ class BanksPage(QWidget):
 
         self.main_layout.addLayout(self._build_summary_cards())
         self.main_layout.addWidget(self._build_accounts_table_card(), 1)
-        self.main_layout.addLayout(self._build_action_area())
+        self.main_layout.addLayout(self._build_action_area(), 0)
 
     def _reload_page_data(self) -> None:
         self.data = load_banks_page_data()
@@ -113,7 +113,7 @@ class BanksPage(QWidget):
         card.setObjectName("CardRisk")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
 
         title = QLabel("Banka verileri okunamadı")
@@ -146,17 +146,12 @@ class BanksPage(QWidget):
 
     def _build_summary_cards(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(12)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 1)
 
         grid.addWidget(
-            SummaryCard(
-                "AKTİF BANKA BAKİYELERİ",
-                self._build_active_currency_totals_text(),
-                "Aktif banka hesaplarının para birimi bazlı güncel toplamı",
-                "highlight",
-            ),
+            self._build_active_bank_balances_card(),
             0,
             0,
         )
@@ -168,23 +163,79 @@ class BanksPage(QWidget):
         )
 
         return grid
+    
+    def _build_active_bank_balances_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("CardHighlight")
+        card.setMinimumHeight(112)
+        card.setMaximumHeight(132)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(6)
+
+        title = QLabel("AKTİF BANKA BAKİYELERİ")
+        title.setObjectName("CardTitle")
+
+        balances_grid = QGridLayout()
+        balances_grid.setHorizontalSpacing(18)
+        balances_grid.setVerticalSpacing(4)
+        balances_grid.setColumnStretch(0, 1)
+        balances_grid.setColumnStretch(1, 1)
+
+        if not self.data.active_currency_totals:
+            empty_label = QLabel("Kayıt yok")
+            empty_label.setObjectName("CardValue")
+            balances_grid.addWidget(empty_label, 0, 0, 1, 2)
+
+        else:
+            sorted_currency_codes = sorted(
+                self.data.active_currency_totals.keys(),
+                key=_currency_sort_key,
+            )
+
+            for index, currency_code in enumerate(sorted_currency_codes):
+                row_index = index // 2
+                column_index = index % 2
+
+                amount_text = _format_currency_amount(
+                    self.data.active_currency_totals[currency_code],
+                    currency_code,
+                )
+
+                value_label = QLabel(f"{currency_code}: {amount_text}")
+                value_label.setObjectName("CardValue")
+                value_label.setWordWrap(False)
+                value_label.setToolTip(f"{currency_code}: {amount_text}")
+
+                balances_grid.addWidget(value_label, row_index, column_index)
+
+        hint = QLabel("Aktif banka hesaplarının para birimi bazlı güncel toplamı")
+        hint.setObjectName("CardHint")
+        hint.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addLayout(balances_grid)
+        layout.addWidget(hint)
+
+        return card
 
     def _build_account_status_card(self) -> QWidget:
         total_accounts = len(self.data.bank_accounts)
 
         card = QFrame()
         card.setObjectName("Card")
-        card.setMinimumHeight(145)
+        card.setMinimumHeight(112)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(6)
 
         title = QLabel("HESAP DURUMU")
         title.setObjectName("CardTitle")
 
         metrics_layout = QGridLayout()
-        metrics_layout.setSpacing(12)
+        metrics_layout.setSpacing(10)
         metrics_layout.setColumnStretch(0, 1)
         metrics_layout.setColumnStretch(1, 1)
         metrics_layout.setColumnStretch(2, 1)
@@ -219,12 +270,11 @@ class BanksPage(QWidget):
             2,
         )
 
-        hint = QLabel("Aktif, pasif ve toplam banka hesabı özeti.")
+        hint = QLabel("Banka hesabı durum özeti.")
         hint.setObjectName("CardHint")
         hint.setWordWrap(True)
 
         layout.addWidget(title)
-        layout.addStretch(1)
         layout.addLayout(metrics_layout)
         layout.addWidget(hint)
 
@@ -235,7 +285,7 @@ class BanksPage(QWidget):
 
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout.setSpacing(1)
 
         title = QLabel(title_text)
         title.setObjectName("CardTitle")
@@ -258,19 +308,20 @@ class BanksPage(QWidget):
     def _build_accounts_table_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
+        card.setMinimumHeight(260)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         title = QLabel("Banka Hesapları")
         title.setObjectName("SectionTitle")
 
         subtitle = QLabel(
-            "Banka hesaplarının açılış, giriş, çıkış ve güncel bakiye görünümü. "
-            "Her hesap kendi para birimiyle gösterilir."
+            "Aktif ve pasif banka hesaplarının para birimi, giriş, çıkış ve güncel bakiye görünümü."
         )
         subtitle.setObjectName("MutedText")
+        subtitle.setWordWrap(True)
 
         table = QTableWidget()
         table.setColumnCount(9)
@@ -292,8 +343,23 @@ class BanksPage(QWidget):
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMinimumHeight(230)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table.setMinimumHeight(170)
+
+        table.setColumnHidden(0, True)
+        table.setColumnHidden(1, True)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
 
         self._fill_accounts_table(table)
 
@@ -302,6 +368,22 @@ class BanksPage(QWidget):
         layout.addWidget(table, 1)
 
         return card
+
+    def _accounts_table_height(self) -> int:
+        row_count = len(self.data.bank_accounts)
+
+        if row_count <= 0:
+            return 135
+
+        calculated_height = 78 + (row_count * 38)
+
+        if calculated_height < 145:
+            return 145
+
+        if calculated_height > 315:
+            return 315
+
+        return calculated_height
 
     def _fill_accounts_table(self, table: QTableWidget) -> None:
         table.setRowCount(len(self.data.bank_accounts))
@@ -336,6 +418,20 @@ class BanksPage(QWidget):
                     font = QFont()
                     font.setBold(True)
                     item.setFont(font)
+
+                item.setToolTip(
+                    "\n".join(
+                        [
+                            f"Banka ID: {account.bank_id}",
+                            f"Hesap ID: {account.bank_account_id}",
+                            f"Banka: {account.bank_name}",
+                            f"Hesap: {account.account_name}",
+                            f"Para Birimi: {account.currency_code}",
+                            f"Güncel: {self._format_money(account.current_balance, account.currency_code)}",
+                            f"Durum: {'Aktif' if account.is_active else 'Pasif'}",
+                        ]
+                    )
+                )
 
                 table.setItem(row_index, column_index, item)
 
@@ -400,7 +496,9 @@ class BanksPage(QWidget):
 
     def _build_action_area(self) -> QGridLayout:
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(12)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         grid.addWidget(self._build_operation_card(), 0, 0)
 
@@ -416,15 +514,14 @@ class BanksPage(QWidget):
         card.setObjectName("Card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(9)
 
-        title = QLabel("Operasyon Alanı")
+        title = QLabel("Günlük Banka İşlemleri")
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Banka hareketi, banka transferi ve iptal işlemleri bu alandan yapılır. "
-            "Butonlar rol adına göre değil, role_permissions tablosundaki gerçek yetkilere göre açılır."
+            "Banka hareketi, transfer ve iptal işlemlerini bu alandan yönetebilirsin."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -447,7 +544,7 @@ class BanksPage(QWidget):
             tooltip_when_denied="Banka transferi oluşturma yetkin yok.",
         )
 
-        cancel_button = QPushButton("İptal İşlemleri")
+        cancel_button = QPushButton("Hareket / Transfer İptali")
         cancel_button.clicked.connect(self._open_cancel_bank_operation_dialog)
         apply_any_permission_to_button(
             cancel_button,
@@ -461,7 +558,7 @@ class BanksPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(6)
+        layout.addSpacing(4)
         layout.addWidget(add_transaction_button)
         layout.addWidget(transfer_button)
         layout.addWidget(cancel_button)
@@ -473,15 +570,14 @@ class BanksPage(QWidget):
         card.setObjectName("CardHighlight")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(9)
 
-        title = QLabel("Banka Tanım Yönetimi")
+        title = QLabel("Banka ve Hesap Tanımları")
         title.setObjectName("SectionTitle")
 
         description = QLabel(
-            "Banka ve banka hesabı tanımları bu alandan yönetilir. "
-            "Butonlar artık sadece ADMIN rolüne değil, gerçek yetki tablosuna göre açılır."
+            "Banka ve banka hesabı tanımlarını bu alandan ekleyebilir veya güncelleyebilirsin."
         )
         description.setObjectName("MutedText")
         description.setWordWrap(True)
@@ -530,7 +626,7 @@ class BanksPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addSpacing(6)
+        layout.addSpacing(4)
         layout.addWidget(add_bank_button)
         layout.addWidget(add_account_button)
         layout.addWidget(edit_bank_button)
@@ -1029,7 +1125,7 @@ class BanksPage(QWidget):
                     )
 
                 else:
-                    raise ValueError("Geçersiz düzenleme işlem türü.")
+                    raise ValueError("Geçersiz düzenleme türü.")
 
             self._reload_page_data()
 
@@ -1042,14 +1138,14 @@ class BanksPage(QWidget):
         except BankDefinitionServiceError as exc:
             QMessageBox.warning(
                 self,
-                "Tanım güncellenemedi",
+                "Güncelleme yapılamadı",
                 str(exc),
             )
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Beklenmeyen hata",
-                f"Tanım güncellenirken beklenmeyen bir hata oluştu:\n{exc}",
+                f"Güncelleme sırasında beklenmeyen bir hata oluştu:\n{exc}",
             )
 
     def _open_deactivate_bank_account_dialog(self) -> None:
@@ -1058,7 +1154,7 @@ class BanksPage(QWidget):
                 Permission.BANK_ACCOUNT_DEACTIVATE,
                 Permission.BANK_ACCOUNT_REACTIVATE,
             ),
-            "Banka hesabı pasifleştirme veya aktifleştirme için ilgili yetki gerekir.",
+            "Banka hesabı pasifleştirmek veya aktifleştirmek için gerekli yetkin yok.",
         ):
             return
 
@@ -1068,7 +1164,6 @@ class BanksPage(QWidget):
             return
 
         payload = dialog.get_payload()
-
         operation_type = payload["operation_type"]
         bank_account_id = payload["bank_account_id"]
         reason = payload["reason"]
@@ -1090,10 +1185,9 @@ class BanksPage(QWidget):
                         acting_user=self.current_user,
                     )
 
-                    changed_bank_account_id = bank_account.id
-                    success_title = "Banka hesabı pasifleştirildi"
-                    success_message = (
-                        f"Banka hesabı başarıyla pasifleştirildi. Hesap ID: {changed_bank_account_id}"
+                    result_title = "Banka hesabı pasifleştirildi"
+                    result_message = (
+                        f"Banka hesabı başarıyla pasifleştirildi. Hesap ID: {bank_account.id}"
                     )
 
                 elif operation_type == "REACTIVATE":
@@ -1111,32 +1205,31 @@ class BanksPage(QWidget):
                         acting_user=self.current_user,
                     )
 
-                    changed_bank_account_id = bank_account.id
-                    success_title = "Banka hesabı aktifleştirildi"
-                    success_message = (
-                        f"Banka hesabı başarıyla aktifleştirildi. Hesap ID: {changed_bank_account_id}"
+                    result_title = "Banka hesabı aktifleştirildi"
+                    result_message = (
+                        f"Banka hesabı başarıyla aktifleştirildi. Hesap ID: {bank_account.id}"
                     )
 
                 else:
-                    raise ValueError("Geçersiz hesap durum işlemi.")
+                    raise ValueError("Geçersiz hesap işlem türü.")
 
             self._reload_page_data()
 
             QMessageBox.information(
                 self,
-                success_title,
-                success_message,
+                result_title,
+                result_message,
             )
 
         except BankDefinitionServiceError as exc:
             QMessageBox.warning(
                 self,
-                "Banka hesabı durumu değiştirilemedi",
+                "Hesap durumu değiştirilemedi",
                 str(exc),
             )
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Beklenmeyen hata",
-                f"Banka hesabı durumu değiştirilirken beklenmeyen bir hata oluştu:\n{exc}",
+                f"Hesap durumu değiştirilirken beklenmeyen bir hata oluştu:\n{exc}",
             )
