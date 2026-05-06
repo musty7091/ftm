@@ -1,7 +1,4 @@
-﻿import re
-from datetime import date
-from decimal import Decimal, InvalidOperation
-from typing import Any
+﻿from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -48,10 +45,13 @@ except ImportError:
     endorse_received_check = None
 
 from app.ui.pages.checks.checks_data import (
+    DEFAULT_CHECK_TABLE_PAGE_SIZE,
     build_currency_totals_text,
     format_currency_amount,
     issued_status_text,
     load_checks_page_data,
+    load_issued_checks_table_data,
+    load_received_checks_table_data,
     received_status_text as base_received_status_text,
 )
 from app.ui.pages.checks.issued_check_create_dialog import IssuedCheckCreateDialog
@@ -83,7 +83,7 @@ from app.ui.permission_ui import (
 from app.ui.ui_helpers import clear_layout, tr_number
 
 
-CHECK_LIST_PAGE_SIZE = 25
+CHECK_LIST_PAGE_SIZE = DEFAULT_CHECK_TABLE_PAGE_SIZE
 
 
 ISSUED_OPEN_STATUSES = {
@@ -127,7 +127,7 @@ FILTER_OPTIONS = [
 ]
 
 
-ISSUED_SORT_COLUMNS = {
+ISSUED_TABLE_SORT_COLUMNS = {
     0: ("id", "ID"),
     1: ("supplier_name", "Tedarikçi"),
     2: ("bank_account", "Banka / Hesap"),
@@ -140,7 +140,7 @@ ISSUED_SORT_COLUMNS = {
 }
 
 
-RECEIVED_SORT_COLUMNS = {
+RECEIVED_TABLE_SORT_COLUMNS = {
     0: ("id", "ID"),
     1: ("customer_name", "Müşteri"),
     2: ("drawer_bank_name", "Keşideci Banka"),
@@ -171,28 +171,6 @@ SORT_DEFAULT_DIRECTIONS = {
 }
 
 
-ISSUED_STATUS_SORT_ORDER = {
-    "RISK": 0,
-    "PREPARED": 1,
-    "GIVEN": 2,
-    "PAID": 3,
-    "CANCELLED": 4,
-}
-
-
-RECEIVED_STATUS_SORT_ORDER = {
-    "BOUNCED": 0,
-    "PORTFOLIO": 1,
-    "GIVEN_TO_BANK": 2,
-    "IN_COLLECTION": 3,
-    "COLLECTED": 4,
-    "DISCOUNTED": 5,
-    "ENDORSED": 6,
-    "RETURNED": 7,
-    "CANCELLED": 8,
-}
-
-
 def _role_text(role: Any) -> str:
     if hasattr(role, "value"):
         return str(role.value)
@@ -204,88 +182,8 @@ def _normalize_search_text(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _natural_sort_key(value: Any) -> tuple[tuple[int, Any], ...]:
-    cleaned_text = str(value or "").strip().casefold()
-
-    if not cleaned_text:
-        return ((1, ""),)
-
-    parts: list[tuple[int, Any]] = []
-
-    for part in re.split(r"(\d+)", cleaned_text):
-        if not part:
-            continue
-
-        if part.isdigit():
-            parts.append((0, int(part)))
-        else:
-            parts.append((1, part))
-
-    return tuple(parts) if parts else ((1, ""),)
-
-
-def _decimal_sort_key(value: Any) -> Decimal:
-    if isinstance(value, Decimal):
-        return value
-
-    cleaned_text = str(value or "0").strip()
-
-    if not cleaned_text:
-        return Decimal("0")
-
-    cleaned_text = (
-        cleaned_text
-        .replace("TL", "")
-        .replace("USD", "")
-        .replace("EUR", "")
-        .replace("GBP", "")
-        .replace("₺", "")
-        .replace("$", "")
-        .replace("€", "")
-        .replace("£", "")
-        .strip()
-    )
-
-    if "," in cleaned_text:
-        cleaned_text = cleaned_text.replace(".", "").replace(",", ".")
-
-    try:
-        return Decimal(cleaned_text)
-    except (InvalidOperation, ValueError):
-        return Decimal("0")
-
-
-def _date_sort_key(value: Any, fallback_text: Any = None) -> int:
-    if isinstance(value, date):
-        return value.toordinal()
-
-    if hasattr(value, "toPython"):
-        python_date = value.toPython()
-
-        if isinstance(python_date, date):
-            return python_date.toordinal()
-
-    for candidate in (value, fallback_text):
-        cleaned_text = str(candidate or "").strip()
-
-        if not cleaned_text:
-            continue
-
-        for date_format in ("%d.%m.%Y", "%Y-%m-%d"):
-            try:
-                return date.fromisoformat(cleaned_text).toordinal() if date_format == "%Y-%m-%d" else date(
-                    int(cleaned_text[6:10]),
-                    int(cleaned_text[3:5]),
-                    int(cleaned_text[0:2]),
-                ).toordinal()
-            except Exception:
-                continue
-
-    return date.max.toordinal()
-
-
 def _sort_direction_symbol(sort_direction: str) -> str:
-    return "↓" if str(sort_direction or "").upper() == "DESC" else "↑"
+    return "↓" if str(sort_direction or "").strip().upper() == "DESC" else "↑"
 
 
 def received_status_text(status: str) -> str:
@@ -929,184 +827,6 @@ class ChecksPage(QWidget):
 
         return normalized_search_text in _normalize_search_text(searchable_text)
 
-
-    def _issued_sort_value(self, issued_check: Any, sort_key: str) -> Any:
-        normalized_sort_key = str(sort_key or "due_date").strip().lower()
-
-        if normalized_sort_key == "id":
-            return int(getattr(issued_check, "issued_check_id", 0) or 0)
-
-        if normalized_sort_key == "supplier_name":
-            return _natural_sort_key(getattr(issued_check, "supplier_name", ""))
-
-        if normalized_sort_key == "bank_account":
-            return _natural_sort_key(
-                f"{getattr(issued_check, 'bank_name', '')} / {getattr(issued_check, 'bank_account_name', '')}"
-            )
-
-        if normalized_sort_key == "check_number":
-            return _natural_sort_key(getattr(issued_check, "check_number", ""))
-
-        if normalized_sort_key == "issue_date":
-            return _date_sort_key(
-                getattr(issued_check, "issue_date", None),
-                getattr(issued_check, "issue_date_text", ""),
-            )
-
-        if normalized_sort_key == "due_date":
-            return _date_sort_key(
-                getattr(issued_check, "due_date", None),
-                getattr(issued_check, "due_date_text", ""),
-            )
-
-        if normalized_sort_key == "amount":
-            return _decimal_sort_key(getattr(issued_check, "amount", "0"))
-
-        if normalized_sort_key == "status":
-            normalized_status = str(getattr(issued_check, "status", "") or "").strip().upper()
-            return (
-                ISSUED_STATUS_SORT_ORDER.get(normalized_status, 999),
-                _natural_sort_key(issued_status_text(normalized_status)),
-            )
-
-        if normalized_sort_key == "reference_no":
-            return _natural_sort_key(getattr(issued_check, "reference_no", ""))
-
-        return _natural_sort_key("")
-
-    def _received_sort_value(self, received_check: Any, sort_key: str) -> Any:
-        normalized_sort_key = str(sort_key or "due_date").strip().lower()
-
-        if normalized_sort_key == "id":
-            return int(getattr(received_check, "received_check_id", 0) or 0)
-
-        if normalized_sort_key == "customer_name":
-            return _natural_sort_key(getattr(received_check, "customer_name", ""))
-
-        if normalized_sort_key == "drawer_bank_name":
-            return _natural_sort_key(getattr(received_check, "drawer_bank_name", ""))
-
-        if normalized_sort_key == "collection_account":
-            collection_text = (
-                f"{getattr(received_check, 'collection_bank_name', '')} / {getattr(received_check, 'collection_bank_account_name', '')}"
-                if getattr(received_check, "collection_bank_name", None)
-                and getattr(received_check, "collection_bank_account_name", None)
-                else ""
-            )
-            return _natural_sort_key(collection_text)
-
-        if normalized_sort_key == "check_number":
-            return _natural_sort_key(getattr(received_check, "check_number", ""))
-
-        if normalized_sort_key == "received_date":
-            return _date_sort_key(
-                getattr(received_check, "received_date", None),
-                getattr(received_check, "received_date_text", ""),
-            )
-
-        if normalized_sort_key == "due_date":
-            return _date_sort_key(
-                getattr(received_check, "due_date", None),
-                getattr(received_check, "due_date_text", ""),
-            )
-
-        if normalized_sort_key == "amount":
-            return _decimal_sort_key(getattr(received_check, "amount", "0"))
-
-        if normalized_sort_key == "status":
-            normalized_status = str(getattr(received_check, "status", "") or "").strip().upper()
-            return (
-                RECEIVED_STATUS_SORT_ORDER.get(normalized_status, 999),
-                _natural_sort_key(received_status_text(normalized_status)),
-            )
-
-        if normalized_sort_key == "reference_no":
-            return _natural_sort_key(getattr(received_check, "reference_no", ""))
-
-        return _natural_sort_key("")
-
-    def _sort_issued_rows(
-        self,
-        rows: list[Any],
-        *,
-        sort_key: str,
-        sort_direction: str,
-    ) -> list[Any]:
-        reverse_sort = str(sort_direction or "ASC").strip().upper() == "DESC"
-
-        return sorted(
-            rows,
-            key=lambda issued_check: self._issued_sort_value(issued_check, sort_key),
-            reverse=reverse_sort,
-        )
-
-    def _sort_received_rows(
-        self,
-        rows: list[Any],
-        *,
-        sort_key: str,
-        sort_direction: str,
-    ) -> list[Any]:
-        reverse_sort = str(sort_direction or "ASC").strip().upper() == "DESC"
-
-        return sorted(
-            rows,
-            key=lambda received_check: self._received_sort_value(received_check, sort_key),
-            reverse=reverse_sort,
-        )
-
-    def _sort_label(
-        self,
-        *,
-        sort_columns: dict[int, tuple[str, str]],
-        sort_key: str,
-        sort_direction: str,
-    ) -> str:
-        normalized_sort_key = str(sort_key or "").strip()
-
-        for column_key, column_label in sort_columns.values():
-            if column_key == normalized_sort_key:
-                return f"{column_label} {_sort_direction_symbol(sort_direction)}"
-
-        return f"Vade {_sort_direction_symbol(sort_direction)}"
-
-    def _sort_column_index(
-        self,
-        *,
-        sort_columns: dict[int, tuple[str, str]],
-        sort_key: str,
-    ) -> int:
-        normalized_sort_key = str(sort_key or "").strip()
-
-        for column_index, (column_key, _column_label) in sort_columns.items():
-            if column_key == normalized_sort_key:
-                return column_index
-
-        return 0
-
-    def _apply_sort_indicator(
-        self,
-        *,
-        table: QTableWidget,
-        sort_columns: dict[int, tuple[str, str]],
-        sort_key: str,
-        sort_direction: str,
-    ) -> None:
-        sort_column_index = self._sort_column_index(
-            sort_columns=sort_columns,
-            sort_key=sort_key,
-        )
-        sort_order = (
-            Qt.DescendingOrder
-            if str(sort_direction or "ASC").strip().upper() == "DESC"
-            else Qt.AscendingOrder
-        )
-
-        table.horizontalHeader().setSortIndicator(
-            sort_column_index,
-            sort_order,
-        )
-
     def _style_filter_buttons(self, buttons: dict[str, QPushButton], active_key: str) -> None:
         normalized_active_key = str(active_key or "OPEN").strip().upper()
 
@@ -1291,62 +1011,61 @@ class ChecksPage(QWidget):
             "page_index": 0,
             "sort_key": "due_date",
             "sort_direction": "ASC",
+            "sort_column_index": 5,
+            "sort_label": "Vade",
         }
 
         def refresh_table() -> None:
             filter_key = str(state["filter_key"])
             page_index = int(state["page_index"])
             search_text = search_input.text().strip()
+            sort_key = str(state["sort_key"])
+            sort_direction = str(state["sort_direction"])
+            sort_column_index = int(state["sort_column_index"])
 
-            filtered_by_status_rows = self._filter_issued_rows(rows, filter_key)
-            filtered_rows = [
-                issued_check
-                for issued_check in filtered_by_status_rows
-                if self._issued_row_matches_search(issued_check, search_text)
-            ]
-
-            filtered_rows = self._sort_issued_rows(
-                filtered_rows,
-                sort_key=str(state["sort_key"]),
-                sort_direction=str(state["sort_direction"]),
+            table_data = load_issued_checks_table_data(
+                search_text=search_text,
+                filter_key=filter_key,
+                sort_key=sort_key,
+                sort_direction=sort_direction,
+                page_index=page_index,
+                page_size=CHECK_LIST_PAGE_SIZE,
             )
 
-            total_count = len(filtered_rows)
-            max_page_index = max(0, (total_count - 1) // CHECK_LIST_PAGE_SIZE)
+            if table_data.error_message:
+                self._fill_issued_checks_table(table, [])
+                previous_button.setEnabled(False)
+                next_button.setEnabled(False)
+                result_label.setText(f"Çek listesi okunamadı: {table_data.error_message}")
+                return
 
-            if page_index > max_page_index:
-                page_index = max_page_index
-                state["page_index"] = page_index
-
-            start_index = page_index * CHECK_LIST_PAGE_SIZE
-            end_index = min(start_index + CHECK_LIST_PAGE_SIZE, total_count)
-            visible_rows = filtered_rows[start_index:end_index]
-
-            self._fill_issued_checks_table(table, visible_rows)
+            state["page_index"] = table_data.page_index
+            self._fill_issued_checks_table(table, table_data.rows)
             self._style_filter_buttons(filter_buttons, filter_key)
 
-            previous_button.setEnabled(page_index > 0)
-            next_button.setEnabled(end_index < total_count)
+            table.horizontalHeader().setSortIndicator(
+                sort_column_index,
+                Qt.DescendingOrder if sort_direction == "DESC" else Qt.AscendingOrder,
+            )
 
-            if total_count == 0:
+            previous_button.setEnabled(table_data.page_index > 0)
+            next_button.setEnabled(table_data.page_index + 1 < table_data.total_pages)
+
+            if table_data.total_count == 0:
                 result_label.setText(
                     f"{self._filter_label(filter_key)}: filtreye uygun kayıt bulunamadı. "
-                    f"Toplam kayıt: {len(rows)} | "
-                    f"Sıralama: {self._sort_label(sort_columns=ISSUED_SORT_COLUMNS, sort_key=str(state['sort_key']), sort_direction=str(state['sort_direction']))}"
+                    f"Sıralama: {state['sort_label']} {_sort_direction_symbol(sort_direction)}"
                 )
             else:
+                start_index = table_data.page_index * table_data.page_size + 1
+                end_index = start_index + len(table_data.rows) - 1
                 result_label.setText(
-                    f"{self._filter_label(filter_key)}: {start_index + 1}-{end_index} / "
-                    f"{total_count} kayıt gösteriliyor. Toplam kayıt: {len(rows)} | "
-                    f"Sıralama: {self._sort_label(sort_columns=ISSUED_SORT_COLUMNS, sort_key=str(state['sort_key']), sort_direction=str(state['sort_direction']))}"
+                    f"{self._filter_label(filter_key)}: {start_index}-{end_index} / "
+                    f"{table_data.total_count} kayıt gösteriliyor. "
+                    f"Sayfa: {table_data.page_index + 1}/{table_data.total_pages}. "
+                    f"Toplam: {build_currency_totals_text(table_data.currency_totals)} | "
+                    f"Sıralama: {state['sort_label']} {_sort_direction_symbol(sort_direction)}"
                 )
-
-            self._apply_sort_indicator(
-                table=table,
-                sort_columns=ISSUED_SORT_COLUMNS,
-                sort_key=str(state["sort_key"]),
-                sort_direction=str(state["sort_direction"]),
-            )
 
         def change_filter(filter_key: str) -> None:
             state["filter_key"] = filter_key
@@ -1366,28 +1085,21 @@ class ChecksPage(QWidget):
             refresh_table()
 
         def change_sort(column_index: int) -> None:
-            if column_index not in ISSUED_SORT_COLUMNS:
+            if column_index not in ISSUED_TABLE_SORT_COLUMNS:
                 return
 
-            selected_sort_key = ISSUED_SORT_COLUMNS[column_index][0]
+            sort_key, sort_label = ISSUED_TABLE_SORT_COLUMNS[column_index]
 
-            if state["sort_key"] == selected_sort_key:
-                state["sort_direction"] = (
-                    "DESC"
-                    if str(state["sort_direction"]).upper() == "ASC"
-                    else "ASC"
-                )
+            if state["sort_key"] == sort_key:
+                state["sort_direction"] = "DESC" if state["sort_direction"] == "ASC" else "ASC"
             else:
-                state["sort_key"] = selected_sort_key
-                state["sort_direction"] = SORT_DEFAULT_DIRECTIONS.get(
-                    selected_sort_key,
-                    "ASC",
-                )
+                state["sort_key"] = sort_key
+                state["sort_direction"] = SORT_DEFAULT_DIRECTIONS.get(sort_key, "ASC")
 
+            state["sort_column_index"] = column_index
+            state["sort_label"] = sort_label
             state["page_index"] = 0
             refresh_table()
-
-        table.horizontalHeader().sectionClicked.connect(change_sort)
 
         for filter_key, button in filter_buttons.items():
             button.clicked.connect(lambda checked=False, selected_filter_key=filter_key: change_filter(selected_filter_key))
@@ -1395,6 +1107,7 @@ class ChecksPage(QWidget):
         search_input.textChanged.connect(lambda _text: search_changed())
         previous_button.clicked.connect(previous_page)
         next_button.clicked.connect(next_page)
+        table.horizontalHeader().sectionClicked.connect(change_sort)
 
         refresh_table()
 
@@ -1537,62 +1250,61 @@ class ChecksPage(QWidget):
             "page_index": 0,
             "sort_key": "due_date",
             "sort_direction": "ASC",
+            "sort_column_index": 6,
+            "sort_label": "Vade",
         }
 
         def refresh_table() -> None:
             filter_key = str(state["filter_key"])
             page_index = int(state["page_index"])
             search_text = search_input.text().strip()
+            sort_key = str(state["sort_key"])
+            sort_direction = str(state["sort_direction"])
+            sort_column_index = int(state["sort_column_index"])
 
-            filtered_by_status_rows = self._filter_received_rows(rows, filter_key)
-            filtered_rows = [
-                received_check
-                for received_check in filtered_by_status_rows
-                if self._received_row_matches_search(received_check, search_text)
-            ]
-
-            filtered_rows = self._sort_received_rows(
-                filtered_rows,
-                sort_key=str(state["sort_key"]),
-                sort_direction=str(state["sort_direction"]),
+            table_data = load_received_checks_table_data(
+                search_text=search_text,
+                filter_key=filter_key,
+                sort_key=sort_key,
+                sort_direction=sort_direction,
+                page_index=page_index,
+                page_size=CHECK_LIST_PAGE_SIZE,
             )
 
-            total_count = len(filtered_rows)
-            max_page_index = max(0, (total_count - 1) // CHECK_LIST_PAGE_SIZE)
+            if table_data.error_message:
+                self._fill_received_checks_table(table, [])
+                previous_button.setEnabled(False)
+                next_button.setEnabled(False)
+                result_label.setText(f"Çek listesi okunamadı: {table_data.error_message}")
+                return
 
-            if page_index > max_page_index:
-                page_index = max_page_index
-                state["page_index"] = page_index
-
-            start_index = page_index * CHECK_LIST_PAGE_SIZE
-            end_index = min(start_index + CHECK_LIST_PAGE_SIZE, total_count)
-            visible_rows = filtered_rows[start_index:end_index]
-
-            self._fill_received_checks_table(table, visible_rows)
+            state["page_index"] = table_data.page_index
+            self._fill_received_checks_table(table, table_data.rows)
             self._style_filter_buttons(filter_buttons, filter_key)
 
-            previous_button.setEnabled(page_index > 0)
-            next_button.setEnabled(end_index < total_count)
+            table.horizontalHeader().setSortIndicator(
+                sort_column_index,
+                Qt.DescendingOrder if sort_direction == "DESC" else Qt.AscendingOrder,
+            )
 
-            if total_count == 0:
+            previous_button.setEnabled(table_data.page_index > 0)
+            next_button.setEnabled(table_data.page_index + 1 < table_data.total_pages)
+
+            if table_data.total_count == 0:
                 result_label.setText(
                     f"{self._filter_label(filter_key)}: filtreye uygun kayıt bulunamadı. "
-                    f"Toplam kayıt: {len(rows)} | "
-                    f"Sıralama: {self._sort_label(sort_columns=RECEIVED_SORT_COLUMNS, sort_key=str(state['sort_key']), sort_direction=str(state['sort_direction']))}"
+                    f"Sıralama: {state['sort_label']} {_sort_direction_symbol(sort_direction)}"
                 )
             else:
+                start_index = table_data.page_index * table_data.page_size + 1
+                end_index = start_index + len(table_data.rows) - 1
                 result_label.setText(
-                    f"{self._filter_label(filter_key)}: {start_index + 1}-{end_index} / "
-                    f"{total_count} kayıt gösteriliyor. Toplam kayıt: {len(rows)} | "
-                    f"Sıralama: {self._sort_label(sort_columns=RECEIVED_SORT_COLUMNS, sort_key=str(state['sort_key']), sort_direction=str(state['sort_direction']))}"
+                    f"{self._filter_label(filter_key)}: {start_index}-{end_index} / "
+                    f"{table_data.total_count} kayıt gösteriliyor. "
+                    f"Sayfa: {table_data.page_index + 1}/{table_data.total_pages}. "
+                    f"Toplam: {build_currency_totals_text(table_data.currency_totals)} | "
+                    f"Sıralama: {state['sort_label']} {_sort_direction_symbol(sort_direction)}"
                 )
-
-            self._apply_sort_indicator(
-                table=table,
-                sort_columns=RECEIVED_SORT_COLUMNS,
-                sort_key=str(state["sort_key"]),
-                sort_direction=str(state["sort_direction"]),
-            )
 
         def change_filter(filter_key: str) -> None:
             state["filter_key"] = filter_key
@@ -1612,28 +1324,21 @@ class ChecksPage(QWidget):
             refresh_table()
 
         def change_sort(column_index: int) -> None:
-            if column_index not in RECEIVED_SORT_COLUMNS:
+            if column_index not in RECEIVED_TABLE_SORT_COLUMNS:
                 return
 
-            selected_sort_key = RECEIVED_SORT_COLUMNS[column_index][0]
+            sort_key, sort_label = RECEIVED_TABLE_SORT_COLUMNS[column_index]
 
-            if state["sort_key"] == selected_sort_key:
-                state["sort_direction"] = (
-                    "DESC"
-                    if str(state["sort_direction"]).upper() == "ASC"
-                    else "ASC"
-                )
+            if state["sort_key"] == sort_key:
+                state["sort_direction"] = "DESC" if state["sort_direction"] == "ASC" else "ASC"
             else:
-                state["sort_key"] = selected_sort_key
-                state["sort_direction"] = SORT_DEFAULT_DIRECTIONS.get(
-                    selected_sort_key,
-                    "ASC",
-                )
+                state["sort_key"] = sort_key
+                state["sort_direction"] = SORT_DEFAULT_DIRECTIONS.get(sort_key, "ASC")
 
+            state["sort_column_index"] = column_index
+            state["sort_label"] = sort_label
             state["page_index"] = 0
             refresh_table()
-
-        table.horizontalHeader().sectionClicked.connect(change_sort)
 
         for filter_key, button in filter_buttons.items():
             button.clicked.connect(lambda checked=False, selected_filter_key=filter_key: change_filter(selected_filter_key))
@@ -1641,6 +1346,7 @@ class ChecksPage(QWidget):
         search_input.textChanged.connect(lambda _text: search_changed())
         previous_button.clicked.connect(previous_page)
         next_button.clicked.connect(next_page)
+        table.horizontalHeader().sectionClicked.connect(change_sort)
 
         refresh_table()
 
