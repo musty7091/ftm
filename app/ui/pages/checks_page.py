@@ -38,12 +38,14 @@ from app.services.received_check_discount_batch_service import (
     ReceivedCheckDiscountBatchServiceError,
     create_received_check_discount_batch,
 )
+from app.services.received_check_bulk_service import (
+    ReceivedCheckBulkServiceError,
+    bulk_collect_received_checks,
+    bulk_endorse_received_checks,
+    bulk_send_received_checks_to_bank,
+    endorse_received_check,
+)
 from app.services.permission_service import Permission
-
-try:
-    from app.services.check_service import endorse_received_check
-except ImportError:
-    endorse_received_check = None
 
 from app.ui.pages.checks.checks_data import (
     DEFAULT_CHECK_TABLE_PAGE_SIZE,
@@ -69,6 +71,12 @@ from app.ui.pages.checks.received_check_discount_dialog import ReceivedCheckDisc
 from app.ui.pages.checks.received_check_discount_batch_dialog import ReceivedCheckDiscountBatchDialog
 from app.ui.pages.checks.received_check_discount_batches_dialog import ReceivedCheckDiscountBatchesDialog
 from app.ui.pages.checks.received_check_send_to_bank_dialog import ReceivedCheckSendToBankDialog
+from app.ui.pages.checks.received_check_bulk_action_dialog import (
+    ACTION_COLLECT,
+    ACTION_ENDORSE,
+    ACTION_SEND_TO_BANK,
+    ReceivedCheckBulkActionDialog,
+)
 
 try:
     from app.ui.pages.checks.received_check_endorse_dialog import ReceivedCheckEndorseDialog
@@ -1397,6 +1405,148 @@ class ChecksPage(QWidget):
 
         action()
 
+    def _open_received_bulk_action_dialog(
+        self,
+        *,
+        table: QTableWidget,
+        action_type: str,
+        no_selection_title: str,
+        no_selection_message: str,
+    ) -> None:
+        selected_ids = self._require_selected_checks(
+            table=table,
+            title=no_selection_title,
+            message=no_selection_message,
+        )
+
+        if not selected_ids:
+            return
+
+        if action_type == ACTION_SEND_TO_BANK:
+            permission = Permission.RECEIVED_CHECK_SEND_TO_BANK
+            permission_message = "Alınan çeki bankaya göndermek için RECEIVED_CHECK_SEND_TO_BANK yetkisi gerekir."
+        elif action_type == ACTION_COLLECT:
+            permission = Permission.RECEIVED_CHECK_COLLECT
+            permission_message = "Alınan çek tahsil etmek için RECEIVED_CHECK_COLLECT yetkisi gerekir."
+        elif action_type == ACTION_ENDORSE:
+            permission = Permission.RECEIVED_CHECK_ENDORSE
+            permission_message = "Alınan çeki ciro etmek için RECEIVED_CHECK_ENDORSE yetkisi gerekir."
+        else:
+            QMessageBox.warning(
+                self,
+                "Geçersiz işlem",
+                f"Bilinmeyen toplu alınan çek işlem türü: {action_type}",
+            )
+            return
+
+        if not self._ensure_permission(permission, permission_message):
+            return
+
+        try:
+            dialog = ReceivedCheckBulkActionDialog(
+                parent=self,
+                action_type=action_type,
+                received_check_ids=selected_ids,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Toplu işlem penceresi açılamadı",
+                str(exc),
+            )
+            return
+
+        if not dialog.has_selected_checks():
+            QMessageBox.information(
+                self,
+                "İşlenecek çek bulunamadı",
+                dialog.get_missing_data_message(),
+            )
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        payload = dialog.get_payload()
+        self._execute_received_bulk_action(payload)
+
+    def _execute_received_bulk_action(self, payload: dict[str, Any]) -> None:
+        action_type = str(payload.get("action_type") or "").strip().upper()
+        received_check_ids = list(payload.get("received_check_ids") or [])
+
+        try:
+            with session_scope() as session:
+                if action_type == ACTION_SEND_TO_BANK:
+                    result = bulk_send_received_checks_to_bank(
+                        session,
+                        received_check_ids=received_check_ids,
+                        collection_bank_account_id=int(payload["collection_bank_account_id"]),
+                        sent_date=payload["action_date"],
+                        reference_no=payload.get("reference_no"),
+                        description=payload.get("description"),
+                        moved_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    success_title = "Çekler bankaya gönderildi"
+
+                elif action_type == ACTION_COLLECT:
+                    result = bulk_collect_received_checks(
+                        session,
+                        received_check_ids=received_check_ids,
+                        collection_bank_account_id=payload.get("collection_bank_account_id"),
+                        collection_date=payload["action_date"],
+                        reference_no=payload.get("reference_no"),
+                        description=payload.get("description"),
+                        collected_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    success_title = "Çekler tahsil edildi"
+
+                elif action_type == ACTION_ENDORSE:
+                    result = bulk_endorse_received_checks(
+                        session,
+                        received_check_ids=received_check_ids,
+                        endorse_date=payload["action_date"],
+                        counterparty_text=payload["counterparty_text"],
+                        purpose_text=payload["purpose_text"],
+                        reference_no=payload.get("reference_no"),
+                        description=payload.get("description"),
+                        endorsed_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    success_title = "Çekler ciro edildi"
+
+                else:
+                    raise CheckServiceError(f"Geçersiz toplu alınan çek işlem türü: {action_type}")
+
+            self._reload_page_data()
+
+            QMessageBox.information(
+                self,
+                success_title,
+                result.build_user_message(),
+            )
+
+        except ReceivedCheckBulkServiceError as exc:
+            self._reload_page_data()
+            QMessageBox.warning(
+                self,
+                "Toplu işlem tamamlanamadı",
+                str(exc),
+            )
+        except CheckServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Toplu işlem tamamlanamadı",
+                str(exc),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen hata",
+                f"Toplu alınan çek işlemi sırasında beklenmeyen bir hata oluştu:\n{exc}",
+            )
+
     def _build_issued_selection_action_panel(self, table: QTableWidget) -> QWidget:
         buttons = [
             self._build_context_action_button(
@@ -1452,24 +1602,24 @@ class ChecksPage(QWidget):
                 button_type="primary",
             ),
             self._build_context_action_button(
-                "Bankaya Ver",
-                lambda: self._open_existing_dialog_for_selected_checks(
+                "Toplu Bankaya Ver",
+                lambda: self._open_received_bulk_action_dialog(
                     table=table,
+                    action_type=ACTION_SEND_TO_BANK,
                     no_selection_title="Alınan çek seçilmedi",
                     no_selection_message="Bankaya verme işlemi için önce en az bir alınan çek seçmelisin.",
-                    action=self._open_send_received_check_to_bank_dialog,
                 ),
                 button_type="success",
                 required_permission=Permission.RECEIVED_CHECK_SEND_TO_BANK,
                 tooltip_when_denied="Alınan çeki bankaya gönderme yetkin yok.",
             ),
             self._build_context_action_button(
-                "Ciro Et",
-                lambda: self._open_existing_dialog_for_selected_checks(
+                "Toplu Ciro Et",
+                lambda: self._open_received_bulk_action_dialog(
                     table=table,
+                    action_type=ACTION_ENDORSE,
                     no_selection_title="Alınan çek seçilmedi",
                     no_selection_message="Ciro işlemi için önce en az bir alınan çek seçmelisin.",
-                    action=self._open_endorse_received_check_dialog,
                 ),
                 button_type="success",
                 required_permission=Permission.RECEIVED_CHECK_ENDORSE,
@@ -1488,12 +1638,12 @@ class ChecksPage(QWidget):
                 tooltip_when_denied="Alınan çeki iskonto etme yetkin yok.",
             ),
             self._build_context_action_button(
-                "Tahsil Et",
-                lambda: self._open_existing_dialog_for_selected_checks(
+                "Toplu Tahsil Et",
+                lambda: self._open_received_bulk_action_dialog(
                     table=table,
+                    action_type=ACTION_COLLECT,
                     no_selection_title="Alınan çek seçilmedi",
                     no_selection_message="Tahsil işlemi için önce en az bir alınan çek seçmelisin.",
-                    action=self._open_collect_received_check_dialog,
                 ),
                 button_type="success",
                 required_permission=Permission.RECEIVED_CHECK_COLLECT,
@@ -1533,8 +1683,8 @@ class ChecksPage(QWidget):
         return self._build_context_panel_frame(
             title_text="Seçili Alınan Çek İşlemleri",
             hint_text=(
-                "Bu panel seçili alınan çeklere göre çalışır. Bu adımda mevcut sağlam işlem ekranları açılır; "
-                "seçili çek ID'lerini doğrudan toplu işleme taşıma sonraki adımda yapılacak."
+                "Bu panel seçili alınan çeklere göre çalışır. Bankaya verme, ciro ve tahsil işlemleri "
+                "seçili çekler üzerinden toplu işlem dialoguna aktarılır."
             ),
             buttons=buttons,
         )
@@ -2759,6 +2909,7 @@ class ChecksPage(QWidget):
                     received_check_id=payload["received_check_id"],
                     endorse_date=payload["endorse_date"],
                     counterparty_text=payload["counterparty_text"],
+                    purpose_text=payload["purpose_text"],
                     reference_no=payload["reference_no"],
                     description=payload["description"],
                     endorsed_by_user_id=getattr(self.current_user, "id", None),
@@ -3003,6 +3154,7 @@ class ChecksPage(QWidget):
                     received_check_id=payload["received_check_id"],
                     return_date=payload["return_date"],
                     counterparty_text=payload["counterparty_text"],
+                    purpose_text=payload["purpose_text"],
                     reference_no=payload["reference_no"],
                     description=payload["description"],
                     returned_by_user_id=getattr(self.current_user, "id", None),
