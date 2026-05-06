@@ -134,6 +134,15 @@ def _enum_value(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _display_currency_code(currency_code: str) -> str:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if normalized_currency_code == "TRY":
+        return "TL"
+
+    return normalized_currency_code or "TL"
+
+
 def _format_decimal_tr(value: Any) -> str:
     amount = decimal_or_zero(value)
 
@@ -161,7 +170,7 @@ def currency_sort_key(currency_code: str) -> tuple[int, str]:
     return (999, normalized_currency_code)
 
 
-def build_currency_totals_text(currency_totals: dict[str, Any]) -> str:
+def build_currency_totals_detail_text(currency_totals: dict[str, Any]) -> str:
     if not currency_totals:
         return "Kayıt yok"
 
@@ -169,10 +178,39 @@ def build_currency_totals_text(currency_totals: dict[str, Any]) -> str:
 
     for currency_code in sorted(currency_totals.keys(), key=currency_sort_key):
         lines.append(
-            f"{currency_code}: {format_currency_amount(currency_totals[currency_code], currency_code)}"
+            f"{_display_currency_code(currency_code)}: "
+            f"{format_currency_amount(currency_totals[currency_code], currency_code)}"
         )
 
     return "\n".join(lines)
+
+
+def build_currency_totals_text(currency_totals: dict[str, Any]) -> str:
+    if not currency_totals:
+        return "Kayıt yok"
+
+    active_currency_codes = [
+        currency_code
+        for currency_code in sorted(currency_totals.keys(), key=currency_sort_key)
+        if decimal_or_zero(currency_totals[currency_code]) != Decimal("0.00")
+    ]
+
+    if not active_currency_codes:
+        return "0,00 TL"
+
+    if len(active_currency_codes) == 1:
+        currency_code = active_currency_codes[0]
+        return format_currency_amount(currency_totals[currency_code], currency_code)
+
+    display_codes = [
+        _display_currency_code(currency_code)
+        for currency_code in active_currency_codes
+    ]
+
+    if len(display_codes) <= 3:
+        return f"{len(display_codes)} para birimi: {', '.join(display_codes)}"
+
+    return f"{len(display_codes)} para birimi"
 
 
 def issued_status_text(status: str) -> str:
