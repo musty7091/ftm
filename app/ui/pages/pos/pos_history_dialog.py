@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+from datetime import date
+from math import ceil
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt
@@ -7,7 +8,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QDialog,
-    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -31,6 +31,9 @@ from app.ui.pages.pos.pos_data import (
 )
 
 
+MAX_HISTORY_LOAD_LIMIT = 5000
+
+
 def _qdate_to_date(qdate: QDate) -> date:
     return date(qdate.year(), qdate.month(), qdate.day())
 
@@ -47,6 +50,10 @@ class PosHistoryDialog(QDialog):
         self.pos_devices = pos_devices
         self.bank_options = self._build_bank_options()
         self.current_rows: list[PosSettlementRow] = []
+        self.current_total_count = 0
+        self.current_currency_totals: dict[str, Any] = {}
+        self.current_page = 1
+        self.page_size = 100
         self.difference_settlement_by_row: dict[int, PosSettlementRow] = {}
 
         self.setWindowTitle("POS Geçmiş İşlemler / Filtreler")
@@ -174,11 +181,58 @@ class PosHistoryDialog(QDialog):
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
+        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.verticalHeader().setMinimumSectionSize(46)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(12, QHeaderView.Fixed)
         self.table.setColumnWidth(12, 72)
-        self.table.setMinimumHeight(520)
+        self.table.setMinimumHeight(470)
         self.table.cellClicked.connect(self._handle_table_cell_clicked)
+
+        pagination_row = QHBoxLayout()
+        pagination_row.setSpacing(10)
+
+        page_size_label = QLabel("Sayfa başına")
+        page_size_label.setObjectName("MutedText")
+
+        self.page_size_combo = QComboBox()
+        self.page_size_combo.setMinimumHeight(36)
+        self.page_size_combo.addItem("50", 50)
+        self.page_size_combo.addItem("100", 100)
+        self.page_size_combo.addItem("250", 250)
+        self.page_size_combo.addItem("500", 500)
+        self.page_size_combo.setCurrentIndex(1)
+        self.page_size_combo.currentIndexChanged.connect(self._handle_page_size_changed)
+
+        self.first_page_button = QPushButton("İlk")
+        self.previous_page_button = QPushButton("Önceki")
+        self.next_page_button = QPushButton("Sonraki")
+        self.last_page_button = QPushButton("Son")
+
+        self.first_page_button.setMinimumHeight(36)
+        self.previous_page_button.setMinimumHeight(36)
+        self.next_page_button.setMinimumHeight(36)
+        self.last_page_button.setMinimumHeight(36)
+
+        self.first_page_button.clicked.connect(self._go_first_page)
+        self.previous_page_button.clicked.connect(self._go_previous_page)
+        self.next_page_button.clicked.connect(self._go_next_page)
+        self.last_page_button.clicked.connect(self._go_last_page)
+
+        self.page_info_label = QLabel("")
+        self.page_info_label.setObjectName("MutedText")
+        self.page_info_label.setAlignment(Qt.AlignCenter)
+
+        pagination_row.addWidget(page_size_label)
+        pagination_row.addWidget(self.page_size_combo)
+        pagination_row.addStretch(1)
+        pagination_row.addWidget(self.first_page_button)
+        pagination_row.addWidget(self.previous_page_button)
+        pagination_row.addWidget(self.page_info_label)
+        pagination_row.addWidget(self.next_page_button)
+        pagination_row.addWidget(self.last_page_button)
 
         main_layout.addWidget(title)
         main_layout.addWidget(subtitle)
@@ -186,6 +240,7 @@ class PosHistoryDialog(QDialog):
         main_layout.addLayout(button_row)
         main_layout.addWidget(self.summary_label)
         main_layout.addWidget(self.table, 1)
+        main_layout.addLayout(pagination_row)
 
         self._run_search()
 
@@ -204,6 +259,7 @@ class PosHistoryDialog(QDialog):
         self.status_combo.setCurrentIndex(0)
         self.pos_device_combo.setCurrentIndex(0)
         self.bank_combo.setCurrentIndex(0)
+        self.current_page = 1
         self._run_search()
 
     def _run_search(self) -> None:
@@ -218,13 +274,16 @@ class PosHistoryDialog(QDialog):
             )
             return
 
+        self.page_size = int(self.page_size_combo.currentData() or 100)
+        self.current_page = 1
+
         history_data = load_pos_history_data(
             start_date=start_date,
             end_date=end_date,
             status=str(self.status_combo.currentData() or "").strip() or None,
             pos_device_id=self.pos_device_combo.currentData(),
             bank_id=self.bank_combo.currentData(),
-            limit=2000,
+            limit=MAX_HISTORY_LOAD_LIMIT,
         )
 
         if history_data.error_message:
@@ -236,13 +295,114 @@ class PosHistoryDialog(QDialog):
             return
 
         self.current_rows = history_data.pos_settlements
-        self._fill_table(self.current_rows)
+        self.current_total_count = int(history_data.total_count or len(self.current_rows))
+        self.current_currency_totals = history_data.currency_totals
+
+        self._refresh_current_page()
+
+    def _handle_page_size_changed(self) -> None:
+        self.page_size = int(self.page_size_combo.currentData() or 100)
+        self.current_page = 1
+        self._refresh_current_page()
+
+    def _total_pages(self) -> int:
+        if not self.current_rows:
+            return 1
+
+        return max(1, ceil(len(self.current_rows) / self.page_size))
+
+    def _page_slice_indexes(self) -> tuple[int, int]:
+        total_rows = len(self.current_rows)
+        total_pages = self._total_pages()
+
+        if self.current_page < 1:
+            self.current_page = 1
+
+        if self.current_page > total_pages:
+            self.current_page = total_pages
+
+        start_index = (self.current_page - 1) * self.page_size
+        end_index = min(start_index + self.page_size, total_rows)
+
+        return start_index, end_index
+
+    def _current_page_rows(self) -> list[PosSettlementRow]:
+        start_index, end_index = self._page_slice_indexes()
+
+        return self.current_rows[start_index:end_index]
+
+    def _refresh_current_page(self) -> None:
+        page_rows = self._current_page_rows()
+        self._fill_table(page_rows)
+        self._refresh_summary()
+        self._refresh_pagination_controls()
+
+    def _refresh_summary(self) -> None:
+        loaded_count = len(self.current_rows)
+        start_index, end_index = self._page_slice_indexes()
+
+        if loaded_count <= 0:
+            visible_range_text = "Gösterilen: 0"
+        else:
+            visible_range_text = f"Gösterilen: {start_index + 1}-{end_index}"
 
         summary_lines = [
-            f"Bulunan kayıt: {history_data.total_count}",
-            f"Net toplam: {build_currency_totals_text(history_data.currency_totals)}",
+            f"Bulunan kayıt: {self.current_total_count}",
+            f"Yüklenen kayıt: {loaded_count}",
+            visible_range_text,
+            f"Net toplam: {build_currency_totals_text(self.current_currency_totals)}",
         ]
+
+        if self.current_total_count > loaded_count:
+            summary_lines.append(
+                f"Not: Performans için ilk {loaded_count} kayıt yüklendi. Daha dar tarih/filtreden ilerleyebilirsin."
+            )
+
         self.summary_label.setText("\n".join(summary_lines))
+
+    def _refresh_pagination_controls(self) -> None:
+        total_pages = self._total_pages()
+
+        if self.current_page < 1:
+            self.current_page = 1
+
+        if self.current_page > total_pages:
+            self.current_page = total_pages
+
+        self.page_info_label.setText(
+            f"Sayfa {self.current_page} / {total_pages}"
+        )
+
+        has_rows = len(self.current_rows) > 0
+        has_previous = has_rows and self.current_page > 1
+        has_next = has_rows and self.current_page < total_pages
+
+        self.first_page_button.setEnabled(has_previous)
+        self.previous_page_button.setEnabled(has_previous)
+        self.next_page_button.setEnabled(has_next)
+        self.last_page_button.setEnabled(has_next)
+
+    def _go_first_page(self) -> None:
+        self.current_page = 1
+        self._refresh_current_page()
+
+    def _go_previous_page(self) -> None:
+        if self.current_page > 1:
+            self.current_page -= 1
+
+        self._refresh_current_page()
+
+    def _go_next_page(self) -> None:
+        total_pages = self._total_pages()
+
+        if self.current_page < total_pages:
+            self.current_page += 1
+
+        self._refresh_current_page()
+
+    def _go_last_page(self) -> None:
+        self.current_page = self._total_pages()
+        self._refresh_current_page()
 
     def _fill_table(self, rows: list[PosSettlementRow]) -> None:
         self.difference_settlement_by_row = {}
@@ -307,7 +467,8 @@ class PosHistoryDialog(QDialog):
                 settlement=settlement,
             )
 
-        self.table.resizeRowsToContents()
+        for row_index in range(self.table.rowCount()):
+            self.table.setRowHeight(row_index, 46)
 
     def _set_difference_cell(
         self,
