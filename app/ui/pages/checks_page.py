@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QFrame,
     QGridLayout,
@@ -80,7 +81,7 @@ from app.ui.permission_ui import (
     user_has_any_permission,
     user_has_permission,
 )
-from app.ui.ui_helpers import clear_layout, tr_number
+from app.ui.ui_helpers import clear_layout, decimal_or_zero, tr_number
 
 
 CHECK_LIST_PAGE_SIZE = DEFAULT_CHECK_TABLE_PAGE_SIZE
@@ -969,6 +970,9 @@ class ChecksPage(QWidget):
 
         search_input = QLineEdit()
         result_label = QLabel("")
+        selected_summary_label = QLabel("")
+        selected_summary_label.setObjectName("MutedText")
+        selected_summary_label.setWordWrap(True)
         previous_button = QPushButton()
         next_button = QPushButton()
         filter_buttons: dict[str, QPushButton] = {}
@@ -999,6 +1003,7 @@ class ChecksPage(QWidget):
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.doubleClicked.connect(lambda _index: self._open_issued_check_detail_from_table(table))
         table.setMinimumHeight(260)
@@ -1014,6 +1019,14 @@ class ChecksPage(QWidget):
             "sort_column_index": 5,
             "sort_label": "Vade",
         }
+
+        def refresh_selection_summary() -> None:
+            self._refresh_selected_checks_summary(
+                table=table,
+                summary_label=selected_summary_label,
+                empty_text="Seçili yazılan çek yok. Çoklu seçim için Ctrl veya Shift ile satır seçebilirsin.",
+                selected_prefix="Seçili yazılan çek",
+            )
 
         def refresh_table() -> None:
             filter_key = str(state["filter_key"])
@@ -1034,6 +1047,7 @@ class ChecksPage(QWidget):
 
             if table_data.error_message:
                 self._fill_issued_checks_table(table, [])
+                refresh_selection_summary()
                 previous_button.setEnabled(False)
                 next_button.setEnabled(False)
                 result_label.setText(f"Çek listesi okunamadı: {table_data.error_message}")
@@ -1041,6 +1055,7 @@ class ChecksPage(QWidget):
 
             state["page_index"] = table_data.page_index
             self._fill_issued_checks_table(table, table_data.rows)
+            refresh_selection_summary()
             self._style_filter_buttons(filter_buttons, filter_key)
 
             table.horizontalHeader().setSortIndicator(
@@ -1108,12 +1123,14 @@ class ChecksPage(QWidget):
         previous_button.clicked.connect(previous_page)
         next_button.clicked.connect(next_page)
         table.horizontalHeader().sectionClicked.connect(change_sort)
+        table.itemSelectionChanged.connect(refresh_selection_summary)
 
         refresh_table()
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
         layout.addLayout(tools_layout)
+        layout.addWidget(selected_summary_label)
         layout.addWidget(table, 1)
 
         return card
@@ -1126,6 +1143,78 @@ class ChecksPage(QWidget):
                 return option_text
 
         return "Tümü"
+
+    def _selected_row_indexes_from_table(self, table: QTableWidget) -> list[int]:
+        selection_model = table.selectionModel()
+
+        if selection_model is None:
+            return []
+
+        return sorted(
+            {
+                selected_index.row()
+                for selected_index in selection_model.selectedRows()
+                if selected_index.row() >= 0
+            }
+        )
+
+    def _selected_check_ids_from_table(self, table: QTableWidget) -> list[int]:
+        selected_ids: list[int] = []
+
+        for row_index in self._selected_row_indexes_from_table(table):
+            id_item = table.item(row_index, 0)
+
+            if id_item is None:
+                continue
+
+            check_id = id_item.data(Qt.UserRole)
+
+            if check_id in {None, ""}:
+                check_id = id_item.text()
+
+            try:
+                selected_ids.append(int(check_id))
+            except (TypeError, ValueError):
+                continue
+
+        return selected_ids
+
+    def _refresh_selected_checks_summary(
+        self,
+        *,
+        table: QTableWidget,
+        summary_label: QLabel,
+        empty_text: str,
+        selected_prefix: str,
+    ) -> None:
+        selected_rows = self._selected_row_indexes_from_table(table)
+
+        if not selected_rows:
+            summary_label.setText(empty_text)
+            return
+
+        currency_totals: dict[str, Any] = {}
+
+        for row_index in selected_rows:
+            id_item = table.item(row_index, 0)
+
+            if id_item is None:
+                continue
+
+            amount = id_item.data(Qt.UserRole + 1)
+            currency_code = str(id_item.data(Qt.UserRole + 2) or "").strip().upper()
+
+            if not currency_code:
+                continue
+
+            currency_totals[currency_code] = decimal_or_zero(
+                currency_totals.get(currency_code, "0.00")
+            ) + decimal_or_zero(amount)
+
+        summary_label.setText(
+            f"{selected_prefix}: {tr_number(len(selected_rows))} kayıt | "
+            f"Toplam: {build_currency_totals_text(currency_totals)}"
+        )
 
     def _configure_issued_table_columns(self, table: QTableWidget) -> None:
         header = table.horizontalHeader()
@@ -1163,6 +1252,8 @@ class ChecksPage(QWidget):
 
                 if column_index == 0:
                     item.setData(Qt.UserRole, issued_check.issued_check_id)
+                    item.setData(Qt.UserRole + 1, issued_check.amount)
+                    item.setData(Qt.UserRole + 2, issued_check.currency_code)
 
                 if issued_check.status == "RISK":
                     item.setForeground(QColor("#fbbf24"))
@@ -1207,6 +1298,9 @@ class ChecksPage(QWidget):
 
         search_input = QLineEdit()
         result_label = QLabel("")
+        selected_summary_label = QLabel("")
+        selected_summary_label.setObjectName("MutedText")
+        selected_summary_label.setWordWrap(True)
         previous_button = QPushButton()
         next_button = QPushButton()
         filter_buttons: dict[str, QPushButton] = {}
@@ -1238,6 +1332,7 @@ class ChecksPage(QWidget):
         table.verticalHeader().setVisible(False)
         table.setAlternatingRowColors(False)
         table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.doubleClicked.connect(lambda _index: self._open_received_check_detail_from_table(table))
         table.setMinimumHeight(260)
@@ -1253,6 +1348,14 @@ class ChecksPage(QWidget):
             "sort_column_index": 6,
             "sort_label": "Vade",
         }
+
+        def refresh_selection_summary() -> None:
+            self._refresh_selected_checks_summary(
+                table=table,
+                summary_label=selected_summary_label,
+                empty_text="Seçili alınan çek yok. Çoklu seçim için Ctrl veya Shift ile satır seçebilirsin.",
+                selected_prefix="Seçili alınan çek",
+            )
 
         def refresh_table() -> None:
             filter_key = str(state["filter_key"])
@@ -1273,6 +1376,7 @@ class ChecksPage(QWidget):
 
             if table_data.error_message:
                 self._fill_received_checks_table(table, [])
+                refresh_selection_summary()
                 previous_button.setEnabled(False)
                 next_button.setEnabled(False)
                 result_label.setText(f"Çek listesi okunamadı: {table_data.error_message}")
@@ -1280,6 +1384,7 @@ class ChecksPage(QWidget):
 
             state["page_index"] = table_data.page_index
             self._fill_received_checks_table(table, table_data.rows)
+            refresh_selection_summary()
             self._style_filter_buttons(filter_buttons, filter_key)
 
             table.horizontalHeader().setSortIndicator(
@@ -1347,12 +1452,14 @@ class ChecksPage(QWidget):
         previous_button.clicked.connect(previous_page)
         next_button.clicked.connect(next_page)
         table.horizontalHeader().sectionClicked.connect(change_sort)
+        table.itemSelectionChanged.connect(refresh_selection_summary)
 
         refresh_table()
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
         layout.addLayout(tools_layout)
+        layout.addWidget(selected_summary_label)
         layout.addWidget(table, 1)
 
         return card
@@ -1401,6 +1508,8 @@ class ChecksPage(QWidget):
 
                 if column_index == 0:
                     item.setData(Qt.UserRole, received_check.received_check_id)
+                    item.setData(Qt.UserRole + 1, received_check.amount)
+                    item.setData(Qt.UserRole + 2, received_check.currency_code)
 
                 if received_check.status in {"BOUNCED", "RETURNED"}:
                     item.setForeground(QColor("#fbbf24"))
