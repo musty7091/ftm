@@ -25,6 +25,7 @@ from app.db.session import session_scope
 from app.models.business_partner import BusinessPartner
 from app.models.check import IssuedCheck, ReceivedCheck
 from app.ui.ui_helpers import clear_layout
+from app.ui.pages.checks.due_day_report_dialog import DueDayReportDialog
 
 
 CALENDAR_PAGE_STYLE = """
@@ -116,7 +117,7 @@ QLabel#CalendarSectionTitle {
 
 QLabel#CalendarDayNumber {
     color: #f8fafc;
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 600;
 }
 
@@ -133,7 +134,7 @@ QLabel#CalendarInfoText {
 
 QLabel#CalendarSmallText {
     color: #cbd5e1;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 450;
 }
 
@@ -165,19 +166,19 @@ QLabel#CalendarRiskBadge {
 
 QLabel#CalendarNetPositive {
     color: #a7f3d0;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
 }
 
 QLabel#CalendarNetNegative {
     color: #fecaca;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
 }
 
 QLabel#CalendarNetNeutral {
     color: #cbd5e1;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
 }
 
@@ -588,12 +589,12 @@ class CalendarDayCard(QFrame):
         else:
             self.setObjectName("DueCalendarDayCard")
 
-        self.setMinimumHeight(104)
+        self.setMinimumHeight(62)
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(1)
 
         number_row = QHBoxLayout()
         number_row.setSpacing(6)
@@ -761,7 +762,7 @@ class CheckDueCalendarPage(QWidget):
         toolbar.setObjectName("DueCalendarToolbar")
 
         layout = QHBoxLayout(toolbar)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(14, 9, 14, 9)
         layout.setSpacing(10)
 
         type_label = QLabel("Çek türü")
@@ -825,7 +826,7 @@ class CheckDueCalendarPage(QWidget):
         strip.setObjectName("DueCalendarSummaryStrip")
 
         layout = QHBoxLayout(strip)
-        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(10)
 
         self.month_received_label = QLabel("Alınacak: -")
@@ -853,8 +854,8 @@ class CheckDueCalendarPage(QWidget):
         board.setObjectName("DueCalendarBoard")
 
         layout = QVBoxLayout(board)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
         weekday_layout = QGridLayout()
         weekday_layout.setContentsMargins(0, 0, 0, 0)
@@ -869,8 +870,8 @@ class CheckDueCalendarPage(QWidget):
 
         self.calendar_grid = QGridLayout()
         self.calendar_grid.setContentsMargins(0, 0, 0, 0)
-        self.calendar_grid.setHorizontalSpacing(8)
-        self.calendar_grid.setVerticalSpacing(8)
+        self.calendar_grid.setHorizontalSpacing(6)
+        self.calendar_grid.setVerticalSpacing(6)
 
         for column_index in range(7):
             self.calendar_grid.setColumnStretch(column_index, 1)
@@ -883,11 +884,12 @@ class CheckDueCalendarPage(QWidget):
     def _build_selected_day_detail_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("DueCalendarDetailCard")
-        panel.setMinimumHeight(210)
+        panel.setMinimumHeight(230)
+        panel.setMaximumHeight(280)
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(7)
 
         header_row = QHBoxLayout()
         header_row.setSpacing(8)
@@ -897,11 +899,21 @@ class CheckDueCalendarPage(QWidget):
 
         self.selected_day_summary_label = QLabel("")
         self.selected_day_summary_label.setObjectName("CalendarInfoText")
-        self.selected_day_summary_label.setWordWrap(True)
+        self.selected_day_summary_label.setWordWrap(False)
+        self.selected_day_summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.selected_day_summary_label.setMaximumWidth(430)
+        self.selected_day_summary_label.setMinimumHeight(20)
+        self.selected_day_summary_label.setMaximumHeight(20)
+
+        self.selected_day_report_button = QPushButton("Gün Raporu")
+        self.selected_day_report_button.setObjectName("CalendarPrimaryButton")
+        self.selected_day_report_button.setMinimumHeight(32)
+        self.selected_day_report_button.clicked.connect(self._open_selected_day_report)
 
         header_row.addWidget(self.selected_day_title_label)
         header_row.addStretch(1)
         header_row.addWidget(self.selected_day_summary_label)
+        header_row.addWidget(self.selected_day_report_button)
 
         self.selected_day_table = QTableWidget()
         self.selected_day_table.setColumnCount(8)
@@ -924,7 +936,10 @@ class CheckDueCalendarPage(QWidget):
         self.selected_day_table.setTextElideMode(Qt.ElideRight)
         self.selected_day_table.verticalHeader().setDefaultSectionSize(32)
         self.selected_day_table.verticalHeader().setMinimumSectionSize(28)
-        self.selected_day_table.setMinimumHeight(130)
+        self.selected_day_table.setMinimumHeight(150)
+        self.selected_day_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.selected_day_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.selected_day_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
 
         header = self.selected_day_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -985,7 +1000,7 @@ class CheckDueCalendarPage(QWidget):
                 if day_date.month != self.current_month.month:
                     empty_cell = QFrame()
                     empty_cell.setObjectName("DueCalendarEmptyCell")
-                    empty_cell.setMinimumHeight(104)
+                    empty_cell.setMinimumHeight(62)
                     self.calendar_grid.addWidget(empty_cell, row_index, column_index)
                     continue
 
@@ -1167,10 +1182,10 @@ class CheckDueCalendarPage(QWidget):
         )
 
         self.selected_day_summary_label.setText(
-            f"Giriş: {_format_currency_totals(selected_summary.received_totals)} | "
-            f"Çıkış: {_format_currency_totals(selected_summary.issued_totals)} | "
-            f"Net: {_format_currency_totals(selected_summary.net_totals)} | "
-            f"Kayıt: {selected_summary.item_count}"
+            f"G: {_format_short_totals(selected_summary.received_totals)} | "
+            f"Ç: {_format_short_totals(selected_summary.issued_totals)} | "
+            f"N: {_format_short_totals(selected_summary.net_totals)} | "
+            f"Kt: {selected_summary.item_count}"
         )
 
         self._fill_selected_day_table(items)
@@ -1240,6 +1255,15 @@ class CheckDueCalendarPage(QWidget):
 
         for row_index in range(self.selected_day_table.rowCount()):
             self.selected_day_table.setRowHeight(row_index, 32)
+
+    def _open_selected_day_report(self) -> None:
+        dialog = DueDayReportDialog(
+            parent=self,
+            report_date=self.selected_date,
+            check_type_filter=self._selected_check_type_filter(),
+            status_filter=self._selected_status_filter(),
+        )
+        dialog.exec()
 
     def _show_data_error_on_detail_panel(self, error_message: str) -> None:
         self.selected_day_title_label.setText("Vade verileri okunamadı")
