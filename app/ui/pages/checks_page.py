@@ -1011,6 +1011,8 @@ class ChecksPage(QWidget):
         self._configure_table_for_compact_view(table)
         self._configure_issued_table_columns(table)
 
+        selected_action_panel = self._build_issued_selection_action_panel(table)
+
         state = {
             "filter_key": "OPEN",
             "page_index": 0,
@@ -1131,9 +1133,411 @@ class ChecksPage(QWidget):
         layout.addWidget(subtitle_label)
         layout.addLayout(tools_layout)
         layout.addWidget(selected_summary_label)
+        layout.addWidget(selected_action_panel)
         layout.addWidget(table, 1)
 
         return card
+
+    def _build_context_action_button(
+        self,
+        text: str,
+        callback: Any,
+        *,
+        button_type: str = "normal",
+        required_permission: Permission | None = None,
+        required_permissions: tuple[Permission, ...] | None = None,
+        tooltip_when_denied: str = "Bu işlem için mevcut rolün yetkili değil.",
+    ) -> QPushButton:
+        button = QPushButton(text)
+        button.setMinimumHeight(34)
+        button.setCursor(Qt.PointingHandCursor)
+
+        if button_type == "risk":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: rgba(127, 29, 29, 0.40);
+                    color: #fee2e2;
+                    border: 1px solid rgba(239, 68, 68, 0.52);
+                    border-radius: 9px;
+                    padding: 7px 11px;
+                    font-weight: 700;
+                }
+
+                QPushButton:hover {
+                    background-color: rgba(153, 27, 27, 0.68);
+                    color: #ffffff;
+                }
+
+                QPushButton:disabled {
+                    background-color: #111827;
+                    color: #475569;
+                    border: 1px solid #1e293b;
+                }
+                """
+            )
+        elif button_type == "success":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: rgba(6, 78, 59, 0.40);
+                    color: #d1fae5;
+                    border: 1px solid rgba(16, 185, 129, 0.48);
+                    border-radius: 9px;
+                    padding: 7px 11px;
+                    font-weight: 700;
+                }
+
+                QPushButton:hover {
+                    background-color: rgba(5, 150, 105, 0.60);
+                    color: #ffffff;
+                }
+
+                QPushButton:disabled {
+                    background-color: #111827;
+                    color: #475569;
+                    border: 1px solid #1e293b;
+                }
+                """
+            )
+        elif button_type == "primary":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 1px solid #3b82f6;
+                    border-radius: 9px;
+                    padding: 7px 11px;
+                    font-weight: 800;
+                }
+
+                QPushButton:hover {
+                    background-color: #1d4ed8;
+                }
+
+                QPushButton:disabled {
+                    background-color: #111827;
+                    color: #475569;
+                    border: 1px solid #1e293b;
+                }
+                """
+            )
+        else:
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #172033;
+                    color: #cbd5e1;
+                    border: 1px solid #24324a;
+                    border-radius: 9px;
+                    padding: 7px 11px;
+                    font-weight: 650;
+                }
+
+                QPushButton:hover {
+                    background-color: #1e293b;
+                    color: #ffffff;
+                }
+
+                QPushButton:disabled {
+                    background-color: #111827;
+                    color: #475569;
+                    border: 1px solid #1e293b;
+                }
+                """
+            )
+
+        if required_permissions is not None:
+            apply_any_permission_to_button(
+                button,
+                current_user=self.current_user,
+                permissions=required_permissions,
+                tooltip_when_denied=tooltip_when_denied,
+            )
+        elif required_permission is not None:
+            apply_permission_to_button(
+                button,
+                current_user=self.current_user,
+                permission=required_permission,
+                tooltip_when_denied=tooltip_when_denied,
+            )
+
+        button.clicked.connect(lambda checked=False: callback())
+
+        return button
+
+    def _build_context_panel_frame(
+        self,
+        *,
+        title_text: str,
+        hint_text: str,
+        buttons: list[QPushButton],
+    ) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("Card")
+        panel.setStyleSheet(
+            """
+            QFrame#Card {
+                background-color: rgba(15, 23, 42, 0.48);
+                border: 1px solid #24324a;
+                border-radius: 12px;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
+
+        title = QLabel(title_text)
+        title.setObjectName("SectionTitle")
+
+        hint = QLabel(hint_text)
+        hint.setObjectName("MutedText")
+        hint.setWordWrap(True)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+
+        for button in buttons:
+            button_row.addWidget(button)
+
+        button_row.addStretch(1)
+
+        layout.addWidget(title)
+        layout.addWidget(hint)
+        layout.addLayout(button_row)
+
+        return panel
+
+    def _require_selected_checks(
+        self,
+        *,
+        table: QTableWidget,
+        title: str,
+        message: str,
+    ) -> list[int]:
+        selected_ids = self._selected_check_ids_from_table(table)
+
+        if not selected_ids:
+            QMessageBox.information(
+                self,
+                title,
+                message,
+            )
+            return []
+
+        return selected_ids
+
+    def _open_issued_selected_detail(self, table: QTableWidget) -> None:
+        selected_ids = self._require_selected_checks(
+            table=table,
+            title="Yazılan çek seçilmedi",
+            message="Detayını açmak için bir yazılan çek seçmelisin.",
+        )
+
+        if not selected_ids:
+            return
+
+        if len(selected_ids) != 1:
+            QMessageBox.information(
+                self,
+                "Tek çek seçilmeli",
+                "Detay ekranı için aynı anda sadece bir yazılan çek seçmelisin.",
+            )
+            return
+
+        dialog = IssuedCheckDetailDialog(
+            issued_check_id=selected_ids[0],
+            parent=self,
+        )
+        dialog.exec()
+
+    def _open_received_selected_detail(self, table: QTableWidget) -> None:
+        selected_ids = self._require_selected_checks(
+            table=table,
+            title="Alınan çek seçilmedi",
+            message="Detayını açmak için bir alınan çek seçmelisin.",
+        )
+
+        if not selected_ids:
+            return
+
+        if len(selected_ids) != 1:
+            QMessageBox.information(
+                self,
+                "Tek çek seçilmeli",
+                "Detay ekranı için aynı anda sadece bir alınan çek seçmelisin.",
+            )
+            return
+
+        dialog = ReceivedCheckDetailDialog(
+            received_check_id=selected_ids[0],
+            parent=self,
+        )
+        dialog.exec()
+
+    def _open_existing_dialog_for_selected_checks(
+        self,
+        *,
+        table: QTableWidget,
+        no_selection_title: str,
+        no_selection_message: str,
+        action: Any,
+    ) -> None:
+        selected_ids = self._require_selected_checks(
+            table=table,
+            title=no_selection_title,
+            message=no_selection_message,
+        )
+
+        if not selected_ids:
+            return
+
+        action()
+
+    def _build_issued_selection_action_panel(self, table: QTableWidget) -> QWidget:
+        buttons = [
+            self._build_context_action_button(
+                "Detay Aç",
+                lambda: self._open_issued_selected_detail(table),
+                button_type="primary",
+            ),
+            self._build_context_action_button(
+                "Ödeme Ekranını Aç",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Yazılan çek seçilmedi",
+                    no_selection_message="Ödeme işlemi için önce en az bir yazılan çek seçmelisin.",
+                    action=self._open_pay_issued_check_dialog,
+                ),
+                button_type="risk",
+                required_permission=Permission.ISSUED_CHECK_PAY,
+                tooltip_when_denied="Yazılan çek ödeme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "İptal Ekranını Aç",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Yazılan çek seçilmedi",
+                    no_selection_message="İptal işlemi için önce en az bir yazılan çek seçmelisin.",
+                    action=self._open_cancel_issued_check_dialog,
+                ),
+                button_type="normal",
+                required_permission=Permission.ISSUED_CHECK_CANCEL,
+                tooltip_when_denied="Yazılan çek iptal etme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "Seçimi Temizle",
+                table.clearSelection,
+                button_type="normal",
+            ),
+        ]
+
+        return self._build_context_panel_frame(
+            title_text="Seçili Yazılan Çek İşlemleri",
+            hint_text=(
+                "Bu panel seçili yazılan çeklere göre çalışır. Bu adımda güvenli şekilde mevcut ödeme/iptal "
+                "ekranları açılır; seçili çekleri doğrudan toplu işleme gönderme sonraki adımda eklenecek."
+            ),
+            buttons=buttons,
+        )
+
+    def _build_received_selection_action_panel(self, table: QTableWidget) -> QWidget:
+        buttons = [
+            self._build_context_action_button(
+                "Detay Aç",
+                lambda: self._open_received_selected_detail(table),
+                button_type="primary",
+            ),
+            self._build_context_action_button(
+                "Bankaya Ver",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="Bankaya verme işlemi için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_send_received_check_to_bank_dialog,
+                ),
+                button_type="success",
+                required_permission=Permission.RECEIVED_CHECK_SEND_TO_BANK,
+                tooltip_when_denied="Alınan çeki bankaya gönderme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "Ciro Et",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="Ciro işlemi için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_endorse_received_check_dialog,
+                ),
+                button_type="success",
+                required_permission=Permission.RECEIVED_CHECK_ENDORSE,
+                tooltip_when_denied="Alınan çeki ciro etme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "İskonto / Kırdır",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="İskonto işlemi için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_discount_received_check_dialog,
+                ),
+                button_type="success",
+                required_permission=Permission.RECEIVED_CHECK_DISCOUNT,
+                tooltip_when_denied="Alınan çeki iskonto etme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "Tahsil Et",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="Tahsil işlemi için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_collect_received_check_dialog,
+                ),
+                button_type="success",
+                required_permission=Permission.RECEIVED_CHECK_COLLECT,
+                tooltip_when_denied="Alınan çek tahsil etme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "Karşılıksız",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="Karşılıksız işaretleme için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_bounce_received_check_dialog,
+                ),
+                button_type="risk",
+                required_permission=Permission.RECEIVED_CHECK_CANCEL,
+                tooltip_when_denied="Alınan çeki problemli/karşılıksız işaretleme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "İade",
+                lambda: self._open_existing_dialog_for_selected_checks(
+                    table=table,
+                    no_selection_title="Alınan çek seçilmedi",
+                    no_selection_message="İade işlemi için önce en az bir alınan çek seçmelisin.",
+                    action=self._open_return_received_check_dialog,
+                ),
+                button_type="normal",
+                required_permission=Permission.RECEIVED_CHECK_CANCEL,
+                tooltip_when_denied="Alınan çeki iade işaretleme yetkin yok.",
+            ),
+            self._build_context_action_button(
+                "Seçimi Temizle",
+                table.clearSelection,
+                button_type="normal",
+            ),
+        ]
+
+        return self._build_context_panel_frame(
+            title_text="Seçili Alınan Çek İşlemleri",
+            hint_text=(
+                "Bu panel seçili alınan çeklere göre çalışır. Bu adımda mevcut sağlam işlem ekranları açılır; "
+                "seçili çek ID'lerini doğrudan toplu işleme taşıma sonraki adımda yapılacak."
+            ),
+            buttons=buttons,
+        )
 
     def _filter_label(self, filter_key: str) -> str:
         normalized_filter_key = str(filter_key or "OPEN").strip().upper()
@@ -1340,6 +1744,8 @@ class ChecksPage(QWidget):
         self._configure_table_for_compact_view(table)
         self._configure_received_table_columns(table)
 
+        selected_action_panel = self._build_received_selection_action_panel(table)
+
         state = {
             "filter_key": "OPEN",
             "page_index": 0,
@@ -1460,6 +1866,7 @@ class ChecksPage(QWidget):
         layout.addWidget(subtitle_label)
         layout.addLayout(tools_layout)
         layout.addWidget(selected_summary_label)
+        layout.addWidget(selected_action_panel)
         layout.addWidget(table, 1)
 
         return card
