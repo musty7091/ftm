@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -54,11 +54,7 @@ from app.reports.risk_check_report_data import (
     load_risk_check_report_data,
 )
 from app.reports.risk_check_report_pdf import create_risk_check_report_pdf
-from app.reports.report_pdf_base import (
-    FtmPdfReportBuilder,
-    FtmReportMeta,
-    FtmSummaryCard,
-)
+from app.reports.management_signature_report import create_management_signature_report_pdf
 from app.ui.pages.reports import (
     build_discount_reports_tab,
     build_excel_reports_tab,
@@ -304,18 +300,6 @@ QFrame#ManagementAlertBoxCritical {
     border-radius: 14px;
 }
 
-QFrame#ManagementDecisionCard {
-    background-color: rgba(88, 28, 135, 0.22);
-    border: 1px solid rgba(168, 85, 247, 0.38);
-    border-radius: 18px;
-}
-
-QFrame#ManagementDecisionBox {
-    background-color: rgba(15, 23, 42, 0.60);
-    border: 1px solid rgba(168, 85, 247, 0.24);
-    border-radius: 14px;
-}
-
 QFrame#ManagementDueRow {
     background-color: rgba(15, 23, 42, 0.58);
     border: 1px solid rgba(148, 163, 184, 0.16);
@@ -358,22 +342,6 @@ QLabel#ManagementKpiBody {
 
 QLabel#ManagementAlertText {
     color: #e5e7eb;
-    font-size: 12px;
-    font-weight: 700;
-    background-color: transparent;
-    border: none;
-}
-
-QLabel#ManagementDecisionText {
-    color: #f5d0fe;
-    font-size: 13px;
-    font-weight: 900;
-    background-color: transparent;
-    border: none;
-}
-
-QLabel#ManagementActionText {
-    color: #e9d5ff;
     font-size: 12px;
     font-weight: 700;
     background-color: transparent;
@@ -783,58 +751,6 @@ def _has_positive_total(totals: dict[str, Decimal] | None) -> bool:
             continue
 
     return False
-
-
-def _add_to_currency_totals(
-    totals: dict[str, Decimal],
-    currency_code: Any,
-    amount: Any,
-) -> None:
-    normalized_currency_code = str(currency_code or "TRY").strip().upper() or "TRY"
-
-    try:
-        decimal_amount = Decimal(str(amount or "0")).quantize(Decimal("0.01"))
-    except Exception:
-        decimal_amount = Decimal("0.00")
-
-    totals[normalized_currency_code] = (
-        totals.get(normalized_currency_code, Decimal("0.00")) + decimal_amount
-    ).quantize(Decimal("0.01"))
-
-
-def _subtract_from_currency_totals(
-    totals: dict[str, Decimal],
-    currency_code: Any,
-    amount: Any,
-) -> None:
-    normalized_currency_code = str(currency_code or "TRY").strip().upper() or "TRY"
-
-    try:
-        decimal_amount = Decimal(str(amount or "0")).quantize(Decimal("0.01"))
-    except Exception:
-        decimal_amount = Decimal("0.00")
-
-    totals[normalized_currency_code] = (
-        totals.get(normalized_currency_code, Decimal("0.00")) - decimal_amount
-    ).quantize(Decimal("0.01"))
-
-
-def _currency_total_score(totals: dict[str, Decimal] | None) -> Decimal:
-    if not totals:
-        return Decimal("0.00")
-
-    score = Decimal("0.00")
-
-    for amount in totals.values():
-        try:
-            decimal_amount = Decimal(str(amount or "0")).quantize(Decimal("0.01"))
-        except Exception:
-            decimal_amount = Decimal("0.00")
-
-        if decimal_amount < Decimal("0.00"):
-            score += abs(decimal_amount)
-
-    return score.quantize(Decimal("0.01"))
 
 
 def _date_range_text(start_date: date, end_date: date) -> str:
@@ -1416,7 +1332,6 @@ class ReportsPage(QWidget):
             return tab
 
         layout.addWidget(self._build_management_hero_card(snapshot))
-        layout.addWidget(self._build_management_decision_card(snapshot))
 
         kpi_grid = QGridLayout()
         kpi_grid.setSpacing(12)
@@ -1514,8 +1429,7 @@ class ReportsPage(QWidget):
         bottom_grid.setSpacing(12)
         bottom_grid.addWidget(self._build_management_alerts_card(snapshot), 0, 0)
         bottom_grid.addWidget(self._build_management_due_list_card(snapshot), 0, 1)
-        bottom_grid.addWidget(self._build_management_pressure_days_card(snapshot), 1, 0, 1, 2)
-        bottom_grid.addWidget(self._build_management_actions_card(snapshot), 2, 0, 1, 2)
+        bottom_grid.addWidget(self._build_management_actions_card(snapshot), 1, 0, 1, 2)
 
         layout.addLayout(bottom_grid)
         layout.addStretch(1)
@@ -1659,133 +1573,6 @@ class ReportsPage(QWidget):
         layout.addWidget(period_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         return card
-
-    def _build_management_decision_card(self, snapshot: dict[str, Any]) -> QWidget:
-        card = QFrame()
-        card.setObjectName("ManagementDecisionCard")
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
-
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(3)
-
-        title = QLabel("Yönetim Karar Cümlesi")
-        title.setObjectName("ReportSectionTitle")
-
-        subtitle = QLabel("Bu alan rakamları patron diline çevirir: önce neye bakılmalı, hangi aksiyon öne alınmalı?")
-        subtitle.setObjectName("ReportSubTitle")
-        subtitle.setWordWrap(True)
-
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-
-        badge = QLabel("Canlı özet")
-        badge.setObjectName("ManagementPlannedBadge")
-
-        title_row.addLayout(title_box, 1)
-        title_row.addWidget(badge, 0, Qt.AlignRight | Qt.AlignTop)
-
-        decision_box = QFrame()
-        decision_box.setObjectName("ManagementDecisionBox")
-
-        decision_layout = QVBoxLayout(decision_box)
-        decision_layout.setContentsMargins(12, 10, 12, 10)
-        decision_layout.setSpacing(8)
-
-        decision_label = QLabel(self._management_decision_text(snapshot))
-        decision_label.setObjectName("ManagementDecisionText")
-        decision_label.setWordWrap(True)
-
-        decision_layout.addWidget(decision_label)
-
-        for action_text in self._management_action_texts(snapshot):
-            action_label = QLabel(action_text)
-            action_label.setObjectName("ManagementActionText")
-            action_label.setWordWrap(True)
-            decision_layout.addWidget(action_label)
-
-        layout.addLayout(title_row)
-        layout.addWidget(decision_box)
-
-        return card
-
-    def _management_decision_text(self, snapshot: dict[str, Any]) -> str:
-        range_7_data = snapshot["range_7"]
-        range_15_data = snapshot["range_15"]
-        range_30_data = snapshot["range_30"]
-        risk_data = snapshot["risk"]
-        pos_data = snapshot["pos_month"]
-
-        if risk_data.summary.problem_count > 0:
-            return (
-                "Öncelik problemli çeklerde: yeni ödeme/tahsilat planından önce problemli kayıtlar ve ilgili muhataplar kontrol edilmeli."
-            )
-
-        if _has_negative_total(range_7_data.summary.net_effect_totals):
-            return (
-                f"Önümüzdeki 7 günde çek neti açık veriyor: {_format_totals_tr(range_7_data.summary.net_effect_totals)}. "
-                "Kısa vadeli nakit hazırlığı bugünden planlanmalı."
-            )
-
-        if _has_negative_total(range_15_data.summary.net_effect_totals):
-            return (
-                f"İlk 7 gün yönetilebilir görünüyor; ancak 15 günlük pencerede açık var: {_format_totals_tr(range_15_data.summary.net_effect_totals)}. "
-                "İkinci hafta vadeleri ayrıca izlenmeli."
-            )
-
-        if _has_negative_total(range_30_data.summary.net_effect_totals):
-            return (
-                f"30 günlük vadede ödeme baskısı oluşuyor: {_format_totals_tr(range_30_data.summary.net_effect_totals)}. "
-                "Aylık nakit akışı için ön hazırlık gerekli."
-            )
-
-        if pos_data.summary.planned_count > 0:
-            return (
-                "Çek tarafında kritik açık görünmüyor. POS beklenen tahsilatları ve banka hareketleri günlük mutabakatla takip edilmeli."
-            )
-
-        return "Bugün için kritik çek riski görünmüyor. Yine de vade takvimi ve banka/POS mutabakatı günlük kontrol edilmeli."
-
-    def _management_action_texts(self, snapshot: dict[str, Any]) -> list[str]:
-        actions: list[str] = []
-
-        range_7_data = snapshot["range_7"]
-        range_30_data = snapshot["range_30"]
-        risk_data = snapshot["risk"]
-        bank_data = snapshot["bank_month"]
-        pos_data = snapshot["pos_month"]
-        pressure_rows = self._management_daily_pressure_rows(snapshot)
-
-        if risk_data.summary.problem_count > 0:
-            actions.append(f"• Problemli çek listesi incelensin: {risk_data.summary.problem_count} kayıt / {_format_totals_tr(risk_data.summary.problem_totals)}")
-
-        if risk_data.summary.overdue_count > 0:
-            actions.append(f"• Vadesi geçmiş bekleyen çekler kontrol edilsin: {risk_data.summary.overdue_count} kayıt / {_format_totals_tr(risk_data.summary.overdue_totals)}")
-
-        if _has_negative_total(range_7_data.summary.net_effect_totals):
-            actions.append(f"• 7 günlük ödeme açığı için kaynak planı yapılsın: {_format_totals_tr(range_7_data.summary.net_effect_totals)}")
-
-        if pressure_rows:
-            first_pressure = pressure_rows[0]
-            actions.append(
-                f"• En kritik gün: {first_pressure['date'].strftime('%d.%m.%Y')} / Net: {_format_totals_tr(first_pressure['net_totals'])}"
-            )
-
-        if pos_data.summary.planned_count > 0:
-            actions.append(f"• POS beklenen tahsilatlar takip edilsin: {pos_data.summary.planned_count} kayıt / {_format_totals_tr(pos_data.summary.expected_net_totals)}")
-
-        if _has_negative_total(bank_data.summary.net_totals):
-            actions.append(f"• Bu ay banka hareketlerinde net çıkış var: {_format_totals_tr(bank_data.summary.net_totals)}")
-
-        if not actions:
-            actions.append("• Şu an acil aksiyon görünmüyor; günlük vade ve mutabakat kontrolü yeterli.")
-
-        return actions[:5]
 
     def _build_management_kpi_card(
         self,
@@ -1977,104 +1764,6 @@ class ReportsPage(QWidget):
             label.setWordWrap(True)
             grid.addWidget(label, row_index, column_index)
 
-    def _management_daily_pressure_rows(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-        grouped_rows: dict[date, dict[str, Any]] = {}
-
-        for row in snapshot["range_30"].rows:
-            if str(row.status_group or "").upper() not in {"PENDING", "PROBLEM"}:
-                continue
-
-            row_date = row.due_date
-
-            if row_date not in grouped_rows:
-                grouped_rows[row_date] = {
-                    "date": row_date,
-                    "received_totals": {},
-                    "issued_totals": {},
-                    "net_totals": {},
-                    "record_count": 0,
-                    "received_count": 0,
-                    "issued_count": 0,
-                }
-
-            grouped_row = grouped_rows[row_date]
-            grouped_row["record_count"] += 1
-
-            if str(row.check_type or "").upper() == "RECEIVED":
-                grouped_row["received_count"] += 1
-                _add_to_currency_totals(grouped_row["received_totals"], row.currency_code, row.amount)
-                _add_to_currency_totals(grouped_row["net_totals"], row.currency_code, row.amount)
-            elif str(row.check_type or "").upper() == "ISSUED":
-                grouped_row["issued_count"] += 1
-                _add_to_currency_totals(grouped_row["issued_totals"], row.currency_code, row.amount)
-                _subtract_from_currency_totals(grouped_row["net_totals"], row.currency_code, row.amount)
-
-        rows = list(grouped_rows.values())
-        rows.sort(
-            key=lambda item: (
-                0 if _has_negative_total(item["net_totals"]) else 1,
-                -_currency_total_score(item["net_totals"]),
-                item["date"],
-            )
-        )
-
-        return rows[:8]
-
-    def _build_management_pressure_days_card(self, snapshot: dict[str, Any]) -> QWidget:
-        card = QFrame()
-        card.setObjectName("ManagementSummaryCard")
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
-
-        title = QLabel("Nakit Baskısı Oluşturan Günler")
-        title.setObjectName("ReportSectionTitle")
-
-        subtitle = QLabel("Önümüzdeki 30 gün içinde çek tahsilatı ve çek ödemesi aynı güne indirgenerek net gün baskısı hesaplanır.")
-        subtitle.setObjectName("ReportSubTitle")
-        subtitle.setWordWrap(True)
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        grid = QGridLayout()
-        grid.setSpacing(8)
-
-        headers = ["Tarih", "Tahsilat", "Ödeme", "Net", "Kayıt"]
-        for column_index, header_text in enumerate(headers):
-            header = QLabel(header_text)
-            header.setObjectName("ManagementDueHeader")
-            grid.addWidget(header, 0, column_index)
-
-        pressure_rows = self._management_daily_pressure_rows(snapshot)
-
-        if not pressure_rows:
-            empty_label = QLabel("Önümüzdeki 30 gün için nakit baskısı oluşturacak bekleyen çek hareketi bulunamadı.")
-            empty_label.setObjectName("ManagementKpiBody")
-            empty_label.setWordWrap(True)
-            grid.addWidget(empty_label, 1, 0, 1, 5)
-        else:
-            for row_index, row in enumerate(pressure_rows[:6], start=1):
-                values = [
-                    row["date"].strftime("%d.%m.%Y"),
-                    _format_totals_tr(row["received_totals"]),
-                    _format_totals_tr(row["issued_totals"]),
-                    _format_totals_tr(row["net_totals"]),
-                    f"{row['record_count']} kayıt",
-                ]
-
-                for column_index, value in enumerate(values):
-                    label = QLabel(str(value or "-"))
-                    label.setObjectName("ManagementDueCell")
-                    label.setWordWrap(True)
-                    grid.addWidget(label, row_index, column_index)
-
-        layout.addLayout(grid)
-        layout.addStretch(1)
-
-        return card
-
     def _build_management_actions_card(self, snapshot: dict[str, Any]) -> QWidget:
         card = QFrame()
         card.setObjectName("ManagementSummaryCard")
@@ -2090,17 +1779,18 @@ class ReportsPage(QWidget):
         title.setObjectName("ReportSectionTitle")
 
         subtitle = QLabel(
-            "Bu sekme artık ekrandaki yönetim özetini tek dosyada raporlar. İstersen ayrıca 30 günlük çek ve risk PDF raporlarını da alabilirsin."
+            "Yönetim PDF Al butonu FTM Yönetim İmza Raporu'nu üretir. "
+            "Diğer butonlar hızlı kontrol ve karşılaştırma için korunmuştur."
         )
         subtitle.setObjectName("ReportSubTitle")
         subtitle.setWordWrap(True)
 
-        planned_badge = QLabel("Aktif: Yönetim PDF Raporu")
-        planned_badge.setObjectName("ReportActiveBadge")
+        active_badge = QLabel("Aktif: FTM Yönetim İmza Raporu")
+        active_badge.setObjectName("ManagementPlannedBadge")
 
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
-        title_box.addWidget(planned_badge, 0, Qt.AlignLeft)
+        title_box.addWidget(active_badge, 0, Qt.AlignLeft)
 
         today = snapshot["today_date"]
 
@@ -2129,13 +1819,19 @@ class ReportsPage(QWidget):
         management_pdf_button = QPushButton("Yönetim PDF Al")
         management_pdf_button.setObjectName("ManagementPrimaryButton")
         management_pdf_button.setCursor(Qt.PointingHandCursor)
-        management_pdf_button.clicked.connect(lambda checked=False: self._create_management_summary_pdf())
+        management_pdf_button.clicked.connect(
+            lambda checked=False: self._create_management_signature_pdf(
+                start_date=today,
+                end_date=today + timedelta(days=30),
+                snapshot=snapshot,
+            )
+        )
 
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
+        button_row.addWidget(management_pdf_button)
         button_row.addWidget(check_pdf_button)
         button_row.addWidget(risk_pdf_button)
-        button_row.addWidget(management_pdf_button)
 
         layout.addLayout(title_box, 1)
         layout.addLayout(button_row, 0)
@@ -3175,27 +2871,22 @@ class ReportsPage(QWidget):
 
         return str(reports_folder / file_name)
 
-    def _create_management_summary_pdf(self) -> None:
-        try:
-            snapshot = self._load_management_summary_snapshot()
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Yönetim PDF oluşturulamadı",
-                f"Yönetim özeti verileri yüklenirken hata oluştu:\n\n{exc}",
-            )
-            return
-
-        today = snapshot["today_date"]
+    def _create_management_signature_pdf(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        snapshot: dict[str, Any] | None = None,
+    ) -> None:
         suggested_path = self._suggested_pdf_path(
-            file_label="Yonetim_Ozeti_Raporu",
-            start_date=today,
-            end_date=today + timedelta(days=30),
+            file_label="Yonetim_Imza_Raporu",
+            start_date=start_date,
+            end_date=end_date,
         )
 
         selected_path, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Yönetim Özeti PDF Kaydet",
+            "FTM Yönetim İmza Raporu PDF Kaydet",
             suggested_path,
             "PDF Dosyası (*.pdf)",
         )
@@ -3209,240 +2900,26 @@ class ReportsPage(QWidget):
             output_path = output_path.with_suffix(".pdf")
 
         try:
-            created_path = self._build_management_summary_pdf(
+            created_path = create_management_signature_report_pdf(
                 output_path=output_path,
+                start_date=start_date,
+                end_date=end_date,
+                created_by=_created_by_text(self.current_user),
                 snapshot=snapshot,
             )
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Yönetim PDF oluşturulamadı",
-                f"Yönetim özeti PDF raporu oluşturulurken hata oluştu:\n\n{exc}",
+                f"FTM Yönetim İmza Raporu oluşturulurken hata oluştu:\n\n{exc}",
             )
             return
 
         self._ask_open_created_pdf(
             title="Yönetim PDF oluşturuldu",
-            message="Yönetim özeti PDF raporu başarıyla oluşturuldu.",
+            message="FTM Yönetim İmza Raporu başarıyla oluşturuldu.",
             created_path=created_path,
         )
-
-    def _build_management_summary_pdf(self, *, output_path: Path, snapshot: dict[str, Any]) -> str:
-        today = snapshot["today_date"]
-        report_end = today + timedelta(days=30)
-
-        builder = FtmPdfReportBuilder(
-            output_path=output_path,
-            orientation="landscape",
-            meta=FtmReportMeta(
-                title="FTM Yönetim Özeti",
-                report_period=_date_range_text(today, report_end),
-                created_by=_created_by_text(self.current_user),
-                created_at=datetime.now(),
-            ),
-        )
-
-        elements: list[Any] = []
-
-        elements.append(builder.section_title("Yönetim Karar Cümlesi"))
-        elements.append(builder.paragraph(self._management_decision_text(snapshot), "normal"))
-        elements.append(builder.spacer(3))
-
-        action_rows = [
-            [str(index), action_text.replace("•", "").strip()]
-            for index, action_text in enumerate(self._management_action_texts(snapshot), start=1)
-        ]
-
-        elements.append(
-            builder.build_data_table(
-                headers=["Öncelik", "Önerilen Aksiyon"],
-                rows=action_rows,
-                col_widths=[18, 245],
-                center_columns={0},
-            )
-        )
-
-        elements.append(builder.spacer(5))
-        elements.append(builder.section_title("Finansal Özet Kartları"))
-        elements.append(
-            builder.build_summary_cards(
-                self._management_pdf_summary_cards(snapshot),
-                columns=3,
-            )
-        )
-
-        elements.append(builder.spacer(5))
-        elements.append(builder.section_title("Nakit Baskısı Oluşturan Günler"))
-        pressure_rows = self._management_pressure_pdf_rows(snapshot)
-
-        if pressure_rows:
-            elements.append(
-                builder.build_data_table(
-                    headers=["Tarih", "Tahsilat", "Ödeme", "Net", "Kayıt"],
-                    rows=pressure_rows,
-                    col_widths=[25, 60, 60, 70, 22],
-                    center_columns={0, 4},
-                )
-            )
-        else:
-            elements.append(builder.paragraph("Önümüzdeki 30 gün için nakit baskısı oluşturan bekleyen çek hareketi bulunamadı.", "normal"))
-
-        elements.append(builder.spacer(5))
-        elements.append(builder.section_title("Yaklaşan Kritik Çek Vadeleri"))
-        due_rows = self._management_due_pdf_rows(snapshot)
-
-        if due_rows:
-            elements.append(
-                builder.build_data_table(
-                    headers=["Tarih", "Tür", "Muhatap", "Çek No", "Tutar", "Durum"],
-                    rows=due_rows,
-                    col_widths=[24, 22, 62, 32, 48, 34],
-                    numeric_columns={4},
-                    center_columns={0, 1, 5},
-                )
-            )
-        else:
-            elements.append(builder.paragraph("Önümüzdeki 30 gün için kritik çek vadesi bulunamadı.", "normal"))
-
-        elements.append(builder.spacer(5))
-        elements.append(builder.section_title("Riskli / Problemli Muhatap Özeti"))
-        risk_party_rows = self._management_risk_party_pdf_rows(snapshot)
-
-        if risk_party_rows:
-            elements.append(
-                builder.build_data_table(
-                    headers=["Muhatap", "Kayıt", "Tutar"],
-                    rows=risk_party_rows,
-                    col_widths=[95, 25, 80],
-                    center_columns={1},
-                )
-            )
-        else:
-            elements.append(builder.paragraph("Riskli/problemli muhatap kaydı bulunamadı.", "normal"))
-
-        return builder.build(elements)
-
-    def _management_pdf_summary_cards(self, snapshot: dict[str, Any]) -> list[FtmSummaryCard]:
-        today_data = snapshot["today"]
-        range_7_data = snapshot["range_7"]
-        range_15_data = snapshot["range_15"]
-        range_30_data = snapshot["range_30"]
-        risk_data = snapshot["risk"]
-        bank_data = snapshot["bank_month"]
-        pos_data = snapshot["pos_month"]
-
-        return [
-            FtmSummaryCard(
-                title="Bugünkü Net Çek",
-                value=_format_totals_tr(today_data.summary.net_effect_totals, empty_text="0,00 TL", compact_limit=8),
-                hint=(
-                    f"Tahsilat: {_format_totals_tr(today_data.summary.received_totals, empty_text='0,00 TL', compact_limit=8)} | "
-                    f"Ödeme: {_format_totals_tr(today_data.summary.issued_totals, empty_text='0,00 TL', compact_limit=8)}"
-                ),
-                card_type=self._management_pdf_card_type_for_net(today_data.summary.net_effect_totals),
-            ),
-            FtmSummaryCard(
-                title="7 Günlük Net",
-                value=_format_totals_tr(range_7_data.summary.net_effect_totals, empty_text="0,00 TL", compact_limit=8),
-                hint=(
-                    f"Tahsilat: {_format_totals_tr(range_7_data.summary.received_totals, empty_text='0,00 TL', compact_limit=8)} | "
-                    f"Ödeme: {_format_totals_tr(range_7_data.summary.issued_totals, empty_text='0,00 TL', compact_limit=8)}"
-                ),
-                card_type=self._management_pdf_card_type_for_net(range_7_data.summary.net_effect_totals),
-            ),
-            FtmSummaryCard(
-                title="15 Günlük Net",
-                value=_format_totals_tr(range_15_data.summary.net_effect_totals, empty_text="0,00 TL", compact_limit=8),
-                hint=(
-                    f"Tahsilat: {_format_totals_tr(range_15_data.summary.received_totals, empty_text='0,00 TL', compact_limit=8)} | "
-                    f"Ödeme: {_format_totals_tr(range_15_data.summary.issued_totals, empty_text='0,00 TL', compact_limit=8)}"
-                ),
-                card_type=self._management_pdf_card_type_for_net(range_15_data.summary.net_effect_totals),
-            ),
-            FtmSummaryCard(
-                title="30 Günlük Net",
-                value=_format_totals_tr(range_30_data.summary.net_effect_totals, empty_text="0,00 TL", compact_limit=8),
-                hint=(
-                    f"Tahsilat: {_format_totals_tr(range_30_data.summary.received_totals, empty_text='0,00 TL', compact_limit=8)} | "
-                    f"Ödeme: {_format_totals_tr(range_30_data.summary.issued_totals, empty_text='0,00 TL', compact_limit=8)}"
-                ),
-                card_type=self._management_pdf_card_type_for_net(range_30_data.summary.net_effect_totals),
-            ),
-            FtmSummaryCard(
-                title="Riskli / Problemli",
-                value=f"{risk_data.summary.total_count} kayıt",
-                hint=f"Tutar: {_format_totals_tr(risk_data.summary.grand_totals, empty_text='0,00 TL', compact_limit=8)}",
-                card_type="risk" if risk_data.summary.total_count > 0 else "success",
-            ),
-            FtmSummaryCard(
-                title="Banka / POS",
-                value=_format_totals_tr(bank_data.summary.net_totals, empty_text="0,00 TL", compact_limit=8),
-                hint=f"POS beklenen: {_format_totals_tr(pos_data.summary.expected_net_totals, empty_text='0,00 TL', compact_limit=8)}",
-                card_type=self._management_pdf_card_type_for_net(bank_data.summary.net_totals),
-            ),
-        ]
-
-    def _management_pdf_card_type_for_net(self, totals: dict[str, Decimal] | None) -> str:
-        if _has_negative_total(totals):
-            return "risk"
-
-        if _has_positive_total(totals):
-            return "success"
-
-        return "normal"
-
-    def _management_pressure_pdf_rows(self, snapshot: dict[str, Any]) -> list[list[str]]:
-        rows: list[list[str]] = []
-
-        for pressure_row in self._management_daily_pressure_rows(snapshot)[:10]:
-            rows.append(
-                [
-                    pressure_row["date"].strftime("%d.%m.%Y"),
-                    _format_totals_tr(pressure_row["received_totals"], empty_text="0,00 TL", compact_limit=8),
-                    _format_totals_tr(pressure_row["issued_totals"], empty_text="0,00 TL", compact_limit=8),
-                    _format_totals_tr(pressure_row["net_totals"], empty_text="0,00 TL", compact_limit=8),
-                    f"{pressure_row['record_count']} kayıt",
-                ]
-            )
-
-        return rows
-
-    def _management_due_pdf_rows(self, snapshot: dict[str, Any]) -> list[list[str]]:
-        rows: list[list[str]] = []
-
-        due_rows = [
-            row
-            for row in snapshot["range_30"].rows
-            if str(row.status_group or "").upper() in {"PENDING", "PROBLEM"}
-        ][:14]
-
-        for row in due_rows:
-            rows.append(
-                [
-                    row.due_date.strftime("%d.%m.%Y"),
-                    row.check_type_text,
-                    str(row.party_name or "-")[:42],
-                    str(row.check_number or "-")[:22],
-                    f"{_format_decimal_tr(row.amount)} {row.currency_code}",
-                    row.status_text,
-                ]
-            )
-
-        return rows
-
-    def _management_risk_party_pdf_rows(self, snapshot: dict[str, Any]) -> list[list[str]]:
-        rows: list[list[str]] = []
-
-        for party_summary in snapshot["risk"].summary.party_summaries[:10]:
-            rows.append(
-                [
-                    str(party_summary.party_name or "-")[:55],
-                    f"{party_summary.record_count} kayıt",
-                    _format_totals_tr(party_summary.totals, empty_text="0,00 TL", compact_limit=8),
-                ]
-            )
-
-        return rows
 
     def _create_quick_due_report_pdf(self, *, start_date: date, end_date: date, file_label: str) -> None:
         report_filter = CheckDueReportFilter(
