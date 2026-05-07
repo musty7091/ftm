@@ -5,7 +5,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.bank import BankAccount
+from app.models.bank import Bank, BankAccount
 from app.models.business_partner import BusinessPartner
 from app.models.check import IssuedCheck, ReceivedCheck, ReceivedCheckMovement
 from app.models.enums import (
@@ -75,6 +75,74 @@ def _validate_discount_rate(value: object, field_name: str = "İskonto oranı") 
 def _validate_due_date(*, start_date: date, due_date: date, start_field_name: str) -> None:
     if due_date < start_date:
         raise CheckServiceError(f"Vade tarihi, {start_field_name} tarihinden önce olamaz.")
+
+
+def _format_decimal_tr_for_message(value: Any) -> str:
+    try:
+        amount = Decimal(str(value))
+    except Exception:
+        amount = Decimal("0.00")
+
+    formatted = f"{amount:,.2f}"
+    return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _format_currency_amount_for_message(value: Any, currency_code: Any) -> str:
+    normalized_currency_code = (
+        currency_code.value
+        if hasattr(currency_code, "value")
+        else str(currency_code or "")
+    ).strip().upper()
+
+    return f"{_format_decimal_tr_for_message(value)} {normalized_currency_code}"
+
+
+def _active_total_balance_for_currency(
+    session: Session,
+    *,
+    currency_code: CurrencyCode | str,
+) -> tuple[Decimal, int]:
+    normalized_currency_code = (
+        currency_code.value
+        if hasattr(currency_code, "value")
+        else str(currency_code or "")
+    ).strip().upper()
+
+    if not normalized_currency_code:
+        return Decimal("0.00"), 0
+
+    accounts_statement = (
+        select(BankAccount, Bank)
+        .join(Bank, BankAccount.bank_id == Bank.id)
+        .where(
+            BankAccount.is_active.is_(True),
+            Bank.is_active.is_(True),
+        )
+        .order_by(Bank.name.asc(), BankAccount.account_name.asc())
+    )
+
+    total_balance = Decimal("0.00")
+    account_count = 0
+
+    for active_account, _bank in session.execute(accounts_statement).all():
+        account_currency_code = (
+            active_account.currency_code.value
+            if hasattr(active_account.currency_code, "value")
+            else str(active_account.currency_code or "")
+        ).strip().upper()
+
+        if account_currency_code != normalized_currency_code:
+            continue
+
+        balance_summary = get_bank_account_balance_summary(
+            session,
+            bank_account_id=active_account.id,
+        )
+
+        total_balance += money(balance_summary["current_balance"], field_name="Aynı para birimi toplam bakiye")
+        account_count += 1
+
+    return total_balance, account_count
 
 
 def _require_permission_if_user_given(
@@ -671,10 +739,37 @@ def pay_issued_check(
     current_balance = balance_summary["current_balance"]
 
     if current_balance < check.amount:
+        same_currency_total_balance, same_currency_account_count = _active_total_balance_for_currency(
+            session,
+            currency_code=bank_account.currency_code,
+        )
+        other_same_currency_balance = same_currency_total_balance - current_balance
+
+        if other_same_currency_balance < Decimal("0.00"):
+            other_same_currency_balance = Decimal("0.00")
+
+        if other_same_currency_balance > Decimal("0.00"):
+            liquidity_note = (
+                f"Aynı para birimindeki diğer aktif hesaplarda toplam "
+                f"{_format_currency_amount_for_message(other_same_currency_balance, bank_account.currency_code)} görünüyor. "
+                f"Genel Bakış ekranındaki {bank_account.currency_code.value} toplamı tüm aktif {bank_account.currency_code.value} hesaplarını gösterir. "
+                "Bu çek ise bağlı olduğu banka hesabından ödenir. "
+                "Ödeme yapmadan önce ilgili hesaba transfer yapılmalıdır."
+            )
+        else:
+            liquidity_note = (
+                f"Aynı para birimindeki toplam aktif banka bakiyesi: "
+                f"{_format_currency_amount_for_message(same_currency_total_balance, bank_account.currency_code)} "
+                f"({same_currency_account_count} aktif hesap). "
+                "Bu tutar da çek ödemesi için yeterli görünmüyor."
+            )
+
         raise CheckServiceError(
-            f"Çekin ödenmesi için hesap bakiyesi yetersiz. "
-            f"Mevcut bakiye: {current_balance} {bank_account.currency_code.value}, "
-            f"Çek tutarı: {check.amount} {bank_account.currency_code.value}"
+            "Çekin ödenmesi için çekin bağlı olduğu banka hesabı bakiyesi yetersiz.\n\n"
+            f"Çekin bağlı olduğu hesap: {bank_account.account_name}\n"
+            f"Bu hesaptaki bakiye: {_format_currency_amount_for_message(current_balance, bank_account.currency_code)}\n"
+            f"Çek tutarı: {_format_currency_amount_for_message(check.amount, bank_account.currency_code)}\n\n"
+            f"{liquidity_note}"
         )
 
     cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no

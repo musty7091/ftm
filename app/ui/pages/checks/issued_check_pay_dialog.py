@@ -43,12 +43,23 @@ class PayableIssuedCheckOption:
     account_name: str
     currency_code: str
     current_balance: Decimal
+    same_currency_total_balance: Decimal
+    same_currency_account_count: int
     check_number: str
     amount: Decimal
     issue_date: date
     due_date: date
     status: str
     reference_no: str | None
+
+    @property
+    def same_currency_other_accounts_balance(self) -> Decimal:
+        other_balance = self.same_currency_total_balance - self.current_balance
+
+        if other_balance < Decimal("0.00"):
+            return Decimal("0.00")
+
+        return other_balance
 
 
 def _format_decimal_tr(value: Any) -> str:
@@ -95,6 +106,54 @@ def _issued_status_text(status: str) -> str:
 
 def _qdate_to_date(qdate: QDate) -> date:
     return date(qdate.year(), qdate.month(), qdate.day())
+
+
+def _bank_account_currency_value(bank_account: BankAccount) -> str:
+    return (
+        bank_account.currency_code.value
+        if hasattr(bank_account.currency_code, "value")
+        else str(bank_account.currency_code)
+    )
+
+
+def _calculate_active_currency_total_balance(
+    session: Any,
+    *,
+    currency_code: str,
+) -> tuple[Decimal, int]:
+    normalized_currency_code = str(currency_code or "").strip().upper()
+
+    if not normalized_currency_code:
+        return Decimal("0.00"), 0
+
+    accounts_statement = (
+        select(BankAccount, Bank)
+        .join(Bank, BankAccount.bank_id == Bank.id)
+        .where(
+            BankAccount.is_active.is_(True),
+            Bank.is_active.is_(True),
+        )
+        .order_by(Bank.name.asc(), BankAccount.account_name.asc())
+    )
+
+    total_balance = Decimal("0.00")
+    account_count = 0
+
+    for bank_account, _bank in session.execute(accounts_statement).all():
+        account_currency_code = _bank_account_currency_value(bank_account).strip().upper()
+
+        if account_currency_code != normalized_currency_code:
+            continue
+
+        balance_summary = get_bank_account_balance_summary(
+            session,
+            bank_account_id=bank_account.id,
+        )
+
+        total_balance += Decimal(str(balance_summary["current_balance"]))
+        account_count += 1
+
+    return total_balance, account_count
 
 
 class IssuedCheckPayDialog(QDialog):
@@ -296,10 +355,11 @@ class IssuedCheckPayDialog(QDialog):
                     bank_account_id=bank_account.id,
                 )
 
-                currency_code = (
-                    bank_account.currency_code.value
-                    if hasattr(bank_account.currency_code, "value")
-                    else str(bank_account.currency_code)
+                currency_code = _bank_account_currency_value(bank_account)
+
+                same_currency_total_balance, same_currency_account_count = _calculate_active_currency_total_balance(
+                    session,
+                    currency_code=currency_code,
                 )
 
                 status_value = (
@@ -316,6 +376,8 @@ class IssuedCheckPayDialog(QDialog):
                         account_name=bank_account.account_name,
                         currency_code=currency_code,
                         current_balance=Decimal(str(balance_summary["current_balance"])),
+                        same_currency_total_balance=same_currency_total_balance,
+                        same_currency_account_count=same_currency_account_count,
                         check_number=issued_check.check_number,
                         amount=Decimal(str(issued_check.amount)),
                         issue_date=issued_check.issue_date,
@@ -453,7 +515,8 @@ class IssuedCheckPayDialog(QDialog):
                     f"Vade: {payable_check.due_date.strftime('%d.%m.%Y')}",
                     f"Tutar: {_format_currency_amount(payable_check.amount, payable_check.currency_code)}",
                     f"Banka / Hesap: {payable_check.bank_name} / {payable_check.account_name}",
-                    f"Güncel Bakiye: {_format_currency_amount(payable_check.current_balance, payable_check.currency_code)}",
+                    f"Çekin Bağlı Olduğu Hesap Bakiyesi: {_format_currency_amount(payable_check.current_balance, payable_check.currency_code)}",
+                    f"Aynı Para Birimindeki Toplam Aktif Banka Bakiyesi: {_format_currency_amount(payable_check.same_currency_total_balance, payable_check.currency_code)}",
                 ]
 
                 if payable_check.reference_no:
@@ -522,22 +585,37 @@ class IssuedCheckPayDialog(QDialog):
 
         self.info_label.setText(
             f"Tedarikçi: {selected_check.supplier_name}\n"
-            f"Banka / Hesap: {selected_check.bank_name} / {selected_check.account_name}\n"
+            f"Çekin bağlı olduğu banka / hesap: {selected_check.bank_name} / {selected_check.account_name}\n"
             f"Durum: {_issued_status_text(selected_check.status)}\n"
             f"Keşide: {selected_check.issue_date.strftime('%d.%m.%Y')} | "
             f"Vade: {selected_check.due_date.strftime('%d.%m.%Y')}\n"
             f"Çek tutarı: {_format_currency_amount(selected_check.amount, selected_check.currency_code)}\n"
-            f"Güncel hesap bakiyesi: {_format_currency_amount(selected_check.current_balance, selected_check.currency_code)}"
+            f"Bu hesaptaki bakiye: {_format_currency_amount(selected_check.current_balance, selected_check.currency_code)}\n"
+            f"Aynı para birimindeki toplam aktif banka bakiyesi: "
+            f"{_format_currency_amount(selected_check.same_currency_total_balance, selected_check.currency_code)} "
+            f"({selected_check.same_currency_account_count} aktif hesap)"
         )
 
         if selected_check.current_balance < selected_check.amount:
-            self.balance_warning_label.setText(
-                "Uyarı: Seçili banka hesabının güncel bakiyesi çek tutarını karşılamıyor. "
-                "Bu durumda servis katmanı ödeme işlemini reddedecektir."
-            )
+            if selected_check.same_currency_other_accounts_balance > Decimal("0.00"):
+                self.balance_warning_label.setText(
+                    "Uyarı: Bu çekin bağlı olduğu banka hesabının bakiyesi çek tutarını karşılamıyor. "
+                    "Genel Bakış ekranında görünen toplam bakiye, aynı para birimindeki tüm aktif hesapların toplamıdır. "
+                    "Bu çek yalnızca bağlı olduğu hesaptan ödenir. "
+                    f"Diğer aktif {selected_check.currency_code} hesaplarında toplam "
+                    f"{_format_currency_amount(selected_check.same_currency_other_accounts_balance, selected_check.currency_code)} görünüyor. "
+                    "Ödeme yapmadan önce ilgili hesaba transfer yapılmalıdır."
+                )
+            else:
+                self.balance_warning_label.setText(
+                    "Uyarı: Bu çekin bağlı olduğu banka hesabının bakiyesi çek tutarını karşılamıyor. "
+                    "Aynı para birimindeki diğer aktif hesaplarda da ek bakiye görünmüyor. "
+                    "Bu durumda ödeme işlemi reddedilecektir."
+                )
         else:
             self.balance_warning_label.setText(
-                "Bakiye kontrolü olumlu görünüyor. Son karar yine servis katmanındaki gerçek bakiyeye göre verilir."
+                "Bakiye kontrolü olumlu görünüyor. Bu çek, bağlı olduğu banka hesabındaki bakiye ile ödenebilir. "
+                "Son karar yine servis katmanındaki gerçek bakiyeye göre verilir."
             )
 
         self.reference_no_combo.clear()
