@@ -1231,20 +1231,8 @@ class BusinessPartnersPage(QWidget):
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
-
-        title = QLabel("Müşteri / Tedarikçi Kartları")
-        title.setObjectName("SectionTitle")
-
-        subtitle = QLabel(
-            "Çeklerde kullanılan taraf kartlarını yönet. Bu ekran cari borç/alacak defteri değil, çek muhatabı takip merkezidir."
-        )
-        subtitle.setObjectName("MutedText")
-        subtitle.setWordWrap(True)
-
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
+        # Üst sayfa başlığı ana pencere tarafından gösteriliyor.
+        # Bu bölümde tekrar başlık yerine yalnızca bu sayfaya ait işlem butonları tutulur.
 
         self.new_button = QPushButton("Yeni Kart")
         self.new_button.setObjectName("ActionPrimaryButton")
@@ -1266,17 +1254,11 @@ class BusinessPartnersPage(QWidget):
         self.check_details_button.setMinimumHeight(38)
         self.check_details_button.clicked.connect(self._open_selected_partner_check_details)
 
-        self.refresh_button = QPushButton("Yenile")
-        self.refresh_button.setObjectName("ActionSecondaryButton")
-        self.refresh_button.setMinimumHeight(38)
-        self.refresh_button.clicked.connect(lambda: self._reload_data(reset_page=False))
-
-        top_row.addLayout(title_box, 1)
+        top_row.addStretch(1)
         top_row.addWidget(self.new_button)
         top_row.addWidget(self.edit_button)
         top_row.addWidget(self.toggle_active_button)
         top_row.addWidget(self.check_details_button)
-        top_row.addWidget(self.refresh_button)
 
         filter_inner = QFrame()
         filter_inner.setObjectName("FilterPanelAccent")
