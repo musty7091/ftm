@@ -193,8 +193,9 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
 
         subtitle = QLabel(
             "Portföyde, bankaya verilmiş veya tahsilde olan birden fazla alınan çeki aynı iskonto paketine ekleyebilirsin. "
-            "Her çek için vadeye kalan gün, faiz kesintisi, komisyon ve net tutar ayrı hesaplanır. "
-            "Banka hesabına tek net giriş oluşur."
+            "Farklı keşideci bankalara ait çekler aynı iskonto paketinde kullanılabilir; sistem yalnızca seçilen iskonto hesabının "
+            "para birimi ile çek para birimlerinin aynı olmasını zorunlu tutar. Her çek için vadeye kalan gün, faiz kesintisi, "
+            "komisyon ve net tutar ayrı hesaplanır. Seçilen banka hesabına tek net giriş oluşur."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -252,7 +253,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         self.search_input.setPlaceholderText("Müşteri / çek no / banka / referans ara")
         self.search_input.textChanged.connect(self._apply_filters)
 
-        top_form_layout.addWidget(self._build_field_label("Banka hesabı"), 0, 0)
+        top_form_layout.addWidget(self._build_field_label("İskonto hesabı"), 0, 0)
         top_form_layout.addWidget(self._build_field_label("İskonto tarihi"), 0, 1)
         top_form_layout.addWidget(self._build_field_label("Yıllık faiz (%)"), 0, 2)
         top_form_layout.addWidget(self._build_field_label("Komisyon (%)"), 0, 3)
@@ -542,7 +543,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
                 self.bank_account_combo.addItem("Aktif banka hesabı yok", None)
                 return
 
-            self.bank_account_combo.addItem("Banka hesabı seçiniz", None)
+            self.bank_account_combo.addItem("İskonto hesabı seçiniz", None)
 
             for bank_account in self.bank_accounts:
                 self.bank_account_combo.addItem(
@@ -788,6 +789,13 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
     def _update_results_info_label(self, *, filtered_count: int, eligible_count: int) -> None:
         total_count = len(self.discountable_checks)
         selected_bank_account = self._selected_bank_account()
+        eligible_drawer_bank_count = len(
+            {
+                str(discountable_check.drawer_bank_name or "").strip().lower()
+                for discountable_check in self._eligible_checks_for_selected_bank_and_date()
+                if str(discountable_check.drawer_bank_name or "").strip()
+            }
+        )
 
         if total_count == 0:
             self.results_info_label.setText("İskontoya verilebilecek açık alınan çek kaydı bulunamadı.")
@@ -796,14 +804,14 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         if selected_bank_account is None:
             self.results_info_label.setText(
                 f"Toplam {total_count} uygun çek var. Liste karışık para birimi gösterebilir. "
-                "İşlem için önce banka hesabı seçmelisin."
+                "İşlem için önce iskonto hesabı seçmelisin. Farklı keşideci bankalara ait çekler aynı pakete eklenebilir."
             )
             return
 
         if eligible_count == 0:
             self.results_info_label.setText(
-                f"Seçilen banka hesabının para birimi {selected_bank_account.currency_code}. "
-                "Bu para biriminde ve seçili iskonto tarihine göre uygun çek bulunamadı."
+                f"Seçilen iskonto hesabının para birimi {selected_bank_account.currency_code}. "
+                "Bu para biriminde ve seçili iskonto tarihine göre uygun çek bulunamadı. Keşideci banka filtresi uygulanmaz."
             )
             return
 
@@ -813,9 +821,16 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
             )
             return
 
+        drawer_bank_text = (
+            f" {eligible_drawer_bank_count} farklı keşideci banka var."
+            if eligible_drawer_bank_count > 0
+            else ""
+        )
+
         self.results_info_label.setText(
-            f"Seçilen banka hesabı para birimi: {selected_bank_account.currency_code}. "
+            f"Seçilen iskonto hesabı para birimi: {selected_bank_account.currency_code}. "
             f"{eligible_count} uygun çek içinden {filtered_count} kayıt listeleniyor."
+            f"{drawer_bank_text} Farklı keşideci bankalara ait çekler aynı iskonto paketine eklenebilir."
         )
 
     def _update_bank_account_info(self) -> None:
@@ -823,13 +838,15 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
 
         if selected_bank_account is None:
             self.bank_account_info_label.setText(
-                "Çoklu iskonto paketinde seçilen çeklerin para birimi ile banka hesabı para birimi aynı olmalıdır."
+                "Çoklu iskonto paketinde seçilen çeklerin para birimi ile iskonto hesabı para birimi aynı olmalıdır. "
+                "Keşideci banka kısıtı yoktur."
             )
             return
 
         self.bank_account_info_label.setText(
-            f"Seçili banka hesabı: {selected_bank_account.bank_name} / "
-            f"{selected_bank_account.account_name} / {selected_bank_account.currency_code}"
+            f"Seçili iskonto hesabı: {selected_bank_account.bank_name} / "
+            f"{selected_bank_account.account_name} / {selected_bank_account.currency_code}. "
+            "Bu hesaba aynı para birimindeki farklı keşideci bankalara ait çekler birlikte kırdırılabilir."
         )
 
     def _table_item_changed(self, item: QTableWidgetItem) -> None:
@@ -1003,7 +1020,7 @@ class ReceivedCheckDiscountBatchDialog(QDialog):
         bank_account_id = self._selected_bank_account_id()
 
         if bank_account_id is None:
-            raise ValueError("Banka hesabı seçilmelidir.")
+            raise ValueError("İskonto hesabı seçilmelidir.")
 
         selected_check_inputs = self._selected_check_inputs()
 

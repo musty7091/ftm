@@ -271,6 +271,8 @@ class IssuedCheckPayDialog(QDialog):
         self.balance_warning_label = QLabel("")
         self.balance_warning_label.setObjectName("MutedText")
         self.balance_warning_label.setWordWrap(True)
+        self.balance_warning_label.setMinimumHeight(48)
+        self._set_balance_warning_style(level="neutral")
         form_layout.addRow("", self.balance_warning_label)
 
         self.payment_date_edit = QDateEdit()
@@ -573,12 +575,63 @@ class IssuedCheckPayDialog(QDialog):
 
         return self.check_lookup.get(normalized_issued_check_id)
 
+    def _set_balance_warning_style(self, *, level: str) -> None:
+        normalized_level = str(level or "").strip().lower()
+
+        if normalized_level == "danger":
+            self.balance_warning_label.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #3f1d1d;
+                    color: #fecaca;
+                    border: 1px solid #ef4444;
+                    border-radius: 10px;
+                    padding: 10px 12px;
+                    font-size: 12px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                }
+                """
+            )
+            return
+
+        if normalized_level == "ok":
+            self.balance_warning_label.setStyleSheet(
+                """
+                QLabel {
+                    background-color: #052e2b;
+                    color: #bbf7d0;
+                    border: 1px solid #0f766e;
+                    border-radius: 10px;
+                    padding: 10px 12px;
+                    font-size: 12px;
+                    font-weight: 700;
+                    line-height: 1.35;
+                }
+                """
+            )
+            return
+
+        self.balance_warning_label.setStyleSheet(
+            """
+            QLabel {
+                background-color: transparent;
+                color: #94a3b8;
+                border: none;
+                padding: 0px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            """
+        )
+
     def _update_selected_check_info(self) -> None:
         selected_check = self._selected_check_from_table()
 
         if selected_check is None:
             self.info_label.setText("Ödeme için önce listeden bir çek seçmelisin.")
             self.balance_warning_label.setText("")
+            self._set_balance_warning_style(level="neutral")
             self.reference_no_combo.clear()
             self.save_button.setEnabled(False)
             return
@@ -597,6 +650,8 @@ class IssuedCheckPayDialog(QDialog):
         )
 
         if selected_check.current_balance < selected_check.amount:
+            self._set_balance_warning_style(level="danger")
+
             if selected_check.same_currency_other_accounts_balance > Decimal("0.00"):
                 self.balance_warning_label.setText(
                     "Uyarı: Bu çekin bağlı olduğu banka hesabının bakiyesi çek tutarını karşılamıyor. "
@@ -613,6 +668,7 @@ class IssuedCheckPayDialog(QDialog):
                     "Bu durumda ödeme işlemi reddedilecektir."
                 )
         else:
+            self._set_balance_warning_style(level="ok")
             self.balance_warning_label.setText(
                 "Bakiye kontrolü olumlu görünüyor. Bu çek, bağlı olduğu banka hesabındaki bakiye ile ödenebilir. "
                 "Son karar yine servis katmanındaki gerçek bakiyeye göre verilir."
