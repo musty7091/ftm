@@ -1,4 +1,5 @@
 ﻿from dataclasses import dataclass
+from functools import cmp_to_key
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -6,6 +7,8 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractScrollArea,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -17,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTabWidget,
     QTableWidgetItem,
@@ -62,6 +66,16 @@ PARTNER_TYPE_TEXTS = {
     "BOTH": "Müşteri & Tedarikçi",
     "OTHER": "Diğer",
 }
+
+POSITION_EMPTY_TITLE = "Seçili Muhatap: Henüz seçim yok"
+POSITION_EMPTY_SUBTITLE = "Bir müşteri / tedarikçi seçildiğinde çek pozisyonu burada görünür."
+POSITION_EMPTY_CARD_VALUE = "—"
+POSITION_EMPTY_CARD_HINT = "Seçim bekleniyor"
+
+PROFILE_EMPTY_NAME = "Muhatap seçilmedi"
+PROFILE_EMPTY_META = "Tablodan bir müşteri / tedarikçi seçildiğinde mini profil burada görünür."
+PROFILE_EMPTY_RISK_TITLE = "Seçim bekleniyor"
+PROFILE_EMPTY_RISK_DETAIL = "Firma kimliği ve çek pozisyonu seçime göre özetlenir."
 
 
 RECEIVED_OPEN_STATUSES = {
@@ -247,6 +261,100 @@ QFrame#PositionMiniCard {
     border-radius: 12px;
 }
 
+QFrame#Card[summaryFilter="true"] {
+    background-color: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(59, 130, 246, 0.22);
+    border-radius: 14px;
+}
+
+QFrame#Card[summaryFilter="true"]:hover {
+    background-color: rgba(30, 41, 59, 0.92);
+    border: 1px solid rgba(96, 165, 250, 0.45);
+}
+
+QFrame#Card[summaryFilter="true"][summaryFilterActive="true"] {
+    background-color: rgba(37, 99, 235, 0.20);
+    border: 1px solid rgba(96, 165, 250, 0.72);
+}
+
+QFrame#PartnerProfileCard {
+    background-color: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 14px;
+}
+
+QFrame#PartnerProfileField {
+    background-color: rgba(2, 6, 23, 0.24);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 10px;
+}
+
+QFrame#PartnerRiskBadge {
+    background-color: rgba(15, 23, 42, 0.80);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 12px;
+}
+
+QFrame#PartnerRiskBadge[profileRisk="empty"] {
+    background-color: rgba(15, 23, 42, 0.70);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+QFrame#PartnerRiskBadge[profileRisk="success"] {
+    background-color: rgba(6, 78, 59, 0.24);
+    border: 1px solid rgba(16, 185, 129, 0.42);
+}
+
+QFrame#PartnerRiskBadge[profileRisk="warning"] {
+    background-color: rgba(120, 53, 15, 0.26);
+    border: 1px solid rgba(245, 158, 11, 0.46);
+}
+
+QFrame#PartnerRiskBadge[profileRisk="danger"] {
+    background-color: rgba(127, 29, 29, 0.28);
+    border: 1px solid rgba(248, 113, 113, 0.50);
+}
+
+QFrame#PartnerRiskBadge[profileRisk="passive"] {
+    background-color: rgba(51, 65, 85, 0.32);
+    border: 1px solid rgba(148, 163, 184, 0.34);
+}
+
+QLabel#PartnerProfileName {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+QLabel#PartnerProfileMeta {
+    color: #93c5fd;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#PartnerProfileFieldTitle {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+QLabel#PartnerProfileFieldValue {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#PartnerRiskTitle {
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 900;
+}
+
+QLabel#PartnerRiskDetail {
+    color: #cbd5e1;
+    font-size: 11px;
+}
+
 QLabel#PositionTitle {
     color: #f8fafc;
     font-size: 15px;
@@ -359,11 +467,45 @@ def _format_currency_totals(currency_totals: dict[str, Decimal]) -> str:
     return " / ".join(formatted_parts)
 
 
+def _format_currency_totals_multiline(currency_totals: dict[str, Decimal]) -> str:
+    if not currency_totals:
+        return "-"
+
+    formatted_parts: list[str] = []
+
+    for currency_code in sorted(currency_totals):
+        amount = currency_totals[currency_code]
+        formatted_parts.append(f"{currency_code}: {_format_decimal_tr(Decimal(str(amount)))}")
+
+    return "\n".join(formatted_parts)
+
+
+def _format_currency_totals_compact(currency_totals: dict[str, Decimal]) -> str:
+    if not currency_totals:
+        return "-"
+
+    if len(currency_totals) == 1:
+        return _format_currency_totals(currency_totals)
+
+    primary_currency_code = "TRY" if "TRY" in currency_totals else sorted(currency_totals)[0]
+    primary_amount = currency_totals[primary_currency_code]
+    other_currency_count = len(currency_totals) - 1
+
+    return f"{_format_currency_amount(primary_amount, primary_currency_code)} + {other_currency_count} para birimi"
+
+
 def _format_position_bucket(bucket: PartnerPositionBucket) -> tuple[str, str]:
     if bucket.count <= 0:
         return "0 kayıt", "-"
 
-    return f"{bucket.count} kayıt", _format_currency_totals(bucket.currency_totals)
+    return f"{bucket.count} kayıt", _format_currency_totals_compact(bucket.currency_totals)
+
+
+def _format_position_bucket_tooltip(bucket: PartnerPositionBucket) -> str:
+    if bucket.count <= 0:
+        return "Kayıt yok"
+
+    return f"{bucket.count} kayıt\n{_format_currency_totals_multiline(bucket.currency_totals)}"
 
 def _received_status_text(value: Any) -> str:
     status = _enum_value(value)
@@ -1080,6 +1222,8 @@ class BusinessPartnersPage(QWidget):
         self.partner_rows: list[BusinessPartnerRow] = []
         self.filtered_rows: list[BusinessPartnerRow] = []
         self.current_page_index = 0
+        self.sort_column_index: int | None = None
+        self.sort_order = Qt.AscendingOrder
 
         self.setObjectName("BusinessPartnersPage")
         self.setStyleSheet(PAGE_STYLE)
@@ -1243,6 +1387,12 @@ class BusinessPartnersPage(QWidget):
         self.both_count_card = self._build_summary_card("HER İKİSİ", "0", "İki yönde kullanılanlar")
         self.other_count_card = self._build_summary_card("DİĞER", "0", "Tek seferlik / nadir")
 
+        self._wire_summary_filter_card(self.total_count_card, "ALL", "Tüm müşteri / tedarikçi kartlarını göster")
+        self._wire_summary_filter_card(self.customer_count_card, BusinessPartnerType.CUSTOMER.value, "Sadece müşteri kartlarını listele")
+        self._wire_summary_filter_card(self.supplier_count_card, BusinessPartnerType.SUPPLIER.value, "Sadece tedarikçi kartlarını listele")
+        self._wire_summary_filter_card(self.both_count_card, BusinessPartnerType.BOTH.value, "Müşteri & tedarikçi olan kartları listele")
+        self._wire_summary_filter_card(self.other_count_card, BusinessPartnerType.OTHER.value, "Diğer tipindeki kartları listele")
+
         layout.addWidget(self.total_count_card, 0, 0)
         layout.addWidget(self.customer_count_card, 0, 1)
         layout.addWidget(self.supplier_count_card, 0, 2)
@@ -1254,6 +1404,9 @@ class BusinessPartnersPage(QWidget):
     def _build_summary_card(self, title_text: str, value_text: str, hint_text: str) -> QFrame:
         card = QFrame()
         card.setObjectName("Card")
+        card.setProperty("summaryFilter", "true")
+        card.setProperty("summaryFilterActive", "false")
+        card.setCursor(Qt.PointingHandCursor)
         card.setMinimumHeight(84)
         card.setMaximumHeight(92)
 
@@ -1281,6 +1434,51 @@ class BusinessPartnersPage(QWidget):
         card.hint_label = hint
 
         return card
+
+    def _wire_summary_filter_card(self, card: QFrame, filter_value: str, tooltip_text: str) -> None:
+        card.setToolTip(tooltip_text)
+
+        def handle_click(event: Any, selected_filter_value: str = filter_value) -> None:
+            if event is not None and event.button() != Qt.LeftButton:
+                return
+
+            self._set_type_filter_from_summary(selected_filter_value)
+
+        card.mousePressEvent = handle_click
+
+    def _set_type_filter_from_summary(self, filter_value: str) -> None:
+        target_index = -1
+
+        for index in range(self.type_filter_combo.count()):
+            if str(self.type_filter_combo.itemData(index) or "ALL") == filter_value:
+                target_index = index
+                break
+
+        if target_index < 0:
+            return
+
+        if self.type_filter_combo.currentIndex() == target_index:
+            self._filter_changed()
+            return
+
+        self.type_filter_combo.setCurrentIndex(target_index)
+
+    def _update_summary_filter_card_styles(self) -> None:
+        selected_type = str(self.type_filter_combo.currentData() or "ALL")
+
+        filter_card_pairs = [
+            ("ALL", self.total_count_card),
+            (BusinessPartnerType.CUSTOMER.value, self.customer_count_card),
+            (BusinessPartnerType.SUPPLIER.value, self.supplier_count_card),
+            (BusinessPartnerType.BOTH.value, self.both_count_card),
+            (BusinessPartnerType.OTHER.value, self.other_count_card),
+        ]
+
+        for filter_value, card in filter_card_pairs:
+            card.setProperty("summaryFilterActive", "true" if selected_type == filter_value else "false")
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
 
     def _build_table_card(self) -> QWidget:
         card = QFrame()
@@ -1319,8 +1517,14 @@ class BusinessPartnersPage(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(32)
         self.table.verticalHeader().setMinimumSectionSize(28)
         self.table.setMinimumHeight(300)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table.itemSelectionChanged.connect(self._selection_changed)
-        self.table.itemDoubleClicked.connect(lambda item: self._open_edit_dialog())
+        self.table.itemDoubleClicked.connect(self._open_check_details_from_table_double_click)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -1333,6 +1537,9 @@ class BusinessPartnersPage(QWidget):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        header.sectionClicked.connect(self._table_header_clicked)
 
         position_panel = self._build_position_panel()
 
@@ -1370,7 +1577,7 @@ class BusinessPartnersPage(QWidget):
     def _build_position_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("PositionPanel")
-        panel.setMinimumHeight(132)
+        panel.setMinimumHeight(230)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -1382,10 +1589,10 @@ class BusinessPartnersPage(QWidget):
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
 
-        self.position_title_label = QLabel("Seçili Kart Çek Pozisyonu")
+        self.position_title_label = QLabel(POSITION_EMPTY_TITLE)
         self.position_title_label.setObjectName("PositionTitle")
 
-        self.position_subtitle_label = QLabel("Bir müşteri / tedarikçi seçildiğinde bu alanda çek pozisyonu görünür.")
+        self.position_subtitle_label = QLabel(POSITION_EMPTY_SUBTITLE)
         self.position_subtitle_label.setObjectName("PositionSubtitle")
         self.position_subtitle_label.setWordWrap(True)
 
@@ -1393,6 +1600,8 @@ class BusinessPartnersPage(QWidget):
         title_box.addWidget(self.position_subtitle_label)
 
         header_row.addLayout(title_box, 1)
+
+        profile_panel = self._build_partner_profile_panel()
 
         position_grid = QGridLayout()
         position_grid.setSpacing(8)
@@ -1418,9 +1627,112 @@ class BusinessPartnersPage(QWidget):
         position_grid.addWidget(self.issued_problem_card, 0, 5)
 
         layout.addLayout(header_row)
+        layout.addWidget(profile_panel)
         layout.addLayout(position_grid)
 
         return panel
+
+    def _build_partner_profile_panel(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("PartnerProfileCard")
+        card.setMinimumHeight(88)
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(12)
+
+        identity_box = QVBoxLayout()
+        identity_box.setSpacing(6)
+
+        self.partner_profile_name_label = QLabel(PROFILE_EMPTY_NAME)
+        self.partner_profile_name_label.setObjectName("PartnerProfileName")
+        self.partner_profile_name_label.setWordWrap(False)
+        self.partner_profile_name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self.partner_profile_meta_label = QLabel(PROFILE_EMPTY_META)
+        self.partner_profile_meta_label.setObjectName("PartnerProfileMeta")
+        self.partner_profile_meta_label.setWordWrap(True)
+        self.partner_profile_meta_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        field_grid = QGridLayout()
+        field_grid.setHorizontalSpacing(8)
+        field_grid.setVerticalSpacing(6)
+        field_grid.setColumnStretch(0, 1)
+        field_grid.setColumnStretch(1, 1)
+        field_grid.setColumnStretch(2, 1)
+        field_grid.setColumnStretch(3, 1)
+        field_grid.setColumnStretch(4, 1)
+
+        self.profile_tax_number_card = self._build_profile_field_card("Vergi No / TCKN", "-")
+        self.profile_tax_office_card = self._build_profile_field_card("Vergi Dairesi", "-")
+        self.profile_authorized_person_card = self._build_profile_field_card("Yetkili", "-")
+        self.profile_phone_card = self._build_profile_field_card("Telefon", "-")
+        self.profile_email_card = self._build_profile_field_card("E-posta", "-")
+
+        field_grid.addWidget(self.profile_tax_number_card, 0, 0)
+        field_grid.addWidget(self.profile_tax_office_card, 0, 1)
+        field_grid.addWidget(self.profile_authorized_person_card, 0, 2)
+        field_grid.addWidget(self.profile_phone_card, 0, 3)
+        field_grid.addWidget(self.profile_email_card, 0, 4)
+
+        identity_box.addWidget(self.partner_profile_name_label)
+        identity_box.addWidget(self.partner_profile_meta_label)
+        identity_box.addLayout(field_grid)
+
+        self.partner_profile_risk_card = QFrame()
+        self.partner_profile_risk_card.setObjectName("PartnerRiskBadge")
+        self.partner_profile_risk_card.setProperty("profileRisk", "empty")
+        self.partner_profile_risk_card.setMinimumWidth(230)
+
+        risk_layout = QVBoxLayout(self.partner_profile_risk_card)
+        risk_layout.setContentsMargins(12, 9, 12, 9)
+        risk_layout.setSpacing(4)
+
+        self.partner_profile_risk_title_label = QLabel(PROFILE_EMPTY_RISK_TITLE)
+        self.partner_profile_risk_title_label.setObjectName("PartnerRiskTitle")
+        self.partner_profile_risk_title_label.setWordWrap(True)
+
+        self.partner_profile_risk_detail_label = QLabel(PROFILE_EMPTY_RISK_DETAIL)
+        self.partner_profile_risk_detail_label.setObjectName("PartnerRiskDetail")
+        self.partner_profile_risk_detail_label.setWordWrap(True)
+        self.partner_profile_risk_detail_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        risk_layout.addWidget(self.partner_profile_risk_title_label)
+        risk_layout.addWidget(self.partner_profile_risk_detail_label)
+        risk_layout.addStretch(1)
+
+        layout.addLayout(identity_box, 1)
+        layout.addWidget(self.partner_profile_risk_card)
+
+        self.partner_profile_card = card
+
+        return card
+
+    def _build_profile_field_card(self, title_text: str, value_text: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName("PartnerProfileField")
+        card.setMinimumHeight(46)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(9, 6, 9, 6)
+        layout.setSpacing(2)
+
+        title = QLabel(title_text)
+        title.setObjectName("PartnerProfileFieldTitle")
+        title.setWordWrap(False)
+
+        value = QLabel(value_text)
+        value.setObjectName("PartnerProfileFieldValue")
+        value.setWordWrap(False)
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        layout.addWidget(title)
+        layout.addWidget(value)
+
+        card.title_label = title
+        card.value_label = value
+
+        return card
 
     def _build_position_mini_card(self, title_text: str, value_text: str, hint_text: str) -> QFrame:
         card = QFrame()
@@ -1579,21 +1891,134 @@ class BusinessPartnersPage(QWidget):
             and self._matches_status_filter(row)
         ]
 
-        self.filtered_rows.sort(
-            key=lambda row: (
-                not row.is_active,
-                row.partner_type,
-                row.name.lower(),
-                row.id,
-            )
-        )
+        self._sort_filtered_rows()
 
         self._clamp_current_page()
         self._fill_table(self._current_page_rows())
         self._update_results_info()
         self._update_summary_cards()
+        self._update_summary_filter_card_styles()
         self._update_pagination_controls()
         self._selection_changed()
+
+    def _table_header_clicked(self, logical_index: int) -> None:
+        if logical_index < 0 or logical_index >= self.table.columnCount():
+            return
+
+        if self.sort_column_index == logical_index:
+            self.sort_order = (
+                Qt.DescendingOrder
+                if self.sort_order == Qt.AscendingOrder
+                else Qt.AscendingOrder
+            )
+        else:
+            self.sort_column_index = logical_index
+            self.sort_order = Qt.AscendingOrder
+
+        header = self.table.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(logical_index, self.sort_order)
+
+        self._apply_filters(reset_page=True)
+
+    def _sort_filtered_rows(self) -> None:
+        if self.sort_column_index is None:
+            self.filtered_rows.sort(
+                key=lambda row: (
+                    not row.is_active,
+                    self._partner_type_sort_priority(row.partner_type),
+                    row.name.casefold(),
+                    row.id,
+                )
+            )
+            return
+
+        self.filtered_rows.sort(key=cmp_to_key(self._compare_rows_for_table_sort))
+
+    def _compare_rows_for_table_sort(self, left: BusinessPartnerRow, right: BusinessPartnerRow) -> int:
+        left_empty, left_value = self._sort_value_for_column(left, self.sort_column_index)
+        right_empty, right_value = self._sort_value_for_column(right, self.sort_column_index)
+
+        if left_empty and not right_empty:
+            return 1
+
+        if right_empty and not left_empty:
+            return -1
+
+        comparison_result = self._compare_basic_values(left_value, right_value)
+
+        if self.sort_order == Qt.DescendingOrder:
+            comparison_result = comparison_result * -1
+
+        if comparison_result != 0:
+            return comparison_result
+
+        name_comparison = self._compare_basic_values(left.name.casefold(), right.name.casefold())
+
+        if name_comparison != 0:
+            return name_comparison
+
+        return self._compare_basic_values(left.id, right.id)
+
+    def _sort_value_for_column(self, row: BusinessPartnerRow, column_index: int | None) -> tuple[bool, Any]:
+        if column_index == 0:
+            return False, row.id
+
+        if column_index == 1:
+            return self._sort_text_value(row.name)
+
+        if column_index == 2:
+            return False, self._partner_type_sort_priority(row.partner_type)
+
+        if column_index == 3:
+            return self._sort_text_value(row.tax_number)
+
+        if column_index == 4:
+            return self._sort_text_value(row.tax_office)
+
+        if column_index == 5:
+            return self._sort_text_value(row.authorized_person)
+
+        if column_index == 6:
+            return self._sort_text_value(row.phone)
+
+        if column_index == 7:
+            return self._sort_text_value(row.email)
+
+        if column_index == 8:
+            return False, 0 if row.is_active else 1
+
+        if column_index == 9:
+            return self._sort_text_value(row.notes)
+
+        return self._sort_text_value(row.name)
+
+    def _sort_text_value(self, value: str | None) -> tuple[bool, str]:
+        cleaned_value = str(value or "").strip()
+
+        if not cleaned_value:
+            return True, ""
+
+        return False, cleaned_value.casefold()
+
+    def _partner_type_sort_priority(self, partner_type: str) -> int:
+        priorities = {
+            BusinessPartnerType.CUSTOMER.value: 0,
+            BusinessPartnerType.SUPPLIER.value: 1,
+            BusinessPartnerType.BOTH.value: 2,
+            BusinessPartnerType.OTHER.value: 3,
+        }
+
+        return priorities.get(partner_type, 99)
+
+    def _compare_basic_values(self, left: Any, right: Any) -> int:
+        if left < right:
+            return -1
+
+        if left > right:
+            return 1
+
+        return 0
 
     def _selected_page_size(self) -> int:
         try:
@@ -1777,7 +2202,22 @@ class BusinessPartnersPage(QWidget):
         )
 
     def _selected_partner_id(self) -> int | None:
-        current_row = self.table.currentRow()
+        selection_model = self.table.selectionModel()
+
+        if selection_model is None or not selection_model.hasSelection():
+            return None
+
+        selected_rows = selection_model.selectedRows()
+
+        if selected_rows:
+            current_row = selected_rows[0].row()
+        else:
+            selected_indexes = selection_model.selectedIndexes()
+
+            if not selected_indexes:
+                return None
+
+            current_row = selected_indexes[0].row()
 
         if current_row < 0:
             return None
@@ -1808,6 +2248,13 @@ class BusinessPartnersPage(QWidget):
                 return row
 
         return None
+
+    def _open_check_details_from_table_double_click(self, item: QTableWidgetItem) -> None:
+        if item is None:
+            return
+
+        self.table.selectRow(item.row())
+        self._open_selected_partner_check_details()
 
     def _selection_changed(self) -> None:
         selected_row = self._selected_partner_row()
@@ -1851,8 +2298,9 @@ class BusinessPartnersPage(QWidget):
         dialog.exec()
 
     def _clear_position_summary(self) -> None:
-        self.position_title_label.setText("Seçili Kart Çek Pozisyonu")
-        self.position_subtitle_label.setText("Bir müşteri / tedarikçi seçildiğinde bu alanda çek pozisyonu görünür.")
+        self.position_title_label.setText(POSITION_EMPTY_TITLE)
+        self.position_subtitle_label.setText(POSITION_EMPTY_SUBTITLE)
+        self._clear_partner_profile()
 
         for card in [
             self.received_open_card,
@@ -1862,8 +2310,142 @@ class BusinessPartnersPage(QWidget):
             self.issued_closed_card,
             self.issued_problem_card,
         ]:
-            card.value_label.setText("0 kayıt")
-            card.hint_label.setText("-")
+            card.value_label.setText(POSITION_EMPTY_CARD_VALUE)
+            card.hint_label.setText(POSITION_EMPTY_CARD_HINT)
+            card.setToolTip(POSITION_EMPTY_SUBTITLE)
+            card.value_label.setToolTip(POSITION_EMPTY_SUBTITLE)
+            card.hint_label.setToolTip(POSITION_EMPTY_SUBTITLE)
+
+    def _clear_partner_profile(self) -> None:
+        self.partner_profile_name_label.setText(PROFILE_EMPTY_NAME)
+        self.partner_profile_meta_label.setText(PROFILE_EMPTY_META)
+
+        for card in [
+            self.profile_tax_number_card,
+            self.profile_tax_office_card,
+            self.profile_authorized_person_card,
+            self.profile_phone_card,
+            self.profile_email_card,
+        ]:
+            card.value_label.setText("-")
+            card.setToolTip(PROFILE_EMPTY_META)
+            card.value_label.setToolTip(PROFILE_EMPTY_META)
+
+        self.partner_profile_risk_title_label.setText(PROFILE_EMPTY_RISK_TITLE)
+        self.partner_profile_risk_detail_label.setText(PROFILE_EMPTY_RISK_DETAIL)
+        self.partner_profile_risk_card.setToolTip(PROFILE_EMPTY_RISK_DETAIL)
+        self.partner_profile_risk_card.setProperty("profileRisk", "empty")
+        self._refresh_dynamic_style(self.partner_profile_risk_card)
+
+        self.partner_profile_card.setToolTip(PROFILE_EMPTY_META)
+
+    def _update_partner_profile(
+        self,
+        selected_row: BusinessPartnerRow,
+        position: dict[str, PartnerPositionBucket],
+    ) -> None:
+        partner_type_text = business_partner_type_text(selected_row.partner_type)
+        partner_status_text = "Aktif" if selected_row.is_active else "Pasif"
+
+        self.partner_profile_name_label.setText(selected_row.name)
+        self.partner_profile_meta_label.setText(
+            f"{partner_type_text} • {partner_status_text} • Kart ID: {selected_row.id}"
+        )
+
+        self._set_profile_field(self.profile_tax_number_card, selected_row.tax_number)
+        self._set_profile_field(self.profile_tax_office_card, selected_row.tax_office)
+        self._set_profile_field(self.profile_authorized_person_card, selected_row.authorized_person)
+        self._set_profile_field(self.profile_phone_card, selected_row.phone)
+        self._set_profile_field(self.profile_email_card, selected_row.email)
+
+        risk_level, risk_title, risk_detail = self._partner_profile_risk_state(selected_row, position)
+        self.partner_profile_risk_title_label.setText(risk_title)
+        self.partner_profile_risk_detail_label.setText(risk_detail)
+        self.partner_profile_risk_card.setProperty("profileRisk", risk_level)
+        self.partner_profile_risk_card.setToolTip(risk_detail)
+        self._refresh_dynamic_style(self.partner_profile_risk_card)
+
+        profile_tooltip_lines = [
+            f"Ad / Ünvan: {selected_row.name}",
+            f"Tip: {partner_type_text}",
+            f"Durum: {partner_status_text}",
+            f"Vergi No / TCKN: {_format_optional_text(selected_row.tax_number)}",
+            f"Vergi Dairesi: {_format_optional_text(selected_row.tax_office)}",
+            f"Yetkili: {_format_optional_text(selected_row.authorized_person)}",
+            f"Telefon: {_format_optional_text(selected_row.phone)}",
+            f"E-posta: {_format_optional_text(selected_row.email)}",
+            f"Adres: {_format_optional_text(selected_row.address)}",
+            f"Not: {_format_optional_text(selected_row.notes)}",
+            f"Oluşturma: {_format_datetime(selected_row.created_at)}",
+            f"Son Güncelleme: {_format_datetime(selected_row.updated_at)}",
+        ]
+        self.partner_profile_card.setToolTip("\n".join(profile_tooltip_lines))
+
+    def _set_profile_field(self, card: QFrame, value: str | None) -> None:
+        display_text = _format_optional_text(value)
+        card.value_label.setText(display_text)
+        card.setToolTip(display_text)
+        card.value_label.setToolTip(display_text)
+
+    def _partner_profile_risk_state(
+        self,
+        selected_row: BusinessPartnerRow,
+        position: dict[str, PartnerPositionBucket],
+    ) -> tuple[str, str, str]:
+        received_open_count = position["received_open"].count
+        received_problem_count = position["received_problem"].count
+        issued_open_count = position["issued_open"].count
+        issued_problem_count = position["issued_problem"].count
+        received_closed_count = position["received_closed"].count
+        issued_closed_count = position["issued_closed"].count
+
+        open_count = received_open_count + issued_open_count
+        problem_count = received_problem_count + issued_problem_count
+        closed_count = received_closed_count + issued_closed_count
+
+        if not selected_row.is_active:
+            return (
+                "passive",
+                "Pasif Muhatap",
+                "Bu kart pasif durumda. Yeni işlem yapmadan önce aktiflik durumunu kontrol et.",
+            )
+
+        if problem_count > 0:
+            detail_parts = [f"{problem_count} problemli çek kaydı var"]
+
+            if open_count > 0:
+                detail_parts.append(f"{open_count} açık çek kaydı da takipte")
+
+            return (
+                "danger",
+                "Problemli Çek Var",
+                ", ".join(detail_parts) + ". Çek detaylarından hızlı kontrol önerilir.",
+            )
+
+        if open_count > 0:
+            return (
+                "warning",
+                "Açık Pozisyon Var",
+                f"Bu muhatapta {open_count} açık çek kaydı takipte. Vade ve para birimi detaylarını kontrol et.",
+            )
+
+        if closed_count > 0:
+            return (
+                "success",
+                "Geçmiş Hareket Var",
+                "Açık veya problemli pozisyon yok. Bu muhatapta yalnız sonuçlanan çek hareketleri görünüyor.",
+            )
+
+        return (
+            "success",
+            "Çek Hareketi Yok",
+            "Bu muhatap için kayıtlı açık, sonuçlanan veya problemli çek hareketi bulunmuyor.",
+        )
+
+    def _refresh_dynamic_style(self, widget: QWidget) -> None:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
 
     def _update_selected_partner_position_summary(self, selected_row: BusinessPartnerRow | None) -> None:
         if selected_row is None:
@@ -1871,12 +2453,16 @@ class BusinessPartnersPage(QWidget):
             return
 
         position = self._load_partner_position_summary(selected_row.id)
+        self._update_partner_profile(selected_row, position)
 
-        self.position_title_label.setText(f"Seçili Kart: {selected_row.name}")
+        partner_type_text = business_partner_type_text(selected_row.partner_type)
+        partner_status_text = "Aktif" if selected_row.is_active else "Pasif"
+
+        self.position_title_label.setText(
+            f"Seçili Muhatap: {selected_row.name} / {partner_type_text} / {partner_status_text}"
+        )
         self.position_subtitle_label.setText(
-            f"Tip: {business_partner_type_text(selected_row.partner_type)} | "
-            f"Durum: {'Aktif' if selected_row.is_active else 'Pasif'} | "
-            "Aşağıdaki değerler cari bakiye değil, çek pozisyonu özetidir."
+            "Bu özet cari bakiye değildir; yalnız bu muhatapla bağlantılı alınan/yazılan çek pozisyonunu gösterir."
         )
 
         self._set_position_card(self.received_open_card, position["received_open"])
@@ -1888,8 +2474,13 @@ class BusinessPartnersPage(QWidget):
 
     def _set_position_card(self, card: QFrame, bucket: PartnerPositionBucket) -> None:
         value_text, hint_text = _format_position_bucket(bucket)
+        tooltip_text = _format_position_bucket_tooltip(bucket)
+
         card.value_label.setText(value_text)
         card.hint_label.setText(hint_text)
+        card.setToolTip(tooltip_text)
+        card.value_label.setToolTip(tooltip_text)
+        card.hint_label.setToolTip(tooltip_text)
 
     def _load_partner_position_summary(self, partner_id: int) -> dict[str, PartnerPositionBucket]:
         buckets: dict[str, PartnerPositionBucket] = {
