@@ -66,6 +66,9 @@ from app.ui.pages.reports.check_excel_filter_dialog import get_check_excel_filte
 from app.ui.pages.reports.bank_movement_excel_filter_dialog import (
     get_bank_movement_excel_filter_selection,
 )
+from app.ui.pages.reports.partner_statement_report_dialog import (
+    open_partner_statement_report_dialog,
+)
 
 REPORTS_PAGE_STYLE = """
 QFrame#ReportsInfoStrip {
@@ -1286,7 +1289,7 @@ class ReportsPage(QWidget):
         title.setObjectName("ReportTitle")
 
         body = QLabel(
-            "Yönetim özeti, çek, banka, POS, iskonto ve Excel raporlarını tek merkezden takip et."
+            "Yönetim özeti, çek, banka, POS, iskonto, cari ve Excel raporlarını tek merkezden takip et."
         )
         body.setObjectName("ReportSubTitle")
         body.setWordWrap(True)
@@ -1294,7 +1297,7 @@ class ReportsPage(QWidget):
         title_box.addWidget(title)
         title_box.addWidget(body)
 
-        status = QLabel("Aktif: Yönetim Özeti + Çek + Risk + Banka + POS")
+        status = QLabel("Aktif: Yönetim Özeti + Çek + Risk + Banka + POS + Cari")
         status.setObjectName("ReportActiveBadge")
 
         layout.addLayout(title_box, 1)
@@ -1312,6 +1315,7 @@ class ReportsPage(QWidget):
         tabs.addTab(self._build_bank_reports_tab(), "Banka Raporları")
         tabs.addTab(self._build_pos_reports_tab(), "POS Raporları")
         tabs.addTab(self._build_discount_reports_tab(), "İskonto Raporları")
+        tabs.addTab(self._build_partner_reports_tab(), "Cari Raporları")
         tabs.addTab(self._build_excel_reports_tab(), "Excel Aktarım")
 
         return tabs
@@ -1882,6 +1886,134 @@ class ReportsPage(QWidget):
             on_discount_batch_report_click=self._create_current_month_discount_batch_report_pdf,
             on_financing_cost_report_click=self._create_current_month_financing_cost_report_pdf,
         )
+
+
+    def _build_planned_report_box(
+        self,
+        *,
+        title_text: str,
+        body_text: str,
+        badge_text: str = "Planlanan",
+    ) -> QWidget:
+        box = QFrame()
+        box.setObjectName("PlannedReportBox")
+
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title = QLabel(title_text)
+        title.setObjectName("ReportPlannedTitle")
+        title.setWordWrap(True)
+
+        body = QLabel(body_text)
+        body.setObjectName("ReportPlannedBody")
+        body.setWordWrap(True)
+
+        badge = QLabel(badge_text)
+        badge.setObjectName("ReportPlannedBadge")
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addStretch(1)
+        layout.addWidget(badge, 0, Qt.AlignLeft)
+
+        return box
+
+    def _build_partner_reports_tab(self) -> QWidget:
+        tab = QWidget()
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("QuickReportsCard")
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 16, 18, 16)
+        card_layout.setSpacing(14)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+
+        title = QLabel("Cari Hareket Raporu")
+        title.setObjectName("ReportSectionTitle")
+
+        subtitle = QLabel(
+            "Seçilen müşteri / tedarikçi için alınan çekler, alınan çek hareketleri, yazılan çekler ve yazılan çek ödeme / iptal bilgilerini açıklamalı PDF olarak oluşturur."
+        )
+        subtitle.setObjectName("ReportSubTitle")
+        subtitle.setWordWrap(True)
+
+        active_badge = QLabel("Aktif: Cari Hareket Raporu")
+        active_badge.setObjectName("ReportActiveBadge")
+
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        title_box.addWidget(active_badge, 0, Qt.AlignLeft)
+
+        pdf_button = QPushButton("Cari Hareket PDF Al")
+        pdf_button.setObjectName("CustomReportButton")
+        pdf_button.setCursor(Qt.PointingHandCursor)
+        pdf_button.clicked.connect(self._open_partner_statement_report_dialog)
+
+        title_row.addLayout(title_box, 1)
+        title_row.addWidget(pdf_button, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        card_layout.addLayout(title_row)
+
+        planned_grid = QGridLayout()
+        planned_grid.setSpacing(12)
+
+        planned_reports = [
+            (
+                "Cari Çek Pozisyon Raporu",
+                "Cari bazlı açık, sonuçlanan ve problemli çek pozisyonu için planlanan rapor.",
+            ),
+            (
+                "Cari Risk Raporu",
+                "Seçilen carinin riskli, gecikmiş ve problemli çek geçmişi için planlanan rapor.",
+            ),
+            (
+                "Cari Mutabakat Raporu",
+                "Cari mutabakat ve dönemsel hesap kontrolü için planlanan rapor.",
+            ),
+        ]
+
+        for index, planned_report in enumerate(planned_reports):
+            planned_grid.addWidget(
+                self._build_planned_report_box(
+                    title_text=planned_report[0],
+                    body_text=planned_report[1],
+                    badge_text="Planlanan",
+                ),
+                0,
+                index,
+            )
+
+        card_layout.addLayout(planned_grid)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+        return tab
+
+    def _open_partner_statement_report_dialog(self) -> None:
+        try:
+            open_partner_statement_report_dialog(
+                parent=self,
+                created_by=_created_by_text(self.current_user),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Cari Hareket Raporu Açılamadı",
+                f"Cari Hareket Raporu penceresi açılırken hata oluştu:\n\n{exc}",
+            )
 
     def _build_excel_reports_tab(self) -> QWidget:
         return build_excel_reports_tab(
