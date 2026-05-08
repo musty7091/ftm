@@ -1353,6 +1353,319 @@ def mark_received_check_returned(
 
     return check
 
+
+def mark_received_check_returned_with_replacement_payment(
+    session: Session,
+    *,
+    received_check_id: int,
+    return_date: date,
+    counterparty_text: str,
+    replacement_bank_account_id: int,
+    replacement_payment_date: date,
+    replacement_amount: object,
+    replacement_payment_type: str,
+    reference_no: Optional[str],
+    description: Optional[str],
+    returned_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> ReceivedCheck:
+    normalized_payment_type = str(replacement_payment_type or "").strip().upper()
+
+    if normalized_payment_type not in {"CASH_PAYMENT_RECEIVED", "BANK_TRANSFER_RECEIVED"}:
+        raise CheckServiceError("Yerine alınan ödeme türü geçerli değil.")
+
+    payment_type_text = (
+        "nakit ödeme"
+        if normalized_payment_type == "CASH_PAYMENT_RECEIVED"
+        else "banka/havale ödemesi"
+    )
+
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CANCEL,
+        attempted_action="RECEIVED_CHECK_MARK_RETURNED_WITH_REPLACEMENT_PAYMENT",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "return_date": return_date.isoformat(),
+            "counterparty_text": counterparty_text,
+            "replacement_bank_account_id": replacement_bank_account_id,
+            "replacement_payment_date": replacement_payment_date.isoformat(),
+            "replacement_amount": str(replacement_amount),
+            "replacement_payment_type": normalized_payment_type,
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_returned_by_user_id = (
+        permission_user_id if permission_user_id is not None else returned_by_user_id
+    )
+
+    check = session.get(ReceivedCheck, received_check_id)
+
+    if check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if check.status == ReceivedCheckStatus.RETURNED:
+        raise CheckServiceError("Bu çek zaten iade olarak işaretlenmiş.")
+
+    if check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+        ReceivedCheckStatus.BOUNCED,
+    }:
+        raise CheckServiceError(
+            "İade işaretleme sadece PORTFOLIO, GIVEN_TO_BANK, IN_COLLECTION veya BOUNCED durumundaki çeklerde yapılabilir."
+        )
+
+    if check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek iade işaretlenemez.")
+
+    bank_account = session.get(BankAccount, replacement_bank_account_id)
+
+    if bank_account is None:
+        raise CheckServiceError(f"Tahsilat banka hesabı bulunamadı. Hesap ID: {replacement_bank_account_id}")
+
+    if not bank_account.is_active:
+        raise CheckServiceError("Pasif banka hesabına yerine alınan ödeme kaydedilemez.")
+
+    if bank_account.currency_code != check.currency_code:
+        raise CheckServiceError(
+            f"Çek para birimi ile tahsilat hesabı para birimi aynı olmalıdır. "
+            f"Çek: {check.currency_code.value}, Hesap: {bank_account.currency_code.value}"
+        )
+
+    cleaned_counterparty_text = _clean_required_text(counterparty_text, "İade edilen taraf")
+    cleaned_reference_no = _clean_optional_text(reference_no) or check.reference_no
+    cleaned_description = _clean_required_text(description or "", "Açıklama")
+    cleaned_replacement_amount = _validate_positive_money(replacement_amount, "Yerine alınan ödeme tutarı")
+
+    if cleaned_replacement_amount != check.amount:
+        raise CheckServiceError(
+            "Güvenli ilk sürümde yerine alınan ödeme tutarı çek tutarıyla aynı olmalıdır. "
+            f"Çek: {_format_currency_amount_for_message(check.amount, check.currency_code)}, "
+            f"Ödeme: {_format_currency_amount_for_message(cleaned_replacement_amount, check.currency_code)}"
+        )
+
+    old_values = _received_check_to_dict(check)
+    previous_status = check.status
+
+    try:
+        replacement_transaction = create_bank_transaction(
+            session,
+            bank_account_id=bank_account.id,
+            transaction_date=replacement_payment_date,
+            value_date=replacement_payment_date,
+            direction=TransactionDirection.IN,
+            status=BankTransactionStatus.REALIZED,
+            amount=cleaned_replacement_amount,
+            currency_code=check.currency_code,
+            source_type=FinancialSourceType.RECEIVED_CHECK,
+            source_id=check.id,
+            reference_no=cleaned_reference_no,
+            description=(
+                f"İade edilen alınan çek yerine {payment_type_text}: {check.check_number}"
+                if not cleaned_description
+                else f"İade edilen alınan çek yerine {payment_type_text}: {check.check_number} - {cleaned_description}"
+            ),
+            created_by_user_id=effective_returned_by_user_id,
+        )
+    except BankTransactionServiceError as exc:
+        raise CheckServiceError(f"Yerine alınan ödeme banka hareketi oluşturulamadı: {exc}") from exc
+
+    check.status = ReceivedCheckStatus.RETURNED
+    check.collection_bank_account_id = bank_account.id
+    check.collected_transaction_id = replacement_transaction.id
+
+    session.flush()
+
+    movement_description = (
+        f"{cleaned_description} | Yerine {payment_type_text} alındı. "
+        f"Hesap: {bank_account.bank.name if bank_account.bank else '-'} / {bank_account.account_name}. "
+        f"Tutar: {cleaned_replacement_amount} {check.currency_code.value}. "
+        f"Banka hareket ID: {replacement_transaction.id}"
+    )
+
+    _create_received_check_movement(
+        session,
+        received_check=check,
+        movement_type=ReceivedCheckMovementType.RETURNED,
+        movement_date=return_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.RETURNED,
+        bank_account_id=bank_account.id,
+        counterparty_text=cleaned_counterparty_text,
+        purpose_text=f"Alınan çek iade edildi; yerine {payment_type_text} alındı.",
+        reference_no=cleaned_reference_no,
+        description=movement_description,
+        gross_amount=check.amount,
+        currency_code=check.currency_code,
+        net_bank_amount=cleaned_replacement_amount,
+        created_by_user_id=effective_returned_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_returned_by_user_id,
+        action="RECEIVED_CHECK_RETURNED_WITH_REPLACEMENT_PAYMENT",
+        entity_type="ReceivedCheck",
+        entity_id=check.id,
+        description=(
+            f"Alınan çek iade edildi ve yerine {payment_type_text} alındı: "
+            f"{check.check_number} / {check.amount} {check.currency_code.value}"
+        ),
+        old_values=old_values,
+        new_values=_received_check_to_dict(check),
+    )
+
+    return check
+
+
+def mark_received_check_returned_with_replacement_new_check(
+    session: Session,
+    *,
+    received_check_id: int,
+    return_date: date,
+    counterparty_text: str,
+    new_collection_bank_account_id: Optional[int],
+    new_drawer_bank_name: str,
+    new_drawer_branch_name: Optional[str],
+    new_check_number: str,
+    new_received_date: date,
+    new_due_date: date,
+    new_amount: object,
+    reference_no: Optional[str],
+    description: Optional[str],
+    returned_by_user_id: Optional[int] = None,
+    acting_user: Optional[Any] = None,
+) -> tuple[ReceivedCheck, ReceivedCheck]:
+    permission_user_id = _require_permission_if_user_given(
+        acting_user,
+        Permission.RECEIVED_CHECK_CANCEL,
+        attempted_action="RECEIVED_CHECK_MARK_RETURNED_WITH_REPLACEMENT_NEW_CHECK",
+        entity_type="ReceivedCheck",
+        details={
+            "received_check_id": received_check_id,
+            "return_date": return_date.isoformat(),
+            "counterparty_text": counterparty_text,
+            "new_collection_bank_account_id": new_collection_bank_account_id,
+            "new_drawer_bank_name": new_drawer_bank_name,
+            "new_drawer_branch_name": new_drawer_branch_name,
+            "new_check_number": new_check_number,
+            "new_received_date": new_received_date.isoformat(),
+            "new_due_date": new_due_date.isoformat(),
+            "new_amount": str(new_amount),
+            "reference_no": reference_no,
+        },
+    )
+
+    effective_returned_by_user_id = (
+        permission_user_id if permission_user_id is not None else returned_by_user_id
+    )
+
+    old_check = session.get(ReceivedCheck, received_check_id)
+
+    if old_check is None:
+        raise CheckServiceError(f"Alınan çek bulunamadı. Çek ID: {received_check_id}")
+
+    if old_check.status == ReceivedCheckStatus.RETURNED:
+        raise CheckServiceError("Bu çek zaten iade olarak işaretlenmiş.")
+
+    if old_check.status not in {
+        ReceivedCheckStatus.PORTFOLIO,
+        ReceivedCheckStatus.GIVEN_TO_BANK,
+        ReceivedCheckStatus.IN_COLLECTION,
+        ReceivedCheckStatus.BOUNCED,
+    }:
+        raise CheckServiceError(
+            "İade işaretleme sadece PORTFOLIO, GIVEN_TO_BANK, IN_COLLECTION veya BOUNCED durumundaki çeklerde yapılabilir."
+        )
+
+    if old_check.collected_transaction_id is not None:
+        raise CheckServiceError("Banka hareketi oluşmuş çek iade işaretlenemez.")
+
+    cleaned_counterparty_text = _clean_required_text(counterparty_text, "İade edilen taraf")
+    cleaned_reference_no = _clean_optional_text(reference_no) or old_check.reference_no
+    cleaned_description = _clean_required_text(description or "", "Açıklama")
+    cleaned_new_amount = _validate_positive_money(new_amount, "Yerine alınan yeni çek tutarı")
+
+    if cleaned_new_amount != old_check.amount:
+        raise CheckServiceError(
+            "Güvenli ilk sürümde yerine alınan yeni çek tutarı eski çek tutarıyla aynı olmalıdır. "
+            f"Eski çek: {_format_currency_amount_for_message(old_check.amount, old_check.currency_code)}, "
+            f"Yeni çek: {_format_currency_amount_for_message(cleaned_new_amount, old_check.currency_code)}"
+        )
+
+    new_check = create_received_check(
+        session,
+        customer_id=old_check.customer_id,
+        collection_bank_account_id=new_collection_bank_account_id,
+        drawer_bank_name=new_drawer_bank_name,
+        drawer_branch_name=new_drawer_branch_name,
+        check_number=new_check_number,
+        received_date=new_received_date,
+        due_date=new_due_date,
+        amount=cleaned_new_amount,
+        currency_code=old_check.currency_code,
+        status=ReceivedCheckStatus.PORTFOLIO,
+        reference_no=cleaned_reference_no,
+        description=(
+            f"Karşılıksız/iade edilen eski çek yerine alınan yeni çek. "
+            f"Eski Çek ID: {old_check.id}, Eski Çek No: {old_check.check_number}. "
+            f"{cleaned_description}"
+        ),
+        created_by_user_id=effective_returned_by_user_id,
+        acting_user=acting_user,
+    )
+
+    old_values = _received_check_to_dict(old_check)
+    previous_status = old_check.status
+
+    old_check.status = ReceivedCheckStatus.RETURNED
+
+    session.flush()
+
+    movement_description = (
+        f"{cleaned_description} | Yerine yeni çek oluşturuldu. "
+        f"Yeni Çek ID: {new_check.id}, Yeni Çek No: {new_check.check_number}, "
+        f"Yeni Çek Bankası: {new_check.drawer_bank_name}, "
+        f"Yeni Vade: {new_check.due_date.isoformat()}"
+    )
+
+    _create_received_check_movement(
+        session,
+        received_check=old_check,
+        movement_type=ReceivedCheckMovementType.RETURNED,
+        movement_date=return_date,
+        from_status=previous_status,
+        to_status=ReceivedCheckStatus.RETURNED,
+        bank_account_id=old_check.collection_bank_account_id,
+        counterparty_text=cleaned_counterparty_text,
+        purpose_text="Alınan çek iade edildi; yerine yeni çek alındı.",
+        reference_no=cleaned_reference_no,
+        description=movement_description,
+        gross_amount=old_check.amount,
+        currency_code=old_check.currency_code,
+        created_by_user_id=effective_returned_by_user_id,
+    )
+
+    write_audit_log(
+        session,
+        user_id=effective_returned_by_user_id,
+        action="RECEIVED_CHECK_RETURNED_WITH_REPLACEMENT_NEW_CHECK",
+        entity_type="ReceivedCheck",
+        entity_id=old_check.id,
+        description=(
+            f"Alınan çek iade edildi ve yerine yeni çek oluşturuldu: "
+            f"Eski Çek {old_check.check_number}, Yeni Çek {new_check.check_number}"
+        ),
+        old_values=old_values,
+        new_values=_received_check_to_dict(old_check),
+    )
+
+    return old_check, new_check
+
 def endorse_received_check(
     session: Session,
     *,

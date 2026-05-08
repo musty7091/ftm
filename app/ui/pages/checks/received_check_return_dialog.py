@@ -38,6 +38,7 @@ from app.ui.pages.checks.checks_data import format_currency_amount, received_sta
 @dataclass
 class ReturnableReceivedCheckOption:
     received_check_id: int
+    customer_id: int
     customer_name: str
     drawer_bank_name: str
     collection_bank_name: str | None
@@ -50,6 +51,26 @@ class ReturnableReceivedCheckOption:
     status: str
     reference_no: str | None
     description: str | None
+
+
+@dataclass
+class ReturnBankAccountOption:
+    bank_account_id: int
+    bank_name: str
+    account_name: str
+    currency_code: str
+
+
+def _format_decimal_tr(value: Any) -> str:
+    try:
+        amount = Decimal(str(value))
+    except Exception:
+        amount = Decimal("0.00")
+
+    formatted = f"{amount:,.2f}"
+    formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return formatted
 
 
 def _qdate_to_date(qdate: QDate) -> date:
@@ -79,16 +100,22 @@ class ReceivedCheckReturnDialog(QDialog):
         super().__init__(parent)
 
         self.returnable_checks = self._load_returnable_checks()
+        self.bank_accounts = self._load_bank_accounts()
+
         self.check_lookup = {
             returnable_check.received_check_id: returnable_check
             for returnable_check in self.returnable_checks
+        }
+        self.bank_account_lookup = {
+            bank_account.bank_account_id: bank_account
+            for bank_account in self.bank_accounts
         }
 
         self.payload: dict[str, Any] | None = None
 
         self.setWindowTitle("Alınan Çeki İade İşaretle")
-        self.resize(1120, 760)
-        self.setMinimumSize(940, 640)
+        self.resize(1180, 820)
+        self.setMinimumSize(980, 680)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(
             BANK_DIALOG_STYLES
@@ -151,7 +178,7 @@ class ReceivedCheckReturnDialog(QDialog):
 
         subtitle = QLabel(
             "Portföyde, bankaya verilmiş, tahsilde veya karşılıksız durumdaki alınan çekleri iade olarak işaretleyebilirsin. "
-            "İade edilen çek artık açık portföyde veya problemli çeklerde görünmez; sonuçlananlar listesine taşınır."
+            "Nakit/havale seçilirse aynı işlem içinde banka/kasa girişi oluşturulur. Yerine yeni çek seçilirse yeni alınan çek bilgileri alınır."
         )
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
@@ -184,7 +211,7 @@ class ReceivedCheckReturnDialog(QDialog):
         self.checks_table.setAlternatingRowColors(False)
         self.checks_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.checks_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.checks_table.setMinimumHeight(300)
+        self.checks_table.setMinimumHeight(270)
         self.checks_table.setWordWrap(False)
         self.checks_table.setTextElideMode(Qt.ElideRight)
         self.checks_table.verticalHeader().setDefaultSectionSize(34)
@@ -231,15 +258,115 @@ class ReceivedCheckReturnDialog(QDialog):
         for reason_code, reason_text in RETURN_REASON_OPTIONS:
             self.return_reason_combo.addItem(reason_text, reason_code)
 
+        self.return_reason_combo.currentIndexChanged.connect(self._update_replacement_area)
         form_layout.addRow("İade nedeni", self.return_reason_combo)
 
-        self.return_reason_warning_label = QLabel(
-            "Not: Bu işlem yalnızca çeki iade durumuna alır. "
-            "Yerine alınan nakit, havale veya yeni çek ayrıca ilgili modülden kaydedilmelidir."
-        )
+        self.return_reason_warning_label = QLabel("")
         self.return_reason_warning_label.setObjectName("MutedText")
         self.return_reason_warning_label.setWordWrap(True)
         form_layout.addRow("", self.return_reason_warning_label)
+
+        self.replacement_info_label = QLabel("Yerine alınan nakit/havale için tahsilat bilgileri")
+        self.replacement_info_label.setObjectName("MutedText")
+        self.replacement_info_label.setWordWrap(True)
+        form_layout.addRow("", self.replacement_info_label)
+
+        self.replacement_bank_account_label = QLabel("Tahsilat hesabı")
+        self.replacement_bank_account_label.setObjectName("MutedText")
+        self.replacement_bank_account_combo = QComboBox()
+        self.replacement_bank_account_combo.setMinimumHeight(38)
+        form_layout.addRow(self.replacement_bank_account_label, self.replacement_bank_account_combo)
+
+        self.replacement_payment_date_label = QLabel("Tahsilat tarihi")
+        self.replacement_payment_date_label.setObjectName("MutedText")
+        self.replacement_payment_date_edit = QDateEdit()
+        self.replacement_payment_date_edit.setMinimumHeight(38)
+        self.replacement_payment_date_edit.setCalendarPopup(True)
+        self.replacement_payment_date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.replacement_payment_date_edit.setDate(QDate.currentDate())
+        form_layout.addRow(self.replacement_payment_date_label, self.replacement_payment_date_edit)
+
+        self.replacement_amount_label = QLabel("Tahsil edilen tutar")
+        self.replacement_amount_label.setObjectName("MutedText")
+        self.replacement_amount_input = QLineEdit()
+        self.replacement_amount_input.setMinimumHeight(38)
+        self.replacement_amount_input.setReadOnly(True)
+        self.replacement_amount_input.setPlaceholderText("Seçili çek tutarı")
+        form_layout.addRow(self.replacement_amount_label, self.replacement_amount_input)
+
+        self.replacement_payment_warning_label = QLabel(
+            "Güvenli ilk sürümde yerine alınan nakit/havale tutarı çek tutarıyla aynı kabul edilir. "
+            "Eksik/kısmi tahsilat için ayrı cari takip adımı gereklidir."
+        )
+        self.replacement_payment_warning_label.setObjectName("MutedText")
+        self.replacement_payment_warning_label.setWordWrap(True)
+        form_layout.addRow("", self.replacement_payment_warning_label)
+
+        self.new_check_info_label = QLabel("Yerine alınan yeni çek bilgileri")
+        self.new_check_info_label.setObjectName("MutedText")
+        self.new_check_info_label.setWordWrap(True)
+        form_layout.addRow("", self.new_check_info_label)
+
+        self.new_drawer_bank_name_label = QLabel("Yeni çek bankası")
+        self.new_drawer_bank_name_label.setObjectName("MutedText")
+        self.new_drawer_bank_name_input = QLineEdit()
+        self.new_drawer_bank_name_input.setMinimumHeight(38)
+        self.new_drawer_bank_name_input.setPlaceholderText("Örn: Yapı Kredi / Garanti / Halkbank")
+        form_layout.addRow(self.new_drawer_bank_name_label, self.new_drawer_bank_name_input)
+
+        self.new_drawer_branch_name_label = QLabel("Yeni çek şubesi")
+        self.new_drawer_branch_name_label.setObjectName("MutedText")
+        self.new_drawer_branch_name_input = QLineEdit()
+        self.new_drawer_branch_name_input.setMinimumHeight(38)
+        self.new_drawer_branch_name_input.setPlaceholderText("İsteğe bağlı şube bilgisi")
+        form_layout.addRow(self.new_drawer_branch_name_label, self.new_drawer_branch_name_input)
+
+        self.new_check_number_label = QLabel("Yeni çek no")
+        self.new_check_number_label.setObjectName("MutedText")
+        self.new_check_number_input = QLineEdit()
+        self.new_check_number_input.setMinimumHeight(38)
+        self.new_check_number_input.setPlaceholderText("Yeni alınan çek numarası")
+        form_layout.addRow(self.new_check_number_label, self.new_check_number_input)
+
+        self.new_received_date_label = QLabel("Yeni çek alınış tarihi")
+        self.new_received_date_label.setObjectName("MutedText")
+        self.new_received_date_edit = QDateEdit()
+        self.new_received_date_edit.setMinimumHeight(38)
+        self.new_received_date_edit.setCalendarPopup(True)
+        self.new_received_date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.new_received_date_edit.setDate(QDate.currentDate())
+        form_layout.addRow(self.new_received_date_label, self.new_received_date_edit)
+
+        self.new_due_date_label = QLabel("Yeni çek vade tarihi")
+        self.new_due_date_label.setObjectName("MutedText")
+        self.new_due_date_edit = QDateEdit()
+        self.new_due_date_edit.setMinimumHeight(38)
+        self.new_due_date_edit.setCalendarPopup(True)
+        self.new_due_date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.new_due_date_edit.setDate(QDate.currentDate().addDays(30))
+        form_layout.addRow(self.new_due_date_label, self.new_due_date_edit)
+
+        self.new_check_amount_label = QLabel("Yeni çek tutarı")
+        self.new_check_amount_label.setObjectName("MutedText")
+        self.new_check_amount_input = QLineEdit()
+        self.new_check_amount_input.setMinimumHeight(38)
+        self.new_check_amount_input.setReadOnly(True)
+        self.new_check_amount_input.setPlaceholderText("Eski çek tutarı")
+        form_layout.addRow(self.new_check_amount_label, self.new_check_amount_input)
+
+        self.new_collection_account_label = QLabel("Yeni çek tahsil hesabı")
+        self.new_collection_account_label.setObjectName("MutedText")
+        self.new_collection_account_combo = QComboBox()
+        self.new_collection_account_combo.setMinimumHeight(38)
+        form_layout.addRow(self.new_collection_account_label, self.new_collection_account_combo)
+
+        self.new_check_warning_label = QLabel(
+            "Yeni çek aynı müşteri ve aynı para birimiyle PORTFÖY durumunda oluşturulur. "
+            "Kısmi fark veya farklı para birimi için ayrı cari mutabakat gerekir."
+        )
+        self.new_check_warning_label.setObjectName("MutedText")
+        self.new_check_warning_label.setWordWrap(True)
+        form_layout.addRow("", self.new_check_warning_label)
 
         self.reference_no_input = QLineEdit()
         self.reference_no_input.setMinimumHeight(38)
@@ -282,6 +409,7 @@ class ReceivedCheckReturnDialog(QDialog):
         outer_layout.addWidget(scroll_area)
 
         self._apply_filters()
+        self._update_replacement_area()
 
     def _load_returnable_checks(self) -> list[ReturnableReceivedCheckOption]:
         with session_scope() as session:
@@ -338,6 +466,7 @@ class ReceivedCheckReturnDialog(QDialog):
                 results.append(
                     ReturnableReceivedCheckOption(
                         received_check_id=received_check.id,
+                        customer_id=customer.id,
                         customer_name=customer.name,
                         drawer_bank_name=received_check.drawer_bank_name,
                         collection_bank_name=collection_bank.name if collection_bank else None,
@@ -356,6 +485,207 @@ class ReceivedCheckReturnDialog(QDialog):
                 )
 
             return results
+
+    def _load_bank_accounts(self) -> list[ReturnBankAccountOption]:
+        with session_scope() as session:
+            statement = (
+                select(BankAccount, Bank)
+                .join(Bank, BankAccount.bank_id == Bank.id)
+                .where(
+                    BankAccount.is_active.is_(True),
+                    Bank.is_active.is_(True),
+                )
+                .order_by(Bank.name.asc(), BankAccount.account_name.asc())
+            )
+
+            rows = session.execute(statement).all()
+
+            results: list[ReturnBankAccountOption] = []
+
+            for bank_account, bank in rows:
+                currency_code = (
+                    bank_account.currency_code.value
+                    if hasattr(bank_account.currency_code, "value")
+                    else str(bank_account.currency_code)
+                )
+
+                results.append(
+                    ReturnBankAccountOption(
+                        bank_account_id=bank_account.id,
+                        bank_name=bank.name,
+                        account_name=bank_account.account_name,
+                        currency_code=currency_code,
+                    )
+                )
+
+            return results
+
+    def _selected_return_reason_code(self) -> str:
+        return str(self.return_reason_combo.currentData() or "").strip().upper()
+
+    def _requires_replacement_payment(self) -> bool:
+        return self._selected_return_reason_code() in {
+            "CASH_PAYMENT_RECEIVED",
+            "BANK_TRANSFER_RECEIVED",
+        }
+
+    def _requires_replacement_new_check(self) -> bool:
+        return self._selected_return_reason_code() == "NEW_CHECK_RECEIVED"
+
+    def _selected_replacement_bank_account_id(self) -> int | None:
+        current_data = self.replacement_bank_account_combo.currentData()
+
+        if current_data in {None, ""}:
+            return None
+
+        try:
+            return int(current_data)
+        except (TypeError, ValueError):
+            return None
+
+    def _selected_new_collection_bank_account_id(self) -> int | None:
+        current_data = self.new_collection_account_combo.currentData()
+
+        if current_data in {None, ""}:
+            return None
+
+        try:
+            return int(current_data)
+        except (TypeError, ValueError):
+            return None
+
+    def _fill_account_combo_for_currency(
+        self,
+        combo: QComboBox,
+        *,
+        selected_check: ReturnableReceivedCheckOption | None,
+        empty_text: str,
+        allow_empty: bool,
+    ) -> None:
+        previous_signal_state = combo.blockSignals(True)
+
+        try:
+            combo.clear()
+
+            if selected_check is None:
+                combo.addItem("Önce çek seçiniz", None)
+                return
+
+            matching_accounts = [
+                bank_account
+                for bank_account in self.bank_accounts
+                if bank_account.currency_code == selected_check.currency_code
+            ]
+
+            if allow_empty:
+                combo.addItem(empty_text, None)
+            elif not matching_accounts:
+                combo.addItem(
+                    f"{selected_check.currency_code} para biriminde aktif hesap yok",
+                    None,
+                )
+                return
+            else:
+                combo.addItem(empty_text, None)
+
+            selected_index = 0
+
+            for bank_account in matching_accounts:
+                combo.addItem(
+                    f"{bank_account.bank_name} / {bank_account.account_name} / {bank_account.currency_code}",
+                    bank_account.bank_account_id,
+                )
+
+                collection_text = (
+                    f"{selected_check.collection_bank_name} / {selected_check.collection_bank_account_name}"
+                    if selected_check.collection_bank_name and selected_check.collection_bank_account_name
+                    else ""
+                )
+                account_text = f"{bank_account.bank_name} / {bank_account.account_name}"
+
+                if collection_text and collection_text == account_text:
+                    selected_index = combo.count() - 1
+
+            combo.setCurrentIndex(selected_index)
+        finally:
+            combo.blockSignals(previous_signal_state)
+
+    def _update_replacement_area(self) -> None:
+        selected_check = self._selected_check_from_table()
+        requires_payment = self._requires_replacement_payment()
+        requires_new_check = self._requires_replacement_new_check()
+
+        self._fill_account_combo_for_currency(
+            self.replacement_bank_account_combo,
+            selected_check=selected_check,
+            empty_text="Tahsilat hesabı seçiniz",
+            allow_empty=False,
+        )
+        self._fill_account_combo_for_currency(
+            self.new_collection_account_combo,
+            selected_check=selected_check,
+            empty_text="Tahsil hesabı seçmeyebilirsin",
+            allow_empty=True,
+        )
+
+        if selected_check is None:
+            self.replacement_amount_input.setText("")
+            self.new_check_amount_input.setText("")
+        else:
+            amount_text = f"{_format_decimal_tr(selected_check.amount)} {selected_check.currency_code}"
+            self.replacement_amount_input.setText(amount_text)
+            self.new_check_amount_input.setText(amount_text)
+
+        if requires_new_check:
+            self.return_reason_warning_label.setText(
+                "Yerine yeni çek seçildiği için yeni çek bilgileri zorunludur. "
+                "Kayıt tamamlanınca eski çek iade edilir ve yeni çek portföye alınır."
+            )
+        elif requires_payment:
+            self.return_reason_warning_label.setText(
+                "Nakit veya banka/havale seçildiği için tahsilat hesabı zorunludur. "
+                "İşlem kaydedildiğinde çek iade edilir ve seçilen hesaba aynı tutarda giriş hareketi oluşturulur."
+            )
+        else:
+            self.return_reason_warning_label.setText(
+                "Bu neden seçildiğinde yalnızca çek iade durumuna alınır. Finansal tahsilat veya yeni çek kaydı oluşturulmaz."
+            )
+
+        payment_widgets = [
+            self.replacement_info_label,
+            self.replacement_bank_account_label,
+            self.replacement_bank_account_combo,
+            self.replacement_payment_date_label,
+            self.replacement_payment_date_edit,
+            self.replacement_amount_label,
+            self.replacement_amount_input,
+            self.replacement_payment_warning_label,
+        ]
+
+        new_check_widgets = [
+            self.new_check_info_label,
+            self.new_drawer_bank_name_label,
+            self.new_drawer_bank_name_input,
+            self.new_drawer_branch_name_label,
+            self.new_drawer_branch_name_input,
+            self.new_check_number_label,
+            self.new_check_number_input,
+            self.new_received_date_label,
+            self.new_received_date_edit,
+            self.new_due_date_label,
+            self.new_due_date_edit,
+            self.new_check_amount_label,
+            self.new_check_amount_input,
+            self.new_collection_account_label,
+            self.new_collection_account_combo,
+            self.new_check_warning_label,
+        ]
+
+        for widget in payment_widgets:
+            widget.setVisible(requires_payment)
+
+        for widget in new_check_widgets:
+            widget.setVisible(requires_new_check)
 
     def has_returnable_checks(self) -> bool:
         return bool(self.returnable_checks)
@@ -536,6 +866,7 @@ class ReceivedCheckReturnDialog(QDialog):
         if selected_check is None:
             self.info_label.setText("İade işaretlemek için önce listeden bir alınan çek seçmelisin.")
             self.save_button.setEnabled(False)
+            self._update_replacement_area()
             return
 
         collection_text = (
@@ -562,6 +893,7 @@ class ReceivedCheckReturnDialog(QDialog):
             self.reference_no_input.setText(selected_check.reference_no)
 
         self.save_button.setEnabled(True)
+        self._update_replacement_area()
 
     def _build_payload(self) -> dict[str, Any]:
         selected_check = self._selected_check_from_table()
@@ -574,7 +906,7 @@ class ReceivedCheckReturnDialog(QDialog):
         reference_no = self.reference_no_input.text().strip()
         description_text = self.description_input.toPlainText().strip()
 
-        return_reason_code = str(self.return_reason_combo.currentData() or "").strip()
+        return_reason_code = str(self.return_reason_combo.currentData() or "").strip().upper()
         return_reason_text = self.return_reason_combo.currentText().strip()
 
         if not counterparty_text:
@@ -592,9 +924,99 @@ class ReceivedCheckReturnDialog(QDialog):
         if description_text and len(description_text) < 5:
             raise ValueError("Açıklama yazıldıysa en az 5 karakter olmalıdır.")
 
+        replacement_payment_type = None
+        replacement_bank_account_id = None
+        replacement_payment_date = None
+        replacement_amount = None
+        replacement_new_check = None
+
+        if return_reason_code in {"CASH_PAYMENT_RECEIVED", "BANK_TRANSFER_RECEIVED"}:
+            replacement_payment_type = return_reason_code
+            replacement_bank_account_id = self._selected_replacement_bank_account_id()
+            replacement_payment_date = _qdate_to_date(self.replacement_payment_date_edit.date())
+            replacement_amount = selected_check.amount
+
+            if replacement_bank_account_id is None:
+                raise ValueError("Yerine alınan nakit/havale için tahsilat hesabı seçilmelidir.")
+
+            selected_replacement_account = self.bank_account_lookup.get(replacement_bank_account_id)
+
+            if selected_replacement_account is None:
+                raise ValueError("Seçilen tahsilat hesabı bulunamadı.")
+
+            if selected_replacement_account.currency_code != selected_check.currency_code:
+                raise ValueError(
+                    "Tahsilat hesabı para birimi ile çek para birimi aynı olmalıdır. "
+                    f"Çek: {selected_check.currency_code}, Hesap: {selected_replacement_account.currency_code}"
+                )
+
+        if return_reason_code == "NEW_CHECK_RECEIVED":
+            new_drawer_bank_name = self.new_drawer_bank_name_input.text().strip()
+            new_drawer_branch_name = self.new_drawer_branch_name_input.text().strip()
+            new_check_number = self.new_check_number_input.text().strip()
+            new_received_date = _qdate_to_date(self.new_received_date_edit.date())
+            new_due_date = _qdate_to_date(self.new_due_date_edit.date())
+            new_collection_account_id = self._selected_new_collection_bank_account_id()
+
+            if not new_drawer_bank_name:
+                raise ValueError("Yerine alınan yeni çek için banka adı girilmelidir.")
+
+            if len(new_drawer_bank_name) < 2:
+                raise ValueError("Yeni çek banka adı en az 2 karakter olmalıdır.")
+
+            if not new_check_number:
+                raise ValueError("Yerine alınan yeni çek için çek numarası girilmelidir.")
+
+            if len(new_check_number) < 2:
+                raise ValueError("Yeni çek numarası en az 2 karakter olmalıdır.")
+
+            if new_due_date < new_received_date:
+                raise ValueError("Yeni çek vade tarihi, alınış tarihinden önce olamaz.")
+
+            if new_collection_account_id is not None:
+                selected_collection_account = self.bank_account_lookup.get(new_collection_account_id)
+
+                if selected_collection_account is None:
+                    raise ValueError("Seçilen yeni çek tahsil hesabı bulunamadı.")
+
+                if selected_collection_account.currency_code != selected_check.currency_code:
+                    raise ValueError(
+                        "Yeni çek tahsil hesabı para birimi ile çek para birimi aynı olmalıdır. "
+                        f"Çek: {selected_check.currency_code}, Hesap: {selected_collection_account.currency_code}"
+                    )
+
+            replacement_new_check = {
+                "customer_id": selected_check.customer_id,
+                "collection_bank_account_id": new_collection_account_id,
+                "drawer_bank_name": new_drawer_bank_name,
+                "drawer_branch_name": new_drawer_branch_name or None,
+                "check_number": new_check_number,
+                "received_date": new_received_date,
+                "due_date": new_due_date,
+                "amount": selected_check.amount,
+                "currency_code": selected_check.currency_code,
+            }
+
         final_description_parts = [
             f"İade nedeni: {return_reason_text}",
         ]
+
+        if replacement_payment_type == "CASH_PAYMENT_RECEIVED":
+            final_description_parts.append(
+                f"Yerine nakit ödeme alındı: {_format_decimal_tr(selected_check.amount)} {selected_check.currency_code}"
+            )
+        elif replacement_payment_type == "BANK_TRANSFER_RECEIVED":
+            final_description_parts.append(
+                f"Yerine banka/havale ödemesi alındı: {_format_decimal_tr(selected_check.amount)} {selected_check.currency_code}"
+            )
+        elif replacement_new_check is not None:
+            final_description_parts.append(
+                "Yerine yeni çek alındı: "
+                f"{replacement_new_check['drawer_bank_name']} / "
+                f"{replacement_new_check['check_number']} / "
+                f"{_format_decimal_tr(selected_check.amount)} {selected_check.currency_code} / "
+                f"Vade: {replacement_new_check['due_date'].strftime('%d.%m.%Y')}"
+            )
 
         if description_text:
             final_description_parts.append(f"Açıklama: {description_text}")
@@ -605,6 +1027,13 @@ class ReceivedCheckReturnDialog(QDialog):
             "received_check_id": selected_check.received_check_id,
             "return_date": return_date,
             "counterparty_text": counterparty_text,
+            "return_reason_code": return_reason_code,
+            "return_reason_text": return_reason_text,
+            "replacement_payment_type": replacement_payment_type,
+            "replacement_bank_account_id": replacement_bank_account_id,
+            "replacement_payment_date": replacement_payment_date,
+            "replacement_amount": replacement_amount,
+            "replacement_new_check": replacement_new_check,
             "reference_no": reference_no or None,
             "description": final_description,
         }
