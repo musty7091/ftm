@@ -81,6 +81,28 @@ def _normalize_source_type(value: FinancialSourceType | str) -> FinancialSourceT
         raise BankTransactionServiceError(f"Geçersiz kaynak türü: {value}") from exc
 
 
+def _format_decimal_tr(value: object) -> str:
+    try:
+        amount = Decimal(str(value or "0")).quantize(Decimal("0.01"))
+    except Exception:
+        amount = Decimal("0.00")
+
+    text = f"{amount:,.2f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _format_currency_amount(value: object, currency_code: CurrencyCode | str) -> str:
+    if isinstance(currency_code, CurrencyCode):
+        normalized_currency_code = currency_code.value
+    else:
+        normalized_currency_code = str(currency_code or "TRY").strip().upper() or "TRY"
+
+    if normalized_currency_code == CurrencyCode.TRY.value:
+        return f"{_format_decimal_tr(value)} TL"
+
+    return f"{_format_decimal_tr(value)} {normalized_currency_code}"
+
+
 def _require_permission_if_user_given(
     acting_user: Optional[Any],
     permission: Permission,
@@ -123,6 +145,47 @@ def _bank_transaction_to_dict(bank_transaction: BankTransaction) -> dict[str, An
         "cancelled_at": bank_transaction.cancelled_at.isoformat() if bank_transaction.cancelled_at else None,
         "cancel_reason": bank_transaction.cancel_reason,
     }
+
+
+def _ensure_realized_outgoing_does_not_overdraw(
+    session: Session,
+    *,
+    bank_account: BankAccount,
+    amount: Decimal,
+) -> None:
+    balance_summary = get_bank_account_balance_summary(
+        session,
+        bank_account_id=bank_account.id,
+    )
+
+    current_balance = money(
+        balance_summary.get("current_balance", Decimal("0.00")),
+        field_name="Güncel bakiye",
+    )
+
+    if amount <= current_balance:
+        return
+
+    missing_amount = money(amount - current_balance, field_name="Eksik tutar")
+    bank_name = "-"
+
+    try:
+        if bank_account.bank is not None and bank_account.bank.name:
+            bank_name = str(bank_account.bank.name)
+    except Exception:
+        bank_name = "-"
+
+    account_text = f"{bank_name} / {bank_account.account_name}"
+    currency_code = bank_account.currency_code
+
+    raise BankTransactionServiceError(
+        "Banka hesabı bakiyesi yetersiz.\n\n"
+        f"Hesap: {account_text}\n"
+        f"Mevcut bakiye: {_format_currency_amount(current_balance, currency_code)}\n"
+        f"Çıkış tutarı: {_format_currency_amount(amount, currency_code)}\n"
+        f"Eksik tutar: {_format_currency_amount(missing_amount, currency_code)}\n\n"
+        "Bu ödeme kaydedilemez. Önce ilgili hesaba para girişi veya transfer yapılmalıdır."
+    )
 
 
 def create_bank_transaction(
@@ -179,6 +242,16 @@ def create_bank_transaction(
         raise BankTransactionServiceError(
             f"Hareket para birimi ile banka hesabı para birimi aynı olmalıdır. "
             f"Hareket: {cleaned_currency_code.value}, Hesap: {bank_account.currency_code.value}"
+        )
+
+    if (
+        cleaned_direction == TransactionDirection.OUT
+        and cleaned_status == BankTransactionStatus.REALIZED
+    ):
+        _ensure_realized_outgoing_does_not_overdraw(
+            session,
+            bank_account=bank_account,
+            amount=cleaned_amount,
         )
 
     bank_transaction = BankTransaction(
