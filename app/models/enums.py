@@ -97,3 +97,46 @@ class PosSettlementStatus(StrEnum):
     REALIZED = "REALIZED"
     CANCELLED = "CANCELLED"
     MISMATCH = "MISMATCH"
+
+
+class CreditCardType(StrEnum):
+    BUSINESS = "BUSINESS"
+    COMPANY = "COMPANY"
+    PERSONAL = "PERSONAL"
+    OTHER = "OTHER"
+
+
+class CreditCardNetwork(StrEnum):
+    VISA = "VISA"
+    MASTERCARD = "MASTERCARD"
+    TROY = "TROY"
+    AMEX = "AMEX"
+    OTHER = "OTHER"
+
+
+class CreditCardStatementStatus(StrEnum):
+    PLANNED = "PLANNED"
+    ISSUED = "ISSUED"
+    PARTIAL_PAID = "PARTIAL_PAID"
+    PAID = "PAID"
+    OVERDUE = "OVERDUE"
+    CANCELLED = "CANCELLED"
+
+
+class CreditLimitType(StrEnum):
+    KMH = "KMH"
+    LIMITED_DEPOSIT = "LIMITED_DEPOSIT"
+    ROTATIVE_LIMIT = "ROTATIVE_LIMIT"
+    OTHER = "OTHER"
+
+
+class CreditLimitUsageMode(StrEnum):
+    AUTO_FROM_BANK_BALANCE = "AUTO_FROM_BANK_BALANCE"
+    MANUAL = "MANUAL"
+
+
+class InterestPeriod(StrEnum):
+    DAILY = "DAILY"
+    MONTHLY = "MONTHLY"
+    YEARLY = "YEARLY"
+    OTHER = "OTHER"
