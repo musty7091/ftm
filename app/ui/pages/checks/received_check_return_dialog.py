@@ -6,8 +6,6 @@ from typing import Any
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
@@ -32,6 +30,7 @@ from app.models.business_partner import BusinessPartner
 from app.models.check import ReceivedCheck
 from app.models.enums import ReceivedCheckStatus
 from app.ui.pages.banks.bank_dialog_styles import BANK_DIALOG_STYLES
+from app.ui.components.no_wheel_widgets import NoWheelComboBox, NoWheelDateEdit
 from app.ui.pages.checks.checks_data import format_currency_amount, received_status_text
 
 
@@ -240,7 +239,7 @@ class ReceivedCheckReturnDialog(QDialog):
         self.info_label.setWordWrap(True)
         form_layout.addRow("Seçili çek", self.info_label)
 
-        self.return_date_edit = QDateEdit()
+        self.return_date_edit = NoWheelDateEdit()
         self.return_date_edit.setMinimumHeight(38)
         self.return_date_edit.setCalendarPopup(True)
         self.return_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -252,7 +251,7 @@ class ReceivedCheckReturnDialog(QDialog):
         self.counterparty_input.setPlaceholderText("Çekin iade edildiği kişi / müşteri / firma")
         form_layout.addRow("İade edilen taraf", self.counterparty_input)
 
-        self.return_reason_combo = QComboBox()
+        self.return_reason_combo = NoWheelComboBox()
         self.return_reason_combo.setMinimumHeight(38)
 
         for reason_code, reason_text in RETURN_REASON_OPTIONS:
@@ -273,13 +272,13 @@ class ReceivedCheckReturnDialog(QDialog):
 
         self.replacement_bank_account_label = QLabel("Tahsilat hesabı")
         self.replacement_bank_account_label.setObjectName("MutedText")
-        self.replacement_bank_account_combo = QComboBox()
+        self.replacement_bank_account_combo = NoWheelComboBox()
         self.replacement_bank_account_combo.setMinimumHeight(38)
         form_layout.addRow(self.replacement_bank_account_label, self.replacement_bank_account_combo)
 
         self.replacement_payment_date_label = QLabel("Tahsilat tarihi")
         self.replacement_payment_date_label.setObjectName("MutedText")
-        self.replacement_payment_date_edit = QDateEdit()
+        self.replacement_payment_date_edit = NoWheelDateEdit()
         self.replacement_payment_date_edit.setMinimumHeight(38)
         self.replacement_payment_date_edit.setCalendarPopup(True)
         self.replacement_payment_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -330,7 +329,7 @@ class ReceivedCheckReturnDialog(QDialog):
 
         self.new_received_date_label = QLabel("Yeni çek alınış tarihi")
         self.new_received_date_label.setObjectName("MutedText")
-        self.new_received_date_edit = QDateEdit()
+        self.new_received_date_edit = NoWheelDateEdit()
         self.new_received_date_edit.setMinimumHeight(38)
         self.new_received_date_edit.setCalendarPopup(True)
         self.new_received_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -339,7 +338,7 @@ class ReceivedCheckReturnDialog(QDialog):
 
         self.new_due_date_label = QLabel("Yeni çek vade tarihi")
         self.new_due_date_label.setObjectName("MutedText")
-        self.new_due_date_edit = QDateEdit()
+        self.new_due_date_edit = NoWheelDateEdit()
         self.new_due_date_edit.setMinimumHeight(38)
         self.new_due_date_edit.setCalendarPopup(True)
         self.new_due_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -356,7 +355,7 @@ class ReceivedCheckReturnDialog(QDialog):
 
         self.new_collection_account_label = QLabel("Yeni çek tahsil hesabı")
         self.new_collection_account_label.setObjectName("MutedText")
-        self.new_collection_account_combo = QComboBox()
+        self.new_collection_account_combo = NoWheelComboBox()
         self.new_collection_account_combo.setMinimumHeight(38)
         form_layout.addRow(self.new_collection_account_label, self.new_collection_account_combo)
 
@@ -556,7 +555,7 @@ class ReceivedCheckReturnDialog(QDialog):
 
     def _fill_account_combo_for_currency(
         self,
-        combo: QComboBox,
+        combo: NoWheelComboBox,
         *,
         selected_check: ReturnableReceivedCheckOption | None,
         empty_text: str,

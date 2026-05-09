@@ -6,8 +6,6 @@ from typing import Any
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
@@ -24,7 +22,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 from sqlalchemy import select
-
+from app.ui.components.no_wheel_widgets import NoWheelComboBox, NoWheelDateEdit
 from app.db.session import session_scope
 from app.models.bank import Bank, BankAccount
 from app.models.business_partner import BusinessPartner
@@ -205,7 +203,7 @@ class IssuedCheckPayDialog(QDialog):
         self.search_input.setPlaceholderText("Tedarikçi / çek no / referans / banka / hesap ara")
         self.search_input.textChanged.connect(self._apply_filters)
 
-        self.due_filter_combo = QComboBox()
+        self.due_filter_combo = NoWheelComboBox()
         self.due_filter_combo.setMinimumHeight(40)
         self.due_filter_combo.addItem("Gecikenler + 7 Gün İçinde", "OVERDUE_AND_NEXT_7_DAYS")
         self.due_filter_combo.addItem("Gecikenler", "OVERDUE")
@@ -275,17 +273,17 @@ class IssuedCheckPayDialog(QDialog):
         self._set_balance_warning_style(level="neutral")
         form_layout.addRow("", self.balance_warning_label)
 
-        self.payment_date_edit = QDateEdit()
+        self.payment_date_edit = NoWheelDateEdit()
         self.payment_date_edit.setMinimumHeight(38)
         self.payment_date_edit.setCalendarPopup(True)
         self.payment_date_edit.setDisplayFormat("dd.MM.yyyy")
         self.payment_date_edit.setDate(QDate.currentDate())
         form_layout.addRow("Ödeme tarihi", self.payment_date_edit)
 
-        self.reference_no_combo = QComboBox()
+        self.reference_no_combo = NoWheelComboBox()
         self.reference_no_combo.setEditable(True)
         self.reference_no_combo.setMinimumHeight(38)
-        self.reference_no_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.reference_no_combo.setInsertPolicy(NoWheelComboBox.NoInsert)
         form_layout.addRow("Referans no", self.reference_no_combo)
 
         self.description_input = QTextEdit()
