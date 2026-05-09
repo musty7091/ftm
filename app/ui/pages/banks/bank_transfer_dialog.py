@@ -3,8 +3,6 @@ from typing import Any
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
     QDialog,
     QFormLayout,
     QHBoxLayout,
@@ -18,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.enums import BankTransferStatus
+from app.ui.components.no_wheel_widgets import NoWheelComboBox, NoWheelDateEdit
 from app.ui.pages.banks.bank_dialog_styles import BANK_DIALOG_STYLES
 from app.ui.ui_helpers import decimal_or_zero, tr_money
 from app.utils.decimal_utils import money
@@ -74,23 +73,23 @@ class BankTransferDialog(QDialog):
         form_layout.setHorizontalSpacing(18)
         form_layout.setVerticalSpacing(14)
 
-        self.from_account_combo = QComboBox()
+        self.from_account_combo = NoWheelComboBox()
         self.from_account_combo.setMinimumHeight(38)
         self._fill_from_account_combo()
         self.from_account_combo.currentIndexChanged.connect(self._refresh_to_account_combo)
         form_layout.addRow("Çıkış hesabı", self.from_account_combo)
 
-        self.to_account_combo = QComboBox()
+        self.to_account_combo = NoWheelComboBox()
         self.to_account_combo.setMinimumHeight(38)
         form_layout.addRow("Giriş hesabı", self.to_account_combo)
 
-        self.status_combo = QComboBox()
+        self.status_combo = NoWheelComboBox()
         self.status_combo.setMinimumHeight(38)
         self.status_combo.addItem("Gerçekleşti", BankTransferStatus.REALIZED)
         self.status_combo.addItem("Planlandı", BankTransferStatus.PLANNED)
         form_layout.addRow("Durum", self.status_combo)
 
-        self.transfer_date_edit = QDateEdit()
+        self.transfer_date_edit = NoWheelDateEdit()
         self.transfer_date_edit.setMinimumHeight(38)
         self.transfer_date_edit.setCalendarPopup(True)
         self.transfer_date_edit.setDisplayFormat("dd.MM.yyyy")
