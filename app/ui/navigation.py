@@ -6,6 +6,7 @@ from app.models.enums import UserRole
 ALL_NAV_ITEMS = [
     "Genel Bakış",
     "Bankalar",
+    "Kredili Hesaplar / Kartlar",
     "POS Mutabakat",
     "Çek Yönetimi",
     "Vade Takvimi",
@@ -19,6 +20,7 @@ ROLE_PAGE_MAP: dict[str, list[str]] = {
     "ADMIN": [
         "Genel Bakış",
         "Bankalar",
+        "Kredili Hesaplar / Kartlar",
         "POS Mutabakat",
         "Çek Yönetimi",
         "Vade Takvimi",
@@ -29,6 +31,7 @@ ROLE_PAGE_MAP: dict[str, list[str]] = {
     "FINANCE": [
         "Genel Bakış",
         "Bankalar",
+        "Kredili Hesaplar / Kartlar",
         "POS Mutabakat",
         "Çek Yönetimi",
         "Vade Takvimi",
@@ -46,6 +49,7 @@ ROLE_PAGE_MAP: dict[str, list[str]] = {
     "VIEWER": [
         "Genel Bakış",
         "Bankalar",
+        "Kredili Hesaplar / Kartlar",
         "POS Mutabakat",
         "Çek Yönetimi",
         "Vade Takvimi",

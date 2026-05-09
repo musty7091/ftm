@@ -37,6 +37,7 @@ from app.ui.navigation import (
 )
 from app.ui.pages.banks_page import BanksPage
 from app.ui.pages.business_partners_page import BusinessPartnersPage
+from app.ui.pages.credit_facilities_page import CreditFacilitiesPage
 from app.ui.pages.check_due_calendar_page import CheckDueCalendarPage
 from app.ui.pages.checks_page import ChecksPage
 from app.ui.pages.dashboard_page import DashboardPage
@@ -51,6 +52,7 @@ from app.ui.ui_helpers import clear_layout
 PAGE_SUBTITLES = {
     "Genel Bakış": "Banka, POS ve çek takibini hızlıca izle.",
     "Bankalar": "Banka hesapları, bakiyeler, hareketler ve transfer yönetimi.",
+    "Kredili Hesaplar / Kartlar": "Kredi kartları, KMH/limitli mevduat ve ileride taksitli kredileri takip et.",
     "POS Mutabakat": "Beklenen POS yatışları, gerçekleşen tutarlar ve fark analizleri.",
     "Çek Yönetimi": "Yazılan çekler, alınan çekler ve çek işlem yönetimi.",
     "Vade Takvimi": "Gelen ve giden çeklerin vade tarihlerini takip et.",
@@ -66,6 +68,11 @@ PAGE_PERMISSION_MAP: dict[str, tuple[Permission, ...]] = {
         Permission.BANK_TRANSACTION_VIEW,
         Permission.BANK_TRANSFER_VIEW,
         Permission.BANK_CREATE,
+        Permission.BANK_ACCOUNT_CREATE,
+    ),
+    "Kredili Hesaplar / Kartlar": (
+        Permission.BANK_TRANSACTION_VIEW,
+        Permission.BANK_TRANSFER_VIEW,
         Permission.BANK_ACCOUNT_CREATE,
     ),
     "POS Mutabakat": (
@@ -587,6 +594,16 @@ class FtmDesktopWindow(QMainWindow):
         if self.current_page == "Bankalar":
             self.content_layout.addWidget(
                 BanksPage(
+                    current_user=self.current_user,
+                ),
+                1,
+            )
+            self.content_scroll_area.verticalScrollBar().setValue(0)
+            return
+
+        if self.current_page == "Kredili Hesaplar / Kartlar":
+            self.content_layout.addWidget(
+                CreditFacilitiesPage(
                     current_user=self.current_user,
                 ),
                 1,

@@ -6,12 +6,12 @@ from datetime import datetime
 
 APP_CODE = "FTM"
 APP_NAME = "FTM Finans Takip Merkezi"
-APP_VERSION = "0.7.0"
-APP_RELEASE_STAGE = "P0"
+APP_VERSION = "0.8.0"
+APP_RELEASE_STAGE = "P2"
 APP_RELEASE_CHANNEL = "local-desktop"
-APP_BUILD_DATE = "2026-05-02"
+APP_BUILD_DATE = "2026-05-09"
 
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 MIN_SUPPORTED_DATABASE_SCHEMA_VERSION = 1
 
 RELEASE_NOTES = (
@@ -19,6 +19,7 @@ RELEASE_NOTES = (
     "Migration takip tablosu ve PRAGMA user_version kontrolü devreye alındı.",
     "Migration öncesi otomatik yedekleme altyapısı hazırlandı.",
     "P0.7 sürüm/DB uyum kontrolü hazırlık adımı başlatıldı.",
+    "P2 Kredili Hesaplar / Kartlar modülü için DB schema v2 altyapısı eklendi.",
 )
 
 
