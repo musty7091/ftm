@@ -459,6 +459,39 @@ def deactivate_credit_card(
     return credit_card
 
 
+def activate_credit_card(
+    session: Session,
+    *,
+    credit_card_id: int,
+    updated_by_user_id: Optional[int],
+) -> CreditCard:
+    clean_credit_card_id = _clean_positive_int(credit_card_id, "Kredi kartı ID")
+    credit_card = session.get(CreditCard, clean_credit_card_id)
+
+    if credit_card is None:
+        raise CreditFacilityServiceError(
+            f"Kredi kartı bulunamadı. Kredi kartı ID: {clean_credit_card_id}"
+        )
+
+    old_values = _serialize_credit_card(credit_card)
+    credit_card.is_active = True
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=updated_by_user_id,
+        action="CREDIT_CARD_ACTIVATED",
+        entity_type="CreditCard",
+        entity_id=credit_card.id,
+        description=f"Kredi kartı aktifleştirildi: {credit_card.card_name}",
+        old_values=old_values,
+        new_values=_serialize_credit_card(credit_card),
+    )
+
+    return credit_card
+
+
 def get_credit_limit_by_name(
     session: Session,
     *,
@@ -689,6 +722,7 @@ __all__ = [
     "create_credit_card",
     "update_credit_card",
     "deactivate_credit_card",
+    "activate_credit_card",
     "get_credit_card_by_name",
     "get_credit_card_by_last_four_digits",
     "list_credit_cards",

@@ -23,10 +23,12 @@ from sqlalchemy import select
 
 from app.db.session import session_scope
 from app.models.bank import Bank, BankAccount
+from app.models.credit_facility import CreditCard
 from app.models.enums import CreditCardNetwork, CreditCardType, CurrencyCode
 from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     create_credit_card,
+    update_credit_card,
 )
 from app.ui.components.no_wheel_widgets import (
     NoWheelComboBox,
@@ -101,6 +103,16 @@ QComboBox:focus,
 QSpinBox:focus,
 QDoubleSpinBox:focus {
     border: 1px solid #3b82f6;
+}
+
+QLineEdit:disabled,
+QTextEdit:disabled,
+QComboBox:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled {
+    background-color: rgba(30, 41, 59, 0.55);
+    color: #94a3b8;
+    border: 1px solid rgba(100, 116, 139, 0.32);
 }
 
 QComboBox::drop-down {
@@ -188,19 +200,34 @@ QScrollBar::sub-page:vertical {
 
 
 class CreditCardDialog(QDialog):
-    def __init__(self, *, current_user: Any | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        current_user: Any | None = None,
+        credit_card_id: int | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
 
         self.current_user = current_user
+        self.credit_card_id = credit_card_id
+        self.is_edit_mode = credit_card_id is not None
 
         self._banks: list[dict[str, Any]] = []
         self._bank_accounts: list[dict[str, Any]] = []
 
-        self.setWindowTitle("Kredi Kartı Tanımla")
+        self.setWindowTitle("Kredi Kartı Düzenle" if self.is_edit_mode else "Kredi Kartı Tanımla")
         self.resize(720, 640)
         self.setMinimumSize(640, 520)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(CREDIT_CARD_DIALOG_STYLE)
+
+        self.title_label = QLabel("Kredi Kartı Düzenle" if self.is_edit_mode else "Kredi Kartı Tanımla")
+        self.title_label.setObjectName("DialogTitle")
+
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setObjectName("DialogSubtitle")
+        self.subtitle_label.setWordWrap(True)
 
         self.bank_combo = NoWheelComboBox()
         self.bank_combo.setInsertPolicy(NoWheelComboBox.NoInsert)
@@ -248,8 +275,9 @@ class CreditCardDialog(QDialog):
         self.notes_input.setFixedHeight(86)
 
         self.create_another_checkbox = QCheckBox("Kaydettikten sonra yeni kart tanımlamaya devam et")
+        self.create_another_checkbox.setVisible(not self.is_edit_mode)
 
-        self.save_button = QPushButton("Kaydet")
+        self.save_button = QPushButton("Güncelle" if self.is_edit_mode else "Kaydet")
         self.save_button.setObjectName("PrimaryButton")
         self.save_button.clicked.connect(self._save)
 
@@ -262,21 +290,28 @@ class CreditCardDialog(QDialog):
         self._populate_static_combos()
         self._populate_bank_combo()
         self._update_payment_account_combo()
+        self._apply_mode_text()
+
+        if self.is_edit_mode:
+            self._load_credit_card_to_form()
+
+    def _apply_mode_text(self) -> None:
+        if self.is_edit_mode:
+            self.subtitle_label.setText(
+                "Seçili kredi kartı bilgilerini günceller. Kartın bağlı olduğu banka değiştirilemez; "
+                "diğer takip bilgileri düzenlenebilir."
+            )
+            return
+
+        self.subtitle_label.setText(
+            "İşletmeye ait kredi kartı bilgilerini tanımlar. Bu işlem banka bakiyesini değiştirmez; "
+            "kart sadece takip modülüne eklenir."
+        )
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(22, 20, 22, 18)
         root_layout.setSpacing(12)
-
-        title = QLabel("Kredi Kartı Tanımla")
-        title.setObjectName("DialogTitle")
-
-        subtitle = QLabel(
-            "İşletmeye ait kredi kartı bilgilerini tanımlar. Bu işlem banka bakiyesini değiştirmez; "
-            "kart sadece takip modülüne eklenir."
-        )
-        subtitle.setObjectName("DialogSubtitle")
-        subtitle.setWordWrap(True)
 
         scroll_area = QScrollArea()
         scroll_area.setObjectName("CreditCardDialogScrollArea")
@@ -334,8 +369,8 @@ class CreditCardDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
         button_layout.addWidget(self.save_button)
 
-        root_layout.addWidget(title)
-        root_layout.addWidget(subtitle)
+        root_layout.addWidget(self.title_label)
+        root_layout.addWidget(self.subtitle_label)
         root_layout.addWidget(scroll_area, 1)
         root_layout.addLayout(button_layout)
 
@@ -423,6 +458,72 @@ class CreditCardDialog(QDialog):
 
         for bank in self._banks:
             self.bank_combo.addItem(str(bank["name"]), int(bank["id"]))
+
+    def _load_credit_card_to_form(self) -> None:
+        if self.credit_card_id is None:
+            return
+
+        try:
+            with session_scope() as session:
+                credit_card = session.get(CreditCard, int(self.credit_card_id))
+
+                if credit_card is None:
+                    raise CreditFacilityServiceError(
+                        f"Kredi kartı bulunamadı. Kredi kartı ID: {self.credit_card_id}"
+                    )
+
+                data = {
+                    "bank_id": credit_card.bank_id,
+                    "card_name": credit_card.card_name,
+                    "card_type": credit_card.card_type,
+                    "card_network": credit_card.card_network,
+                    "last_four_digits": credit_card.last_four_digits or "",
+                    "currency_code": credit_card.currency_code,
+                    "credit_limit": Decimal(credit_card.credit_limit or 0),
+                    "statement_cut_day": credit_card.statement_cut_day or 0,
+                    "payment_due_day": credit_card.payment_due_day or 0,
+                    "default_payment_bank_account_id": credit_card.default_payment_bank_account_id,
+                    "notes": credit_card.notes or "",
+                }
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Kredi Kartı Yüklenemedi",
+                f"Kredi kartı bilgileri yüklenirken hata oluştu:\n\n{exc}",
+            )
+            self.reject()
+            return
+
+        self._set_combo_by_data(self.bank_combo, data["bank_id"])
+        self.bank_combo.setEnabled(False)
+
+        self.card_name_input.setText(str(data["card_name"] or ""))
+        self._set_combo_by_data(self.card_type_combo, data["card_type"])
+        self._set_combo_by_data(self.card_network_combo, data["card_network"])
+        self.last_four_digits_input.setText(str(data["last_four_digits"] or ""))
+        self._set_combo_by_data(self.currency_combo, data["currency_code"])
+        self.credit_limit_input.setValue(float(data["credit_limit"]))
+        self.statement_cut_day_input.setValue(int(data["statement_cut_day"] or 0))
+        self.payment_due_day_input.setValue(int(data["payment_due_day"] or 0))
+        self.notes_input.setPlainText(str(data["notes"] or ""))
+
+        self._update_payment_account_combo()
+        self._set_combo_by_data(self.payment_account_combo, data["default_payment_bank_account_id"])
+
+    def _set_combo_by_data(self, combo: NoWheelComboBox, data: Any) -> bool:
+        for index in range(combo.count()):
+            item_data = combo.itemData(index)
+
+            if item_data == data:
+                combo.setCurrentIndex(index)
+                return True
+
+            if item_data is not None and data is not None and str(item_data) == str(data):
+                combo.setCurrentIndex(index)
+                return True
+
+        return False
 
     def _update_payment_account_combo(self) -> None:
         selected_currency = self._selected_currency_code()
@@ -516,21 +617,41 @@ class CreditCardDialog(QDialog):
 
         try:
             with session_scope() as session:
-                create_credit_card(
-                    session,
-                    bank_id=selected_bank_id,
-                    card_name=self.card_name_input.text(),
-                    card_type=self.card_type_combo.currentData(),
-                    card_network=self.card_network_combo.currentData(),
-                    last_four_digits=self.last_four_digits_input.text(),
-                    currency_code=selected_currency,
-                    credit_limit=Decimal(str(self.credit_limit_input.value())),
-                    statement_cut_day=self._optional_day(self.statement_cut_day_input),
-                    payment_due_day=self._optional_day(self.payment_due_day_input),
-                    default_payment_bank_account_id=self._selected_payment_account_id(),
-                    notes=self.notes_input.toPlainText(),
-                    created_by_user_id=self._current_user_id(),
-                )
+                if self.is_edit_mode:
+                    if self.credit_card_id is None:
+                        raise CreditFacilityServiceError("Düzenlenecek kredi kartı ID bilgisi bulunamadı.")
+
+                    update_credit_card(
+                        session,
+                        credit_card_id=int(self.credit_card_id),
+                        card_name=self.card_name_input.text(),
+                        card_type=self.card_type_combo.currentData(),
+                        card_network=self.card_network_combo.currentData(),
+                        last_four_digits=self.last_four_digits_input.text(),
+                        currency_code=selected_currency,
+                        credit_limit=Decimal(str(self.credit_limit_input.value())),
+                        statement_cut_day=self._optional_day(self.statement_cut_day_input),
+                        payment_due_day=self._optional_day(self.payment_due_day_input),
+                        default_payment_bank_account_id=self._selected_payment_account_id(),
+                        notes=self.notes_input.toPlainText(),
+                        updated_by_user_id=self._current_user_id(),
+                    )
+                else:
+                    create_credit_card(
+                        session,
+                        bank_id=selected_bank_id,
+                        card_name=self.card_name_input.text(),
+                        card_type=self.card_type_combo.currentData(),
+                        card_network=self.card_network_combo.currentData(),
+                        last_four_digits=self.last_four_digits_input.text(),
+                        currency_code=selected_currency,
+                        credit_limit=Decimal(str(self.credit_limit_input.value())),
+                        statement_cut_day=self._optional_day(self.statement_cut_day_input),
+                        payment_due_day=self._optional_day(self.payment_due_day_input),
+                        default_payment_bank_account_id=self._selected_payment_account_id(),
+                        notes=self.notes_input.toPlainText(),
+                        created_by_user_id=self._current_user_id(),
+                    )
 
         except CreditFacilityServiceError as exc:
             QMessageBox.warning(
@@ -551,10 +672,10 @@ class CreditCardDialog(QDialog):
         QMessageBox.information(
             self,
             "Kredi Kartı Kaydedildi",
-            "Kredi kartı başarıyla tanımlandı.",
+            "Kredi kartı başarıyla güncellendi." if self.is_edit_mode else "Kredi kartı başarıyla tanımlandı.",
         )
 
-        if self.create_another_checkbox.isChecked():
+        if not self.is_edit_mode and self.create_another_checkbox.isChecked():
             self._reset_form_for_next_card()
             return
 
