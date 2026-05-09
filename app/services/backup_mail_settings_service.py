@@ -16,6 +16,8 @@ from app.core.config import ENV_FILE, settings
 from app.core.runtime_paths import ensure_runtime_folders
 
 
+BACKUP_MAIL_SETTINGS_FILE_NAME = "backup_mail_settings.json"
+
 EMAIL_PATTERN = re.compile(
     r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
     re.IGNORECASE,
@@ -115,53 +117,86 @@ def _load_environment() -> None:
     load_dotenv(ENV_FILE, override=True)
 
 
-def _settings_file_path() -> Path:
+def backup_mail_settings_file_path() -> Path:
+    runtime_paths = ensure_runtime_folders()
+    return runtime_paths.config_folder / BACKUP_MAIL_SETTINGS_FILE_NAME
+
+
+def _legacy_app_settings_file_path() -> Path:
     runtime_paths = ensure_runtime_folders()
     return runtime_paths.app_settings_file
 
 
-def _load_app_settings_data() -> dict[str, Any]:
-    settings_file = _settings_file_path()
-
-    if not settings_file.exists():
+def _load_json_file(file_path: Path) -> dict[str, Any]:
+    if not file_path.exists():
         return {}
 
-    if not settings_file.is_file():
+    if not file_path.is_file():
         raise BackupMailSettingsError(
-            "FTM uygulama ayar dosyası geçersiz. Beklenen yol dosya değil:\n"
-            f"{settings_file}"
+            "Yedekleme mail ayar yolu geçersiz. Beklenen yol dosya değil:\n"
+            f"{file_path}"
         )
 
     try:
-        with settings_file.open("r", encoding="utf-8-sig") as file:
+        with file_path.open("r", encoding="utf-8-sig") as file:
             loaded_data = json.load(file)
 
     except json.JSONDecodeError as exc:
         raise BackupMailSettingsError(
-            "FTM uygulama ayar dosyası bozuk JSON içeriyor.\n\n"
-            f"Dosya: {settings_file}\n"
+            "Yedekleme mail ayar dosyası bozuk JSON içeriyor.\n\n"
+            f"Dosya: {file_path}\n"
             f"Satır: {exc.lineno}, Sütun: {exc.colno}\n"
             f"Hata: {exc.msg}"
         ) from exc
 
     except OSError as exc:
         raise BackupMailSettingsError(
-            "FTM uygulama ayar dosyası okunamadı.\n\n"
-            f"Dosya: {settings_file}\n"
+            "Yedekleme mail ayar dosyası okunamadı.\n\n"
+            f"Dosya: {file_path}\n"
             f"Hata: {exc}"
         ) from exc
 
     if not isinstance(loaded_data, dict):
         raise BackupMailSettingsError(
-            "FTM uygulama ayar dosyası geçersiz formatta. "
-            "app_settings.json en üst seviyede JSON object olmalıdır."
+            "Yedekleme mail ayar dosyası geçersiz formatta. "
+            "JSON en üst seviyede object olmalıdır."
         )
 
     return loaded_data
 
 
-def _write_app_settings_data(data: dict[str, Any]) -> None:
-    settings_file = _settings_file_path()
+def _load_settings_data() -> dict[str, Any]:
+    primary_file = backup_mail_settings_file_path()
+    primary_data = _load_json_file(primary_file)
+
+    if primary_data:
+        return primary_data
+
+    legacy_file = _legacy_app_settings_file_path()
+    legacy_data = _load_json_file(legacy_file)
+
+    legacy_keys = {
+        "backup_mail_enabled",
+        "backup_mail_to",
+        "backup_mail_last_test_at",
+        "backup_mail_last_test_status",
+        "backup_mail_last_test_message",
+    }
+
+    if any(key in legacy_data for key in legacy_keys):
+        return {
+            "backup_mail_enabled": legacy_data.get("backup_mail_enabled", False),
+            "backup_mail_to": legacy_data.get("backup_mail_to", ""),
+            "backup_mail_last_test_at": legacy_data.get("backup_mail_last_test_at", ""),
+            "backup_mail_last_test_status": legacy_data.get("backup_mail_last_test_status", ""),
+            "backup_mail_last_test_message": legacy_data.get("backup_mail_last_test_message", ""),
+        }
+
+    return {}
+
+
+def _write_settings_data(data: dict[str, Any]) -> None:
+    settings_file = backup_mail_settings_file_path()
     settings_file.parent.mkdir(parents=True, exist_ok=True)
 
     temporary_file = settings_file.with_suffix(".json.tmp")
@@ -175,7 +210,7 @@ def _write_app_settings_data(data: dict[str, Any]) -> None:
 
     except OSError as exc:
         raise BackupMailSettingsError(
-            "FTM uygulama ayar dosyası yazılamadı.\n\n"
+            "Yedekleme mail ayar dosyası yazılamadı.\n\n"
             f"Dosya: {settings_file}\n"
             f"Hata: {exc}"
         ) from exc
@@ -187,11 +222,11 @@ def is_valid_email(email: str) -> bool:
     if not cleaned_email:
         return False
 
-    return EMAIL_PATTERN.match(cleaned_email) is not None
+    return EMAIL_PATTERN.fullmatch(cleaned_email) is not None
 
 
 def load_backup_mail_settings() -> BackupMailSettings:
-    data = _load_app_settings_data()
+    data = _load_settings_data()
 
     return BackupMailSettings(
         enabled=_bool_from_value(data.get("backup_mail_enabled"), default=False),
@@ -215,11 +250,17 @@ def save_backup_mail_settings(*, enabled: bool, recipient_email: str) -> BackupM
             "Geçerli bir alıcı mail adresi girilmelidir."
         )
 
-    data = _load_app_settings_data()
-    data["backup_mail_enabled"] = bool(enabled)
-    data["backup_mail_to"] = cleaned_recipient_email
+    current_settings = load_backup_mail_settings()
 
-    _write_app_settings_data(data)
+    data = {
+        "backup_mail_enabled": bool(enabled),
+        "backup_mail_to": cleaned_recipient_email,
+        "backup_mail_last_test_at": current_settings.last_test_at,
+        "backup_mail_last_test_status": current_settings.last_test_status,
+        "backup_mail_last_test_message": current_settings.last_test_message,
+    }
+
+    _write_settings_data(data)
 
     return load_backup_mail_settings()
 
@@ -295,6 +336,8 @@ def _build_test_mail_message(*, recipient_email: str) -> EmailMessage:
                 "",
                 "Bu mesajı aldıysanız merkezi FTM yedekleme mail gönderimi çalışıyor demektir.",
                 "",
+                "Mail gelen kutusunda görünmüyorsa Spam/Junk klasörünü kontrol ediniz.",
+                "",
                 f"Test zamanı: {_now_text()}",
                 "",
                 "FTM Finans Takip Merkezi",
@@ -323,11 +366,17 @@ def _send_email_message(message: EmailMessage) -> None:
 
 
 def _save_last_test_result(*, success: bool, message: str, sent_at: str) -> None:
-    data = _load_app_settings_data()
-    data["backup_mail_last_test_at"] = sent_at
-    data["backup_mail_last_test_status"] = "OK" if success else "FAIL"
-    data["backup_mail_last_test_message"] = message
-    _write_app_settings_data(data)
+    current_settings = load_backup_mail_settings()
+
+    data = {
+        "backup_mail_enabled": current_settings.enabled,
+        "backup_mail_to": current_settings.recipient_email,
+        "backup_mail_last_test_at": sent_at,
+        "backup_mail_last_test_status": "OK" if success else "FAIL",
+        "backup_mail_last_test_message": message,
+    }
+
+    _write_settings_data(data)
 
 
 def send_backup_mail_test(*, recipient_email: str | None = None) -> BackupMailTestResult:
@@ -347,7 +396,10 @@ def send_backup_mail_test(*, recipient_email: str | None = None) -> BackupMailTe
         message = _build_test_mail_message(recipient_email=target_email)
         _send_email_message(message)
 
-        result_message = f"Test maili başarıyla gönderildi: {target_email}"
+        result_message = (
+            f"Test maili Gmail SMTP tarafından başarıyla kabul edildi: {target_email}. "
+            "Mail görünmüyorsa Spam/Junk klasörünü kontrol edin."
+        )
         _save_last_test_result(
             success=True,
             message=result_message,
@@ -376,10 +428,12 @@ def send_backup_mail_test(*, recipient_email: str | None = None) -> BackupMailTe
 
 
 __all__ = [
+    "BACKUP_MAIL_SETTINGS_FILE_NAME",
     "BackupMailSettings",
     "BackupMailSettingsError",
     "BackupMailTestResult",
     "CentralMailSenderSettings",
+    "backup_mail_settings_file_path",
     "is_valid_email",
     "load_backup_mail_settings",
     "save_backup_mail_settings",

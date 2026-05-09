@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -15,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from app.services.backup_mail_settings_service import (
     BackupMailSettingsError,
+    backup_mail_settings_file_path,
     is_valid_email,
     load_backup_mail_settings,
     save_backup_mail_settings,
@@ -138,6 +138,10 @@ class BackupMailSettingsDialog(QDialog):
         help_label.setObjectName("HelpLabel")
         help_label.setWordWrap(True)
 
+        storage_label = QLabel(f"Ayar dosyası: {backup_mail_settings_file_path()}")
+        storage_label.setObjectName("HelpLabel")
+        storage_label.setWordWrap(True)
+
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
 
@@ -165,6 +169,7 @@ class BackupMailSettingsDialog(QDialog):
         main_layout.addWidget(self.recipient_input)
         main_layout.addWidget(self.status_label)
         main_layout.addWidget(help_label)
+        main_layout.addWidget(storage_label)
         main_layout.addStretch(1)
         main_layout.addLayout(button_layout)
 
@@ -173,21 +178,21 @@ class BackupMailSettingsDialog(QDialog):
 
     def _load_settings_to_form(self) -> None:
         try:
-            settings = load_backup_mail_settings()
+            loaded_settings = load_backup_mail_settings()
 
         except Exception as exc:
             self.status_label.setText(f"Ayarlar okunamadı: {exc}")
             return
 
-        self.enabled_checkbox.setChecked(settings.enabled)
-        self.recipient_input.setText(settings.recipient_email)
+        self.enabled_checkbox.setChecked(loaded_settings.enabled)
+        self.recipient_input.setText(loaded_settings.recipient_email)
 
-        if settings.last_test_at or settings.last_test_status or settings.last_test_message:
+        if loaded_settings.last_test_at or loaded_settings.last_test_status or loaded_settings.last_test_message:
             self.status_label.setText(
                 "Son test: "
-                f"{settings.last_test_status or '-'} | "
-                f"{settings.last_test_at or '-'} | "
-                f"{settings.last_test_message or '-'}"
+                f"{loaded_settings.last_test_status or '-'} | "
+                f"{loaded_settings.last_test_at or '-'} | "
+                f"{loaded_settings.last_test_message or '-'}"
             )
         else:
             self.status_label.setText("Henüz test maili gönderilmedi.")
@@ -200,11 +205,30 @@ class BackupMailSettingsDialog(QDialog):
         recipient_email = self._recipient_email()
 
         self.recipient_input.setEnabled(enabled)
-        self.test_button.setEnabled(enabled and bool(recipient_email))
+        self.test_button.setEnabled(enabled and bool(recipient_email) and is_valid_email(recipient_email))
         self.save_button.setEnabled(True)
 
-        if enabled and recipient_email and not is_valid_email(recipient_email):
+        if not enabled:
+            self.status_label.setText("Yedekleme maili kapalı. Ayar kaydedilebilir.")
+            return
+
+        if not recipient_email:
+            self.status_label.setText("Yedekleme maili aktifse alıcı mail adresi girilmelidir.")
+            return
+
+        if not is_valid_email(recipient_email):
             self.status_label.setText("Alıcı mail adresi geçerli formatta değil.")
+            return
+
+        current_text = self.status_label.text().strip()
+
+        if (
+            not current_text
+            or current_text == "Alıcı mail adresi geçerli formatta değil."
+            or current_text == "Yedekleme maili aktifse alıcı mail adresi girilmelidir."
+            or current_text == "Yedekleme maili kapalı. Ayar kaydedilebilir."
+        ):
+            self.status_label.setText("Alıcı mail adresi geçerli. Kaydedebilir veya test mail gönderebilirsin.")
 
     def _save_settings(self) -> None:
         try:
