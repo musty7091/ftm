@@ -43,6 +43,16 @@ class ReceivedCheckBankAccountOption:
     currency_code: str
 
 
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event: Any) -> None:
+        event.ignore()
+
+
+class NoWheelDateEdit(QDateEdit):
+    def wheelEvent(self, event: Any) -> None:
+        event.ignore()
+
+
 def _qdate_to_date(qdate: QDate) -> date:
     return date(qdate.year(), qdate.month(), qdate.day())
 
@@ -132,7 +142,7 @@ class ReceivedCheckCreateDialog(QDialog):
         form_layout.setHorizontalSpacing(18)
         form_layout.setVerticalSpacing(14)
 
-        self.customer_combo = QComboBox()
+        self.customer_combo = NoWheelComboBox()
         self.customer_combo.setMinimumHeight(38)
         self._fill_customer_combo()
         form_layout.addRow("Müşteri kartı", self.customer_combo)
@@ -152,14 +162,14 @@ class ReceivedCheckCreateDialog(QDialog):
         self.check_number_input.setPlaceholderText("Çek numarası")
         form_layout.addRow("Çek no", self.check_number_input)
 
-        self.received_date_edit = QDateEdit()
+        self.received_date_edit = NoWheelDateEdit()
         self.received_date_edit.setMinimumHeight(38)
         self.received_date_edit.setCalendarPopup(True)
         self.received_date_edit.setDisplayFormat("dd.MM.yyyy")
         self.received_date_edit.setDate(QDate.currentDate())
         form_layout.addRow("Alınış tarihi", self.received_date_edit)
 
-        self.due_date_edit = QDateEdit()
+        self.due_date_edit = NoWheelDateEdit()
         self.due_date_edit.setMinimumHeight(38)
         self.due_date_edit.setCalendarPopup(True)
         self.due_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -171,7 +181,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.amount_input.setPlaceholderText("Örn: 12500,50")
         form_layout.addRow("Tutar", self.amount_input)
 
-        self.currency_combo = QComboBox()
+        self.currency_combo = NoWheelComboBox()
         self.currency_combo.setMinimumHeight(38)
         self.currency_combo.addItem("TRY", CurrencyCode.TRY)
         self.currency_combo.addItem("USD", CurrencyCode.USD)
@@ -180,7 +190,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.currency_combo.currentIndexChanged.connect(self._fill_collection_bank_account_combo)
         form_layout.addRow("Para birimi", self.currency_combo)
 
-        self.status_combo = QComboBox()
+        self.status_combo = NoWheelComboBox()
         self.status_combo.setMinimumHeight(38)
         self.status_combo.addItem("Portföy", ReceivedCheckStatus.PORTFOLIO)
         self.status_combo.addItem("Bankaya Verildi", ReceivedCheckStatus.GIVEN_TO_BANK)
@@ -188,7 +198,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.status_combo.currentIndexChanged.connect(self._update_collection_bank_account_info)
         form_layout.addRow("İlk durum", self.status_combo)
 
-        self.collection_bank_account_combo = QComboBox()
+        self.collection_bank_account_combo = NoWheelComboBox()
         self.collection_bank_account_combo.setMinimumHeight(38)
         self.collection_bank_account_combo.currentIndexChanged.connect(self._update_collection_bank_account_info)
         form_layout.addRow("Tahsil hesabı", self.collection_bank_account_combo)
