@@ -6,7 +6,9 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -24,6 +26,7 @@ from app.services.credit_facility_service import (
     list_credit_cards,
     list_credit_limits,
 )
+from app.ui.pages.credit_facilities.credit_card_dialog import CreditCardDialog
 
 
 CREDIT_FACILITIES_PAGE_STYLE = """
@@ -34,26 +37,15 @@ QFrame#CreditFacilitiesCard {
 }
 
 QFrame#CreditFacilitiesSummaryCard {
-    background-color: rgba(15, 23, 42, 0.70);
+    background-color: rgba(15, 23, 42, 0.72);
     border: 1px solid rgba(148, 163, 184, 0.24);
     border-radius: 14px;
 }
 
 QFrame#CreditFacilitiesInfoCard {
-    background-color: rgba(30, 64, 175, 0.18);
-    border: 1px solid rgba(59, 130, 246, 0.34);
-    border-radius: 14px;
-}
-
-QLabel#CreditFacilitiesTitle {
-    color: #f8fafc;
-    font-size: 18px;
-    font-weight: 900;
-}
-
-QLabel#CreditFacilitiesSubtitle {
-    color: #94a3b8;
-    font-size: 12px;
+    background-color: rgba(30, 64, 175, 0.14);
+    border: 1px solid rgba(59, 130, 246, 0.28);
+    border-radius: 12px;
 }
 
 QLabel#CreditFacilitiesSectionTitle {
@@ -79,11 +71,17 @@ QLabel#CreditFacilitiesMuted {
     font-size: 12px;
 }
 
+QLabel#CreditFacilitiesSummaryValue {
+    color: #f8fafc;
+    font-size: 16px;
+    font-weight: 900;
+}
+
 QPushButton#CreditFacilitiesPrimaryButton {
     background-color: #2563eb;
     color: #ffffff;
     border: 1px solid #3b82f6;
-    border-radius: 11px;
+    border-radius: 10px;
     padding: 8px 14px;
     font-weight: 900;
 }
@@ -96,7 +94,7 @@ QPushButton#CreditFacilitiesSecondaryButton {
     background-color: #172033;
     color: #cbd5e1;
     border: 1px solid #24324a;
-    border-radius: 11px;
+    border-radius: 10px;
     padding: 8px 14px;
     font-weight: 900;
 }
@@ -185,8 +183,8 @@ class CreditFacilitiesPage(QWidget):
                 "Son 4",
                 "Para",
                 "Limit",
-                "Kesim Günü",
-                "Son Ödeme",
+                "Kesim",
+                "Ödeme",
                 "Durum",
             ]
         )
@@ -199,7 +197,7 @@ class CreditFacilitiesPage(QWidget):
                 "Para",
                 "Limit",
                 "Kullanılan",
-                "Kullanım Şekli",
+                "Kullanım",
                 "Faiz",
                 "Periyot",
                 "Gün",
@@ -207,10 +205,10 @@ class CreditFacilitiesPage(QWidget):
             ]
         )
 
-        self.card_count_label = self._metric_value_label("0")
-        self.card_limit_label = self._metric_value_label("0,00")
-        self.limit_count_label = self._metric_value_label("0")
-        self.limit_total_label = self._metric_value_label("0,00")
+        self.card_count_value_label = self._summary_value_label("0")
+        self.card_limit_value_label = self._summary_value_label("0,00")
+        self.limit_count_value_label = self._summary_value_label("0")
+        self.limit_total_value_label = self._summary_value_label("0,00")
 
         self.status_label = QLabel("Hazır")
         self.status_label.setObjectName("CreditFacilitiesMuted")
@@ -221,70 +219,36 @@ class CreditFacilitiesPage(QWidget):
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 14, 12, 12)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 10, 12, 12)
+        main_layout.setSpacing(10)
 
         root_card = QFrame()
         root_card.setObjectName("CreditFacilitiesCard")
 
         root_layout = QVBoxLayout(root_card)
-        root_layout.setContentsMargins(18, 16, 18, 16)
-        root_layout.setSpacing(14)
-
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(10)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(3)
-
-        title = QLabel("Kredili Hesaplar / Kartlar")
-        title.setObjectName("CreditFacilitiesTitle")
-
-        subtitle = QLabel(
-            "Kredi kartları, kredili/limitli mevduat hesapları ve ileride banka kredileri bu modülde izlenecek."
-        )
-        subtitle.setObjectName("CreditFacilitiesSubtitle")
-        subtitle.setWordWrap(True)
-
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-
-        refresh_button = QPushButton("Yenile")
-        refresh_button.setObjectName("CreditFacilitiesSecondaryButton")
-        refresh_button.clicked.connect(self.refresh_data)
-
-        header_layout.addLayout(title_box, 1)
-        header_layout.addWidget(refresh_button, 0, Qt.AlignTop)
+        root_layout.setContentsMargins(16, 14, 16, 14)
+        root_layout.setSpacing(12)
 
         summary_layout = QHBoxLayout()
         summary_layout.setSpacing(10)
-
         summary_layout.addWidget(
             self._build_summary_card(
-                title="Aktif Kredi Kartı",
-                value_label=self.card_count_label,
-                hint="Tanımlı aktif kart sayısı",
+                title="Kredi Kartları",
+                first_label="Aktif kart",
+                first_value_label=self.card_count_value_label,
+                second_label="Toplam kart limiti",
+                second_value_label=self.card_limit_value_label,
+                hint="İlk bakışta kart adedi ve limit büyüklüğü.",
             )
         )
         summary_layout.addWidget(
             self._build_summary_card(
-                title="Toplam Kart Limiti",
-                value_label=self.card_limit_label,
-                hint="Para birimleri ayrıştırılmadan genel görünüm",
-            )
-        )
-        summary_layout.addWidget(
-            self._build_summary_card(
-                title="Aktif Kredili Hesap",
-                value_label=self.limit_count_label,
-                hint="KMH / limitli mevduat tanımı",
-            )
-        )
-        summary_layout.addWidget(
-            self._build_summary_card(
-                title="Toplam Limit",
-                value_label=self.limit_total_label,
-                hint="Para birimleri ayrıştırılmadan genel görünüm",
+                title="Kredili / Limitli Hesaplar",
+                first_label="Aktif tanım",
+                first_value_label=self.limit_count_value_label,
+                second_label="Toplam limit",
+                second_value_label=self.limit_total_value_label,
+                hint="KMH / limitli mevduat genel görünümü.",
             )
         )
 
@@ -293,7 +257,6 @@ class CreditFacilitiesPage(QWidget):
         tabs.addTab(self._build_credit_limits_tab(), "Kredili / Limitli Mevduat")
         tabs.addTab(self._build_future_loans_tab(), "Banka Kredileri / Taksitli Krediler")
 
-        root_layout.addLayout(header_layout)
         root_layout.addLayout(summary_layout)
         root_layout.addWidget(tabs, 1)
         root_layout.addWidget(self.status_label)
@@ -309,33 +272,35 @@ class CreditFacilitiesPage(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
-        add_button = QPushButton("Kart Tanımla")
-        add_button.setObjectName("CreditFacilitiesPrimaryButton")
-        add_button.setEnabled(False)
-        add_button.setToolTip("Bir sonraki adımda kredi kartı tanımlama formu bağlanacak.")
+        self.add_credit_card_button = QPushButton("Kart Tanımla")
+        self.add_credit_card_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.add_credit_card_button.setEnabled(True)
+        self.add_credit_card_button.setToolTip("Yeni kredi kartı tanımı oluştur.")
+        self.add_credit_card_button.clicked.connect(self.open_credit_card_dialog)
 
-        edit_button = QPushButton("Kartı Düzenle")
+        edit_button = QPushButton("Düzenle")
         edit_button.setObjectName("CreditFacilitiesSecondaryButton")
         edit_button.setEnabled(False)
         edit_button.setToolTip("Bir sonraki adımda kredi kartı düzenleme formu bağlanacak.")
 
-        statement_button = QPushButton("Ekstre Kaydı")
+        statement_button = QPushButton("Ekstre")
         statement_button.setObjectName("CreditFacilitiesSecondaryButton")
         statement_button.setEnabled(False)
         statement_button.setToolTip("Ekstre takibi bir sonraki fazda bağlanacak.")
 
-        actions.addWidget(add_button)
+        actions.addWidget(self.add_credit_card_button)
         actions.addWidget(edit_button)
         actions.addWidget(statement_button)
         actions.addStretch(1)
 
-        info = self._build_info_card(
-            "Bu sekme kredi kartı tanımlarını göstermek için hazırlandı. "
-            "Kart oluşturma/düzenleme formu bir sonraki adımda bağlanacak."
+        hint_label = QLabel(
+            "Bu alan şimdilik kart tanımlarını gösterecek. Kayıt formları kademeli olarak bağlanıyor."
         )
+        hint_label.setObjectName("CreditFacilitiesMuted")
+        hint_label.setWordWrap(True)
 
         layout.addLayout(actions)
-        layout.addWidget(info)
+        layout.addWidget(hint_label)
         layout.addWidget(self.credit_cards_table, 1)
 
         return tab
@@ -349,12 +314,12 @@ class CreditFacilitiesPage(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
-        add_button = QPushButton("Limitli Hesap Tanımla")
+        add_button = QPushButton("Limit Tanımla")
         add_button.setObjectName("CreditFacilitiesPrimaryButton")
         add_button.setEnabled(False)
         add_button.setToolTip("Bir sonraki adımda kredili/limitli mevduat formu bağlanacak.")
 
-        edit_button = QPushButton("Limit Tanımını Düzenle")
+        edit_button = QPushButton("Düzenle")
         edit_button.setObjectName("CreditFacilitiesSecondaryButton")
         edit_button.setEnabled(False)
         edit_button.setToolTip("Bir sonraki adımda limit tanımı düzenleme formu bağlanacak.")
@@ -363,12 +328,14 @@ class CreditFacilitiesPage(QWidget):
         actions.addWidget(edit_button)
         actions.addStretch(1)
 
-        info = self._build_info_card(
-            "Bu sekme banka hesabına bağlı KMH / limitli mevduat / rotatif limit tanımlarını göstermek için hazırlandı."
+        hint_label = QLabel(
+            "Bu alan banka hesabına bağlı KMH / limitli mevduat / rotatif limit tanımlarını gösterecek."
         )
+        hint_label.setObjectName("CreditFacilitiesMuted")
+        hint_label.setWordWrap(True)
 
         layout.addLayout(actions)
-        layout.addWidget(info)
+        layout.addWidget(hint_label)
         layout.addWidget(self.credit_limits_table, 1)
 
         return tab
@@ -380,8 +347,8 @@ class CreditFacilitiesPage(QWidget):
         layout.setSpacing(10)
 
         info = self._build_info_card(
-            "Banka Kredileri / Taksitli Krediler bölümü ileride ayrı ödeme planı, taksit, faiz ve kalan anapara takibiyle açılacak. "
-            "Bu sekme şimdilik mimari yer tutucu olarak bırakıldı."
+            "Banka Kredileri / Taksitli Krediler bölümü sonraki fazda açılacak. "
+            "Burada kredi tanımı, taksit planı, faiz ve kalan anapara takibi yer alacak."
         )
 
         layout.addWidget(info)
@@ -393,7 +360,10 @@ class CreditFacilitiesPage(QWidget):
         self,
         *,
         title: str,
-        value_label: QLabel,
+        first_label: str,
+        first_value_label: QLabel,
+        second_label: str,
+        second_value_label: QLabel,
         hint: str,
     ) -> QWidget:
         card = QFrame()
@@ -401,17 +371,32 @@ class CreditFacilitiesPage(QWidget):
 
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(4)
+        layout.setSpacing(8)
 
         title_label = QLabel(title)
-        title_label.setObjectName("CreditFacilitiesMetricLabel")
+        title_label.setObjectName("CreditFacilitiesSectionTitle")
+
+        metrics_layout = QGridLayout()
+        metrics_layout.setHorizontalSpacing(18)
+        metrics_layout.setVerticalSpacing(4)
+
+        first_label_widget = QLabel(first_label)
+        first_label_widget.setObjectName("CreditFacilitiesMetricLabel")
+
+        second_label_widget = QLabel(second_label)
+        second_label_widget.setObjectName("CreditFacilitiesMetricLabel")
 
         hint_label = QLabel(hint)
         hint_label.setObjectName("CreditFacilitiesMuted")
         hint_label.setWordWrap(True)
 
+        metrics_layout.addWidget(first_label_widget, 0, 0)
+        metrics_layout.addWidget(second_label_widget, 0, 1)
+        metrics_layout.addWidget(first_value_label, 1, 0)
+        metrics_layout.addWidget(second_value_label, 1, 1)
+
         layout.addWidget(title_label)
-        layout.addWidget(value_label)
+        layout.addLayout(metrics_layout)
         layout.addWidget(hint_label)
 
         return card
@@ -424,7 +409,7 @@ class CreditFacilitiesPage(QWidget):
         layout.setContentsMargins(12, 10, 12, 10)
 
         label = QLabel(text)
-        label.setObjectName("CreditFacilitiesSubtitle")
+        label.setObjectName("CreditFacilitiesMuted")
         label.setWordWrap(True)
 
         layout.addWidget(label)
@@ -447,11 +432,27 @@ class CreditFacilitiesPage(QWidget):
 
         return table
 
-    def _metric_value_label(self, text: str) -> QLabel:
+    def _summary_value_label(self, text: str) -> QLabel:
         label = QLabel(text)
-        label.setObjectName("CreditFacilitiesMetric")
-
+        label.setObjectName("CreditFacilitiesSummaryValue")
         return label
+
+    def open_credit_card_dialog(self) -> None:
+        try:
+            dialog = CreditCardDialog(
+                current_user=self.current_user,
+                parent=self,
+            )
+
+            if dialog.exec() == QDialog.Accepted:
+                self.refresh_data()
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Kart Tanımla Açılamadı",
+                f"Kredi kartı tanımlama formu açılırken hata oluştu:\n\n{exc}",
+            )
 
     def refresh_data(self) -> None:
         try:
@@ -460,10 +461,12 @@ class CreditFacilitiesPage(QWidget):
                 credit_limits = list_credit_limits(session, include_inactive=True)
 
                 card_rows = []
+                active_card_count = 0
                 card_limit_total = Decimal("0.00")
 
                 for credit_card in credit_cards:
                     if credit_card.is_active:
+                        active_card_count += 1
                         card_limit_total += Decimal(credit_card.credit_limit or 0)
 
                     bank_name = "-"
@@ -486,10 +489,12 @@ class CreditFacilitiesPage(QWidget):
                     )
 
                 limit_rows = []
+                active_limit_count = 0
                 credit_limit_total = Decimal("0.00")
 
                 for credit_limit in credit_limits:
                     if credit_limit.is_active:
+                        active_limit_count += 1
                         credit_limit_total += Decimal(credit_limit.limit_amount or 0)
 
                     account_name = "-"
@@ -516,16 +521,21 @@ class CreditFacilitiesPage(QWidget):
                         ]
                     )
 
-            self._fill_table(self.credit_cards_table, card_rows)
-            self._fill_table(self.credit_limits_table, limit_rows)
+            self._fill_table(
+                table=self.credit_cards_table,
+                rows=card_rows,
+                empty_message="Henüz tanımlı kredi kartı yok.",
+            )
+            self._fill_table(
+                table=self.credit_limits_table,
+                rows=limit_rows,
+                empty_message="Henüz tanımlı kredili / limitli mevduat hesabı yok.",
+            )
 
-            active_card_count = sum(1 for row in credit_cards if row.is_active)
-            active_limit_count = sum(1 for row in credit_limits if row.is_active)
-
-            self.card_count_label.setText(str(active_card_count))
-            self.card_limit_label.setText(self._format_decimal(card_limit_total))
-            self.limit_count_label.setText(str(active_limit_count))
-            self.limit_total_label.setText(self._format_decimal(credit_limit_total))
+            self.card_count_value_label.setText(str(active_card_count))
+            self.card_limit_value_label.setText(self._format_decimal(card_limit_total))
+            self.limit_count_value_label.setText(str(active_limit_count))
+            self.limit_total_value_label.setText(self._format_decimal(credit_limit_total))
 
             self.status_label.setText("Kredili Hesaplar / Kartlar verileri yenilendi.")
 
@@ -537,7 +547,34 @@ class CreditFacilitiesPage(QWidget):
             )
             self.status_label.setText(f"Veriler yüklenemedi: {exc}")
 
-    def _fill_table(self, table: QTableWidget, rows: list[list[Any]]) -> None:
+    def _fill_table(
+        self,
+        *,
+        table: QTableWidget,
+        rows: list[list[Any]],
+        empty_message: str,
+    ) -> None:
+        table.clearSpans()
+
+        if not rows:
+            table.setRowCount(1)
+
+            empty_item = QTableWidgetItem(empty_message)
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsEditable)
+            empty_item.setForeground(QColor("#94a3b8"))
+            empty_item.setTextAlignment(Qt.AlignCenter)
+
+            table.setItem(0, 0, empty_item)
+            table.setSpan(0, 0, 1, table.columnCount())
+
+            for column_index in range(1, table.columnCount()):
+                hidden_item = QTableWidgetItem("")
+                hidden_item.setFlags(hidden_item.flags() & ~Qt.ItemIsEditable)
+                table.setItem(0, column_index, hidden_item)
+
+            table.resizeRowsToContents()
+            return
+
         table.setRowCount(len(rows))
 
         for row_index, row_values in enumerate(rows):
