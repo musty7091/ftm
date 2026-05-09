@@ -5,12 +5,14 @@ from decimal import Decimal
 from typing import Any, Optional, TypeVar
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 
 from app.models.bank import Bank, BankAccount
-from app.models.credit_facility import BankAccountCreditLimit, CreditCard
+from app.models.credit_facility import BankAccountCreditLimit, CreditCard, CreditCardTransaction
 from app.models.enums import (
     CreditCardNetwork,
+    CreditCardTransactionStatus,
     CreditCardType,
     CreditLimitType,
     CreditLimitUsageMode,
@@ -158,6 +160,26 @@ def _serialize_credit_card(credit_card: CreditCard) -> dict[str, Any]:
         "default_payment_bank_account_id": credit_card.default_payment_bank_account_id,
         "notes": credit_card.notes,
         "is_active": credit_card.is_active,
+    }
+
+
+def _serialize_credit_card_transaction(transaction: CreditCardTransaction) -> dict[str, Any]:
+    return {
+        "id": transaction.id,
+        "credit_card_id": transaction.credit_card_id,
+        "statement_id": transaction.statement_id,
+        "transaction_date": transaction.transaction_date.isoformat()
+        if transaction.transaction_date
+        else None,
+        "merchant_name": transaction.merchant_name,
+        "description": transaction.description,
+        "amount": str(transaction.amount),
+        "currency_code": transaction.currency_code.value,
+        "installment_count": transaction.installment_count,
+        "installment_no": transaction.installment_no,
+        "status": transaction.status.value,
+        "reference_no": transaction.reference_no,
+        "notes": transaction.notes,
     }
 
 
@@ -492,6 +514,154 @@ def activate_credit_card(
     return credit_card
 
 
+def get_credit_card_or_raise(session: Session, credit_card_id: int) -> CreditCard:
+    clean_credit_card_id = _clean_positive_int(credit_card_id, "Kredi kartı ID")
+    credit_card = session.get(CreditCard, clean_credit_card_id)
+
+    if credit_card is None:
+        raise CreditFacilityServiceError(
+            f"Kredi kartı bulunamadı. Kredi kartı ID: {clean_credit_card_id}"
+        )
+
+    return credit_card
+
+
+def list_credit_card_transactions(
+    session: Session,
+    *,
+    credit_card_id: int | None = None,
+    include_cancelled: bool = True,
+) -> list[CreditCardTransaction]:
+    statement = (
+        select(CreditCardTransaction)
+        .options(joinedload(CreditCardTransaction.credit_card))
+        .order_by(
+            CreditCardTransaction.transaction_date.desc(),
+            CreditCardTransaction.id.desc(),
+        )
+    )
+
+    if credit_card_id is not None:
+        clean_credit_card_id = _clean_positive_int(credit_card_id, "Kredi kartı ID")
+        statement = statement.where(CreditCardTransaction.credit_card_id == clean_credit_card_id)
+
+    if not include_cancelled:
+        statement = statement.where(
+            CreditCardTransaction.status != CreditCardTransactionStatus.CANCELLED
+        )
+
+    return list(session.execute(statement).scalars().all())
+
+
+def create_credit_card_transaction(
+    session: Session,
+    *,
+    credit_card_id: int,
+    transaction_date: date,
+    merchant_name: str,
+    description: Optional[str],
+    amount: Decimal,
+    installment_count: int,
+    reference_no: Optional[str],
+    notes: Optional[str],
+    created_by_user_id: Optional[int],
+) -> CreditCardTransaction:
+    credit_card = get_credit_card_or_raise(session, credit_card_id)
+
+    if not credit_card.is_active:
+        raise CreditFacilityServiceError(
+            "Pasif kredi kartına harcama kaydı girilemez. Önce kartı aktifleştir."
+        )
+
+    clean_merchant_name = _clean_required_text(merchant_name, "İşyeri / açıklama")
+    clean_description = _clean_optional_text(description)
+    clean_amount = _clean_money(amount, "Harcama tutarı")
+    clean_installment_count = _clean_positive_int(installment_count, "Taksit sayısı")
+    clean_reference_no = _clean_optional_text(reference_no)
+    clean_notes = _clean_optional_text(notes)
+
+    if clean_amount <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Harcama tutarı sıfırdan büyük olmalıdır.")
+
+    if clean_installment_count > 120:
+        raise CreditFacilityServiceError("Taksit sayısı 120 değerinden büyük olamaz.")
+
+    transaction = CreditCardTransaction(
+        credit_card_id=credit_card.id,
+        statement_id=None,
+        transaction_date=transaction_date,
+        merchant_name=clean_merchant_name,
+        description=clean_description,
+        amount=clean_amount,
+        currency_code=credit_card.currency_code,
+        installment_count=clean_installment_count,
+        installment_no=1,
+        status=CreditCardTransactionStatus.PENDING,
+        reference_no=clean_reference_no,
+        notes=clean_notes,
+    )
+
+    session.add(transaction)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="CREDIT_CARD_TRANSACTION_CREATED",
+        entity_type="CreditCardTransaction",
+        entity_id=transaction.id,
+        description=(
+            f"Kredi kartı harcaması oluşturuldu: "
+            f"{credit_card.card_name} / {transaction.merchant_name}"
+        ),
+        old_values=None,
+        new_values=_serialize_credit_card_transaction(transaction),
+    )
+
+    return transaction
+
+
+def cancel_credit_card_transaction(
+    session: Session,
+    *,
+    transaction_id: int,
+    updated_by_user_id: Optional[int],
+) -> CreditCardTransaction:
+    clean_transaction_id = _clean_positive_int(transaction_id, "Harcama ID")
+    transaction = session.get(CreditCardTransaction, clean_transaction_id)
+
+    if transaction is None:
+        raise CreditFacilityServiceError(
+            f"Kredi kartı harcaması bulunamadı. Harcama ID: {clean_transaction_id}"
+        )
+
+    if transaction.status == CreditCardTransactionStatus.IN_STATEMENT:
+        raise CreditFacilityServiceError(
+            "Ekstreye bağlanmış harcama bu ekrandan iptal edilemez."
+        )
+
+    if transaction.status == CreditCardTransactionStatus.CANCELLED:
+        return transaction
+
+    old_values = _serialize_credit_card_transaction(transaction)
+    transaction.status = CreditCardTransactionStatus.CANCELLED
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=updated_by_user_id,
+        action="CREDIT_CARD_TRANSACTION_CANCELLED",
+        entity_type="CreditCardTransaction",
+        entity_id=transaction.id,
+        description=f"Kredi kartı harcaması iptal edildi: {transaction.merchant_name}",
+        old_values=old_values,
+        new_values=_serialize_credit_card_transaction(transaction),
+    )
+
+    return transaction
+
+
 def get_credit_limit_by_name(
     session: Session,
     *,
@@ -726,6 +896,10 @@ __all__ = [
     "get_credit_card_by_name",
     "get_credit_card_by_last_four_digits",
     "list_credit_cards",
+    "get_credit_card_or_raise",
+    "list_credit_card_transactions",
+    "create_credit_card_transaction",
+    "cancel_credit_card_transaction",
     "create_credit_limit",
     "update_credit_limit",
     "deactivate_credit_limit",
