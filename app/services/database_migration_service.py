@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -265,6 +265,68 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
         description=(
             "Kredili Hesaplar / Kartlar modülü için kredi kartı, ekstre, ödeme "
             "ve kredili/limitli mevduat hesap tablolarını oluşturur."
+        ),
+    ),
+    DatabaseMigration(
+        migration_id="20260509_0003_credit_card_transactions",
+        name="Credit card transaction table",
+        target_version=3,
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS credit_card_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credit_card_id INTEGER NOT NULL,
+                statement_id INTEGER,
+                transaction_date DATE NOT NULL,
+                merchant_name VARCHAR(200) NOT NULL,
+                description TEXT,
+                amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                currency_code VARCHAR(10) NOT NULL DEFAULT 'TRY',
+                installment_count INTEGER NOT NULL DEFAULT 1,
+                installment_no INTEGER NOT NULL DEFAULT 1,
+                status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+                reference_no VARCHAR(100),
+                notes TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_credit_card_transactions_credit_card_id
+                    FOREIGN KEY (credit_card_id)
+                    REFERENCES credit_cards (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_credit_card_transactions_statement_id
+                    FOREIGN KEY (statement_id)
+                    REFERENCES credit_card_statements (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_credit_card_id
+            ON credit_card_transactions (credit_card_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_statement_id
+            ON credit_card_transactions (statement_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_transaction_date
+            ON credit_card_transactions (transaction_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_merchant_name
+            ON credit_card_transactions (merchant_name)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_status
+            ON credit_card_transactions (status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_reference_no
+            ON credit_card_transactions (reference_no)
+            """,
+        ),
+        description=(
+            "Kredi kartı harcama girişi için işlem tablosunu oluşturur. "
+            "İşlemler ilk aşamada bekleyen harcama olarak kaydedilir; ekstre bağlantısı sonraki fazda yapılır."
         ),
     ),
 )

@@ -12,6 +12,7 @@ from app.db.types import MONEY, RATE
 from app.models.enums import (
     CreditCardNetwork,
     CreditCardStatementStatus,
+    CreditCardTransactionStatus,
     CreditCardType,
     CreditLimitType,
     CreditLimitUsageMode,
@@ -134,6 +135,12 @@ class CreditCard(Base):
         cascade="save-update, merge",
     )
 
+    transactions: Mapped[List["CreditCardTransaction"]] = relationship(
+        "CreditCardTransaction",
+        back_populates="credit_card",
+        cascade="save-update, merge",
+    )
+
     def __repr__(self) -> str:
         return (
             f"<CreditCard id={self.id} bank_id={self.bank_id} "
@@ -233,10 +240,120 @@ class CreditCardStatement(Base):
         cascade="save-update, merge",
     )
 
+    transactions: Mapped[List["CreditCardTransaction"]] = relationship(
+        "CreditCardTransaction",
+        back_populates="statement",
+        cascade="save-update, merge",
+    )
+
     def __repr__(self) -> str:
         return (
             f"<CreditCardStatement id={self.id} credit_card_id={self.credit_card_id} "
             f"period_label={self.period_label!r} status={self.status!r}>"
+        )
+
+
+class CreditCardTransaction(Base):
+    __tablename__ = "credit_card_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    credit_card_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_cards.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    statement_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("credit_card_statements.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    transaction_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    merchant_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
+    currency_code: Mapped[CurrencyCode] = mapped_column(
+        Enum(
+            CurrencyCode,
+            native_enum=False,
+            validate_strings=True,
+            length=10,
+            name="credit_card_transaction_currency_code",
+        ),
+        nullable=False,
+        default=CurrencyCode.TRY,
+        server_default=CurrencyCode.TRY.value,
+    )
+
+    installment_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+
+    installment_no: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+
+    status: Mapped[CreditCardTransactionStatus] = mapped_column(
+        Enum(
+            CreditCardTransactionStatus,
+            native_enum=False,
+            validate_strings=True,
+            length=30,
+            name="credit_card_transaction_status",
+        ),
+        nullable=False,
+        default=CreditCardTransactionStatus.PENDING,
+        server_default=CreditCardTransactionStatus.PENDING.value,
+        index=True,
+    )
+
+    reference_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    credit_card: Mapped["CreditCard"] = relationship(
+        "CreditCard",
+        back_populates="transactions",
+    )
+
+    statement: Mapped[Optional["CreditCardStatement"]] = relationship(
+        "CreditCardStatement",
+        back_populates="transactions",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CreditCardTransaction id={self.id} credit_card_id={self.credit_card_id} "
+            f"merchant_name={self.merchant_name!r} amount={self.amount}>"
         )
 
 
@@ -430,6 +547,7 @@ class BankAccountCreditLimit(Base):
 __all__ = [
     "CreditCard",
     "CreditCardStatement",
+    "CreditCardTransaction",
     "CreditCardPayment",
     "BankAccountCreditLimit",
 ]

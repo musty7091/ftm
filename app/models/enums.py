@@ -123,6 +123,13 @@ class CreditCardStatementStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class CreditCardTransactionStatus(StrEnum):
+    PENDING = "PENDING"
+    IN_STATEMENT = "IN_STATEMENT"
+    CANCELLED = "CANCELLED"
+    REFUNDED = "REFUNDED"
+
+
 class CreditLimitType(StrEnum):
     KMH = "KMH"
     LIMITED_DEPOSIT = "LIMITED_DEPOSIT"
