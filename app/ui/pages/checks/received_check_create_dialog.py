@@ -3,6 +3,7 @@ from datetime import date
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -41,6 +43,16 @@ class ReceivedCheckBankAccountOption:
     currency_code: str
 
 
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event: Any) -> None:
+        event.ignore()
+
+
+class NoWheelDateEdit(QDateEdit):
+    def wheelEvent(self, event: Any) -> None:
+        event.ignore()
+
+
 def _qdate_to_date(qdate: QDate) -> date:
     return date(qdate.year(), qdate.month(), qdate.day())
 
@@ -63,12 +75,39 @@ class ReceivedCheckCreateDialog(QDialog):
         self.payload: dict[str, Any] | None = None
 
         self.setWindowTitle("Alınan Çek Oluştur")
-        self.resize(700, 720)
-        self.setStyleSheet(BANK_DIALOG_STYLES)
+        self.setSizeGripEnabled(True)
+        self._apply_responsive_dialog_size()
+
+        self.setStyleSheet(
+            BANK_DIALOG_STYLES
+            + """
+            QScrollArea {
+                background-color: #0f172a;
+                border: none;
+            }
+
+            QScrollArea > QWidget > QWidget {
+                background-color: #0f172a;
+            }
+
+            QWidget#ReceivedCheckDialogHeader,
+            QWidget#ReceivedCheckDialogBody,
+            QWidget#ReceivedCheckDialogFooter {
+                background-color: #0f172a;
+            }
+            """
+        )
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 22, 24, 22)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(24, 22, 24, 18)
+        main_layout.setSpacing(14)
+
+        header_widget = QWidget()
+        header_widget.setObjectName("ReceivedCheckDialogHeader")
+
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
 
         title = QLabel("Alınan Çek Oluştur")
         title.setObjectName("SectionTitle")
@@ -81,13 +120,29 @@ class ReceivedCheckCreateDialog(QDialog):
         subtitle.setObjectName("MutedText")
         subtitle.setWordWrap(True)
 
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+
+        body_scroll_area = QScrollArea()
+        body_scroll_area.setWidgetResizable(True)
+        body_scroll_area.setFrameShape(QScrollArea.NoFrame)
+        body_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        body_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        body_widget = QWidget()
+        body_widget.setObjectName("ReceivedCheckDialogBody")
+
+        body_layout = QVBoxLayout(body_widget)
+        body_layout.setContentsMargins(0, 4, 10, 4)
+        body_layout.setSpacing(14)
+
         form_layout = QFormLayout()
         form_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form_layout.setFormAlignment(Qt.AlignTop)
         form_layout.setHorizontalSpacing(18)
         form_layout.setVerticalSpacing(14)
 
-        self.customer_combo = QComboBox()
+        self.customer_combo = NoWheelComboBox()
         self.customer_combo.setMinimumHeight(38)
         self._fill_customer_combo()
         form_layout.addRow("Müşteri kartı", self.customer_combo)
@@ -107,14 +162,14 @@ class ReceivedCheckCreateDialog(QDialog):
         self.check_number_input.setPlaceholderText("Çek numarası")
         form_layout.addRow("Çek no", self.check_number_input)
 
-        self.received_date_edit = QDateEdit()
+        self.received_date_edit = NoWheelDateEdit()
         self.received_date_edit.setMinimumHeight(38)
         self.received_date_edit.setCalendarPopup(True)
         self.received_date_edit.setDisplayFormat("dd.MM.yyyy")
         self.received_date_edit.setDate(QDate.currentDate())
         form_layout.addRow("Alınış tarihi", self.received_date_edit)
 
-        self.due_date_edit = QDateEdit()
+        self.due_date_edit = NoWheelDateEdit()
         self.due_date_edit.setMinimumHeight(38)
         self.due_date_edit.setCalendarPopup(True)
         self.due_date_edit.setDisplayFormat("dd.MM.yyyy")
@@ -126,7 +181,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.amount_input.setPlaceholderText("Örn: 12500,50")
         form_layout.addRow("Tutar", self.amount_input)
 
-        self.currency_combo = QComboBox()
+        self.currency_combo = NoWheelComboBox()
         self.currency_combo.setMinimumHeight(38)
         self.currency_combo.addItem("TRY", CurrencyCode.TRY)
         self.currency_combo.addItem("USD", CurrencyCode.USD)
@@ -135,7 +190,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.currency_combo.currentIndexChanged.connect(self._fill_collection_bank_account_combo)
         form_layout.addRow("Para birimi", self.currency_combo)
 
-        self.status_combo = QComboBox()
+        self.status_combo = NoWheelComboBox()
         self.status_combo.setMinimumHeight(38)
         self.status_combo.addItem("Portföy", ReceivedCheckStatus.PORTFOLIO)
         self.status_combo.addItem("Bankaya Verildi", ReceivedCheckStatus.GIVEN_TO_BANK)
@@ -143,7 +198,7 @@ class ReceivedCheckCreateDialog(QDialog):
         self.status_combo.currentIndexChanged.connect(self._update_collection_bank_account_info)
         form_layout.addRow("İlk durum", self.status_combo)
 
-        self.collection_bank_account_combo = QComboBox()
+        self.collection_bank_account_combo = NoWheelComboBox()
         self.collection_bank_account_combo.setMinimumHeight(38)
         self.collection_bank_account_combo.currentIndexChanged.connect(self._update_collection_bank_account_info)
         form_layout.addRow("Tahsil hesabı", self.collection_bank_account_combo)
@@ -167,8 +222,17 @@ class ReceivedCheckCreateDialog(QDialog):
         self.warning_label.setObjectName("MutedText")
         self.warning_label.setWordWrap(True)
 
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
+        body_layout.addLayout(form_layout)
+        body_layout.addWidget(self.warning_label)
+
+        body_scroll_area.setWidget(body_widget)
+
+        footer_widget = QWidget()
+        footer_widget.setObjectName("ReceivedCheckDialogFooter")
+
+        footer_layout = QHBoxLayout(footer_widget)
+        footer_layout.setContentsMargins(0, 8, 0, 0)
+        footer_layout.setSpacing(10)
 
         self.save_button = QPushButton("Kaydet")
         self.cancel_button = QPushButton("Vazgeç")
@@ -179,20 +243,38 @@ class ReceivedCheckCreateDialog(QDialog):
         self.save_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
 
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.cancel_button)
-        button_layout.addWidget(self.save_button)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.cancel_button)
+        footer_layout.addWidget(self.save_button)
 
-        main_layout.addWidget(title)
-        main_layout.addWidget(subtitle)
-        main_layout.addSpacing(4)
-        main_layout.addLayout(form_layout)
-        main_layout.addWidget(self.warning_label)
-        main_layout.addStretch(1)
-        main_layout.addLayout(button_layout)
+        main_layout.addWidget(header_widget, 0)
+        main_layout.addWidget(body_scroll_area, 1)
+        main_layout.addWidget(footer_widget, 0)
 
         self._fill_collection_bank_account_combo()
         self._apply_missing_data_state()
+
+    def _apply_responsive_dialog_size(self) -> None:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+
+        if screen is None:
+            self.resize(700, 720)
+            return
+
+        available_geometry = screen.availableGeometry()
+
+        max_width = max(520, int(available_geometry.width() * 0.90))
+        max_height = max(440, int(available_geometry.height() * 0.85))
+
+        preferred_width = min(700, max_width)
+        preferred_height = min(720, max_height)
+
+        minimum_width = min(520, preferred_width)
+        minimum_height = min(420, preferred_height)
+
+        self.setMaximumSize(max_width, max_height)
+        self.setMinimumSize(minimum_width, minimum_height)
+        self.resize(preferred_width, preferred_height)
 
     def _load_customers(self) -> list[ReceivedCheckCustomerOption]:
         with session_scope() as session:

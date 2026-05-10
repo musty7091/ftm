@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +23,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.reports.bank_movement_report_data import BankMovementReportFilter
+from app.reports.bank_movement_report_data import (
+    BankMovementReportFilter,
+    load_bank_movement_report_data,
+)
 from app.reports.bank_movement_report_pdf import create_bank_movement_report_pdf
 from app.reports.bank_movement_report_excel import create_bank_movement_report_excel
-from app.reports.check_due_report_data import CheckDueReportFilter
+from app.reports.check_due_report_data import (
+    CheckDueReportFilter,
+    load_check_due_report_data,
+)
 from app.reports.check_due_report_pdf import create_check_due_report_pdf
 from app.reports.check_due_report_excel import create_check_due_report_excel
-from app.reports.pos_settlement_report_data import PosSettlementReportFilter
+from app.reports.pos_settlement_report_data import (
+    PosSettlementReportFilter,
+    load_pos_settlement_report_data,
+)
 from app.reports.discount_batch_report_data import (
     DiscountBatchReportFilter,
     list_discount_batch_options,
@@ -39,8 +49,12 @@ from app.reports.financing_cost_report_pdf import create_financing_cost_report_p
 from app.reports.financing_cost_report_excel import create_financing_cost_report_excel
 from app.reports.pos_settlement_report_pdf import create_pos_settlement_report_pdf
 from app.reports.pos_settlement_report_excel import create_pos_settlement_report_excel
-from app.reports.risk_check_report_data import RiskCheckReportFilter
+from app.reports.risk_check_report_data import (
+    RiskCheckReportFilter,
+    load_risk_check_report_data,
+)
 from app.reports.risk_check_report_pdf import create_risk_check_report_pdf
+from app.reports.management_signature_report import create_management_signature_report_pdf
 from app.ui.pages.reports import (
     build_discount_reports_tab,
     build_excel_reports_tab,
@@ -51,6 +65,9 @@ from app.ui.pages.reports.pos_settlement_excel_filter_dialog import (
 from app.ui.pages.reports.check_excel_filter_dialog import get_check_excel_filter_selection
 from app.ui.pages.reports.bank_movement_excel_filter_dialog import (
     get_bank_movement_excel_filter_selection,
+)
+from app.ui.pages.reports.partner_statement_report_dialog import (
+    open_partner_statement_report_dialog,
 )
 
 REPORTS_PAGE_STYLE = """
@@ -235,6 +252,163 @@ QLabel#ReportPlannedBadge {
     border: 1px solid rgba(59, 130, 246, 0.38);
     border-radius: 8px;
     padding: 4px 7px;
+}
+
+
+QFrame#ManagementHeroCard {
+    background-color: rgba(30, 64, 175, 0.24);
+    border: 1px solid rgba(59, 130, 246, 0.42);
+    border-radius: 18px;
+}
+
+QFrame#ManagementSummaryCard {
+    background-color: #111827;
+    border: 1px solid #24324a;
+    border-radius: 18px;
+}
+
+QFrame#ManagementKpiCard {
+    background-color: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 16px;
+}
+
+QFrame#ManagementKpiCardPositive {
+    background-color: rgba(6, 78, 59, 0.24);
+    border: 1px solid rgba(16, 185, 129, 0.36);
+    border-radius: 16px;
+}
+
+QFrame#ManagementKpiCardWarning {
+    background-color: rgba(120, 53, 15, 0.24);
+    border: 1px solid rgba(245, 158, 11, 0.38);
+    border-radius: 16px;
+}
+
+QFrame#ManagementKpiCardCritical {
+    background-color: rgba(127, 29, 29, 0.24);
+    border: 1px solid rgba(239, 68, 68, 0.42);
+    border-radius: 16px;
+}
+
+QFrame#ManagementAlertBox {
+    background-color: rgba(15, 23, 42, 0.64);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 14px;
+}
+
+QFrame#ManagementAlertBoxCritical {
+    background-color: rgba(127, 29, 29, 0.22);
+    border: 1px solid rgba(239, 68, 68, 0.38);
+    border-radius: 14px;
+}
+
+QFrame#ManagementDueRow {
+    background-color: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+}
+
+QLabel#ManagementHeroTitle {
+    color: #f8fafc;
+    font-size: 20px;
+    font-weight: 900;
+}
+
+QLabel#ManagementHeroBody {
+    color: #bfdbfe;
+    font-size: 12px;
+}
+
+QLabel#ManagementKpiTitle {
+    color: #bfdbfe;
+    font-size: 12px;
+    font-weight: 800;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementKpiValue {
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: 900;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementKpiBody {
+    color: #94a3b8;
+    font-size: 12px;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementAlertText {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 700;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementDueHeader {
+    color: #bfdbfe;
+    font-size: 11px;
+    font-weight: 900;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementDueCell {
+    color: #e5e7eb;
+    font-size: 12px;
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#ManagementPlannedBadge {
+    color: #fed7aa;
+    font-size: 11px;
+    font-weight: 800;
+    background-color: rgba(120, 53, 15, 0.28);
+    border: 1px solid rgba(251, 146, 60, 0.38);
+    border-radius: 8px;
+    padding: 4px 7px;
+}
+
+QPushButton#ManagementPrimaryButton {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: 1px solid #3b82f6;
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-weight: 900;
+}
+
+QPushButton#ManagementPrimaryButton:hover {
+    background-color: #1d4ed8;
+}
+
+QPushButton#ManagementDangerButton {
+    background-color: rgba(127, 29, 29, 0.78);
+    color: #ffffff;
+    border: 1px solid rgba(239, 68, 68, 0.72);
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-weight: 900;
+}
+
+QPushButton#ManagementDangerButton:hover {
+    background-color: rgba(153, 27, 27, 0.92);
+}
+
+QPushButton#ManagementDisabledButton:disabled {
+    background-color: rgba(30, 41, 59, 0.55);
+    color: #64748b;
+    border: 1px solid rgba(100, 116, 139, 0.32);
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-weight: 900;
 }
 
 QComboBox,
@@ -489,6 +663,101 @@ def _current_year_range() -> tuple[date, date]:
     today = date.today()
 
     return date(today.year, 1, 1), date(today.year, 12, 31)
+
+
+def _format_decimal_tr(value: Any) -> str:
+    try:
+        amount = Decimal(str(value or "0")).quantize(Decimal("0.01"))
+    except Exception:
+        amount = Decimal("0.00")
+
+    text = f"{amount:,.2f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _currency_sort_key(currency_code: str) -> tuple[int, str]:
+    normalized_code = str(currency_code or "TRY").strip().upper() or "TRY"
+    priority = {
+        "TRY": 0,
+        "USD": 1,
+        "EUR": 2,
+        "GBP": 3,
+    }
+
+    return priority.get(normalized_code, 99), normalized_code
+
+
+def _format_totals_tr(
+    totals: dict[str, Decimal] | None,
+    *,
+    empty_text: str = "-",
+    compact_limit: int = 2,
+) -> str:
+    if not totals:
+        return empty_text
+
+    normalized_items: list[tuple[str, Decimal]] = []
+
+    for currency_code, amount in totals.items():
+        try:
+            decimal_amount = Decimal(str(amount or "0")).quantize(Decimal("0.01"))
+        except Exception:
+            decimal_amount = Decimal("0.00")
+
+        if decimal_amount == Decimal("0.00"):
+            continue
+
+        normalized_items.append((str(currency_code or "TRY").strip().upper() or "TRY", decimal_amount))
+
+    if not normalized_items:
+        return empty_text
+
+    normalized_items.sort(key=lambda item: _currency_sort_key(item[0]))
+
+    visible_items = normalized_items[:compact_limit]
+    hidden_count = max(len(normalized_items) - compact_limit, 0)
+
+    text = " / ".join(
+        f"{_format_decimal_tr(amount)} {currency_code}"
+        for currency_code, amount in visible_items
+    )
+
+    if hidden_count > 0:
+        text = f"{text} + {hidden_count} para birimi"
+
+    return text
+
+
+def _has_negative_total(totals: dict[str, Decimal] | None) -> bool:
+    if not totals:
+        return False
+
+    for amount in totals.values():
+        try:
+            if Decimal(str(amount or "0")) < Decimal("0.00"):
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
+def _has_positive_total(totals: dict[str, Decimal] | None) -> bool:
+    if not totals:
+        return False
+
+    for amount in totals.values():
+        try:
+            if Decimal(str(amount or "0")) > Decimal("0.00"):
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
+def _date_range_text(start_date: date, end_date: date) -> str:
+    return f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
 
 
 class ReportsPage(QWidget):
@@ -1020,7 +1289,7 @@ class ReportsPage(QWidget):
         title.setObjectName("ReportTitle")
 
         body = QLabel(
-            "Raporlar sekmeler halinde düzenlendi. Çek, banka ve POS raporları aktif; iskonto ve Excel raporları sırayla eklenecek."
+            "Yönetim özeti, çek, banka, POS, iskonto, cari ve Excel raporlarını tek merkezden takip et."
         )
         body.setObjectName("ReportSubTitle")
         body.setWordWrap(True)
@@ -1028,7 +1297,7 @@ class ReportsPage(QWidget):
         title_box.addWidget(title)
         title_box.addWidget(body)
 
-        status = QLabel("Aktif: Çek + Risk + Banka + POS Raporları")
+        status = QLabel("Aktif: Yönetim Özeti + Çek + Risk + Banka + POS + Cari")
         status.setObjectName("ReportActiveBadge")
 
         layout.addLayout(title_box, 1)
@@ -1041,13 +1310,537 @@ class ReportsPage(QWidget):
         tabs.setObjectName("ReportsTabs")
         tabs.setDocumentMode(True)
 
+        tabs.addTab(self._build_management_summary_tab(), "Yönetim Özeti")
         tabs.addTab(self._build_check_reports_tab(), "Çek Raporları")
         tabs.addTab(self._build_bank_reports_tab(), "Banka Raporları")
         tabs.addTab(self._build_pos_reports_tab(), "POS Raporları")
         tabs.addTab(self._build_discount_reports_tab(), "İskonto Raporları")
+        tabs.addTab(self._build_partner_reports_tab(), "Cari Raporları")
         tabs.addTab(self._build_excel_reports_tab(), "Excel Aktarım")
 
         return tabs
+
+
+    def _build_management_summary_tab(self) -> QWidget:
+        tab = QWidget()
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
+
+        try:
+            snapshot = self._load_management_summary_snapshot()
+        except Exception as exc:
+            layout.addWidget(self._build_management_error_card(str(exc)))
+            layout.addStretch(1)
+            return tab
+
+        layout.addWidget(self._build_management_hero_card(snapshot))
+
+        kpi_grid = QGridLayout()
+        kpi_grid.setSpacing(12)
+
+        today_data = snapshot["today"]
+        range_7_data = snapshot["range_7"]
+        range_15_data = snapshot["range_15"]
+        range_30_data = snapshot["range_30"]
+        risk_data = snapshot["risk"]
+        bank_data = snapshot["bank_month"]
+        pos_data = snapshot["pos_month"]
+
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="Bugünkü Net Çek Pozisyonu",
+                value_text=_format_totals_tr(today_data.summary.net_effect_totals),
+                body_text=(
+                    f"Tahsilat: {_format_totals_tr(today_data.summary.received_totals)}\n"
+                    f"Ödeme: {_format_totals_tr(today_data.summary.issued_totals)}"
+                ),
+                variant=self._management_variant_for_net(today_data.summary.net_effect_totals),
+            ),
+            0,
+            0,
+        )
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="7 Günlük Net Pozisyon",
+                value_text=_format_totals_tr(range_7_data.summary.net_effect_totals),
+                body_text=(
+                    f"Tahsilat: {_format_totals_tr(range_7_data.summary.received_totals)}\n"
+                    f"Ödeme: {_format_totals_tr(range_7_data.summary.issued_totals)}"
+                ),
+                variant=self._management_variant_for_net(range_7_data.summary.net_effect_totals),
+            ),
+            0,
+            1,
+        )
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="15 Günlük Net Pozisyon",
+                value_text=_format_totals_tr(range_15_data.summary.net_effect_totals),
+                body_text=(
+                    f"Tahsilat: {_format_totals_tr(range_15_data.summary.received_totals)}\n"
+                    f"Ödeme: {_format_totals_tr(range_15_data.summary.issued_totals)}"
+                ),
+                variant=self._management_variant_for_net(range_15_data.summary.net_effect_totals),
+            ),
+            0,
+            2,
+        )
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="30 Günlük Net Pozisyon",
+                value_text=_format_totals_tr(range_30_data.summary.net_effect_totals),
+                body_text=(
+                    f"Tahsilat: {_format_totals_tr(range_30_data.summary.received_totals)}\n"
+                    f"Ödeme: {_format_totals_tr(range_30_data.summary.issued_totals)}"
+                ),
+                variant=self._management_variant_for_net(range_30_data.summary.net_effect_totals),
+            ),
+            1,
+            0,
+        )
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="Riskli / Problemli Çekler",
+                value_text=f"{risk_data.summary.total_count} kayıt",
+                body_text=(
+                    f"Problemli: {risk_data.summary.problem_count} / Gecikmiş: {risk_data.summary.overdue_count}\n"
+                    f"Tutar: {_format_totals_tr(risk_data.summary.grand_totals)}"
+                ),
+                variant="critical" if risk_data.summary.total_count > 0 else "positive",
+            ),
+            1,
+            1,
+        )
+        kpi_grid.addWidget(
+            self._build_management_kpi_card(
+                title_text="Bu Ay Banka Neti / POS Beklentisi",
+                value_text=_format_totals_tr(bank_data.summary.net_totals),
+                body_text=(
+                    f"Banka giriş: {_format_totals_tr(bank_data.summary.incoming_totals)}\n"
+                    f"POS beklenen: {_format_totals_tr(pos_data.summary.expected_net_totals)}"
+                ),
+                variant=self._management_variant_for_net(bank_data.summary.net_totals),
+            ),
+            1,
+            2,
+        )
+
+        layout.addLayout(kpi_grid)
+
+        bottom_grid = QGridLayout()
+        bottom_grid.setSpacing(12)
+        bottom_grid.addWidget(self._build_management_alerts_card(snapshot), 0, 0)
+        bottom_grid.addWidget(self._build_management_due_list_card(snapshot), 0, 1)
+        bottom_grid.addWidget(self._build_management_actions_card(snapshot), 1, 0, 1, 2)
+
+        layout.addLayout(bottom_grid)
+        layout.addStretch(1)
+
+        return tab
+
+    def _load_management_summary_snapshot(self) -> dict[str, Any]:
+        today = date.today()
+        current_month_start, current_month_end = _current_month_range()
+        current_year_start, current_year_end = _current_year_range()
+
+        return {
+            "today": load_check_due_report_data(
+                CheckDueReportFilter(
+                    start_date=today,
+                    end_date=today,
+                    check_type="ALL",
+                    status_group="PENDING",
+                    currency_code="ALL",
+                )
+            ),
+            "range_7": load_check_due_report_data(
+                CheckDueReportFilter(
+                    start_date=today,
+                    end_date=today + timedelta(days=7),
+                    check_type="ALL",
+                    status_group="PENDING",
+                    currency_code="ALL",
+                )
+            ),
+            "range_15": load_check_due_report_data(
+                CheckDueReportFilter(
+                    start_date=today,
+                    end_date=today + timedelta(days=15),
+                    check_type="ALL",
+                    status_group="PENDING",
+                    currency_code="ALL",
+                )
+            ),
+            "range_30": load_check_due_report_data(
+                CheckDueReportFilter(
+                    start_date=today,
+                    end_date=today + timedelta(days=30),
+                    check_type="ALL",
+                    status_group="PENDING",
+                    currency_code="ALL",
+                )
+            ),
+            "risk": load_risk_check_report_data(
+                RiskCheckReportFilter(
+                    start_date=current_year_start,
+                    end_date=current_year_end,
+                    check_type="ALL",
+                    risk_type="ALL",
+                    currency_code="ALL",
+                )
+            ),
+            "bank_month": load_bank_movement_report_data(
+                BankMovementReportFilter(
+                    start_date=current_month_start,
+                    end_date=current_month_end,
+                    bank_id=None,
+                    bank_account_id=None,
+                    direction="ALL",
+                    status="ALL",
+                    currency_code="ALL",
+                    source_type="ALL",
+                )
+            ),
+            "pos_month": load_pos_settlement_report_data(
+                PosSettlementReportFilter(
+                    start_date=current_month_start,
+                    end_date=current_month_end,
+                    pos_device_id=None,
+                    bank_id=None,
+                    bank_account_id=None,
+                    status="ALL",
+                    currency_code="ALL",
+                )
+            ),
+            "today_date": today,
+            "current_month_start": current_month_start,
+            "current_month_end": current_month_end,
+            "current_year_start": current_year_start,
+            "current_year_end": current_year_end,
+        }
+
+    def _build_management_error_card(self, error_message: str) -> QWidget:
+        card = QFrame()
+        card.setObjectName("ManagementSummaryCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Yönetim Özeti yüklenemedi")
+        title.setObjectName("ReportSectionTitle")
+
+        body = QLabel(
+            "Bu sekme çek, banka ve POS verilerini okuyarak çalışır. Veriler yüklenirken hata oluştu.\n\n"
+            f"Hata: {error_message}"
+        )
+        body.setObjectName("ReportSubTitle")
+        body.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+
+        return card
+
+    def _build_management_hero_card(self, snapshot: dict[str, Any]) -> QWidget:
+        card = QFrame()
+        card.setObjectName("ManagementHeroCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+
+        title = QLabel("Yönetim Özeti")
+        title.setObjectName("ManagementHeroTitle")
+
+        body = QLabel(
+            "Patron ekranı: bugün, 7 gün, 15 gün ve 30 günlük çek pozisyonunu; riskli kayıtları, banka netini ve POS beklentisini tek bakışta gösterir."
+        )
+        body.setObjectName("ManagementHeroBody")
+        body.setWordWrap(True)
+
+        title_box.addWidget(title)
+        title_box.addWidget(body)
+
+        period_badge = QLabel(
+            f"Bugün: {snapshot['today_date'].strftime('%d.%m.%Y')}  |  30 Gün: "
+            f"{_date_range_text(snapshot['today_date'], snapshot['today_date'] + timedelta(days=30))}"
+        )
+        period_badge.setObjectName("ReportActiveBadge")
+
+        layout.addLayout(title_box, 1)
+        layout.addWidget(period_badge, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        return card
+
+    def _build_management_kpi_card(
+        self,
+        *,
+        title_text: str,
+        value_text: str,
+        body_text: str,
+        variant: str = "normal",
+    ) -> QWidget:
+        card = QFrame()
+
+        if variant == "critical":
+            card.setObjectName("ManagementKpiCardCritical")
+        elif variant == "warning":
+            card.setObjectName("ManagementKpiCardWarning")
+        elif variant == "positive":
+            card.setObjectName("ManagementKpiCardPositive")
+        else:
+            card.setObjectName("ManagementKpiCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title = QLabel(title_text)
+        title.setObjectName("ManagementKpiTitle")
+        title.setWordWrap(True)
+
+        value = QLabel(value_text)
+        value.setObjectName("ManagementKpiValue")
+        value.setWordWrap(True)
+
+        body = QLabel(body_text)
+        body.setObjectName("ManagementKpiBody")
+        body.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(value)
+        layout.addWidget(body)
+        layout.addStretch(1)
+
+        return card
+
+    def _management_variant_for_net(self, totals: dict[str, Decimal] | None) -> str:
+        if _has_negative_total(totals):
+            return "critical"
+
+        if _has_positive_total(totals):
+            return "positive"
+
+        return "normal"
+
+    def _build_management_alerts_card(self, snapshot: dict[str, Any]) -> QWidget:
+        card = QFrame()
+        card.setObjectName("ManagementSummaryCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Kritik Uyarılar")
+        title.setObjectName("ReportSectionTitle")
+
+        subtitle = QLabel("Bu alan, yöneticiye ilk bakışta dikkat edilmesi gereken konuları söyler.")
+        subtitle.setObjectName("ReportSubTitle")
+        subtitle.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        alert_texts = self._management_alert_texts(snapshot)
+
+        for alert_index, alert_text in enumerate(alert_texts):
+            alert_box = QFrame()
+            alert_box.setObjectName("ManagementAlertBoxCritical" if alert_index == 0 and len(alert_texts) > 1 else "ManagementAlertBox")
+
+            alert_layout = QHBoxLayout(alert_box)
+            alert_layout.setContentsMargins(12, 10, 12, 10)
+            alert_layout.setSpacing(8)
+
+            label = QLabel(alert_text)
+            label.setObjectName("ManagementAlertText")
+            label.setWordWrap(True)
+
+            alert_layout.addWidget(label)
+            layout.addWidget(alert_box)
+
+        layout.addStretch(1)
+
+        return card
+
+    def _management_alert_texts(self, snapshot: dict[str, Any]) -> list[str]:
+        alerts: list[str] = []
+
+        range_7_data = snapshot["range_7"]
+        range_15_data = snapshot["range_15"]
+        range_30_data = snapshot["range_30"]
+        risk_data = snapshot["risk"]
+        pos_data = snapshot["pos_month"]
+
+        if _has_negative_total(range_7_data.summary.net_effect_totals):
+            alerts.append(
+                f"7 günlük çek netinde açık var: {_format_totals_tr(range_7_data.summary.net_effect_totals)}"
+            )
+
+        if _has_negative_total(range_15_data.summary.net_effect_totals):
+            alerts.append(
+                f"15 günlük çek netinde açık var: {_format_totals_tr(range_15_data.summary.net_effect_totals)}"
+            )
+
+        if _has_negative_total(range_30_data.summary.net_effect_totals):
+            alerts.append(
+                f"30 günlük çek netinde açık var: {_format_totals_tr(range_30_data.summary.net_effect_totals)}"
+            )
+
+        if risk_data.summary.problem_count > 0:
+            alerts.append(f"Problemli çek kaydı var: {risk_data.summary.problem_count} kayıt")
+
+        if risk_data.summary.overdue_count > 0:
+            alerts.append(f"Vadesi geçmiş bekleyen çek var: {risk_data.summary.overdue_count} kayıt")
+
+        if pos_data.summary.mismatch_count > 0:
+            alerts.append(f"POS mutabakatında fark görünen kayıt var: {pos_data.summary.mismatch_count} kayıt")
+
+        if not alerts:
+            alerts.append("Kritik uyarı yok. Yine de vadeler günlük kontrol edilmeli.")
+
+        return alerts[:6]
+
+    def _build_management_due_list_card(self, snapshot: dict[str, Any]) -> QWidget:
+        card = QFrame()
+        card.setObjectName("ManagementSummaryCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Yaklaşan Kritik Vadeler")
+        title.setObjectName("ReportSectionTitle")
+
+        subtitle = QLabel("Önümüzdeki 30 gün içinde bekleyen veya problemli görünen ilk çek hareketleri.")
+        subtitle.setObjectName("ReportSubTitle")
+        subtitle.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+
+        headers = ["Tarih", "Tür", "Muhatap", "Tutar", "Durum"]
+        for column_index, header_text in enumerate(headers):
+            header = QLabel(header_text)
+            header.setObjectName("ManagementDueHeader")
+            grid.addWidget(header, 0, column_index)
+
+        due_rows = [
+            row
+            for row in snapshot["range_30"].rows
+            if str(row.status_group or "").upper() in {"PENDING", "PROBLEM"}
+        ][:6]
+
+        if not due_rows:
+            empty_label = QLabel("Önümüzdeki 30 gün için bekleyen/problemli çek hareketi bulunamadı.")
+            empty_label.setObjectName("ManagementKpiBody")
+            empty_label.setWordWrap(True)
+            grid.addWidget(empty_label, 1, 0, 1, 5)
+        else:
+            for row_index, row in enumerate(due_rows, start=1):
+                self._add_management_due_row(grid, row_index, row)
+
+        layout.addLayout(grid)
+        layout.addStretch(1)
+
+        return card
+
+    def _add_management_due_row(self, grid: QGridLayout, row_index: int, row: Any) -> None:
+        values = [
+            row.due_date.strftime("%d.%m.%Y"),
+            row.check_type_text,
+            row.party_name,
+            f"{_format_decimal_tr(row.amount)} {row.currency_code}",
+            row.status_text,
+        ]
+
+        for column_index, value in enumerate(values):
+            label = QLabel(str(value or "-"))
+            label.setObjectName("ManagementDueCell")
+            label.setWordWrap(True)
+            grid.addWidget(label, row_index, column_index)
+
+    def _build_management_actions_card(self, snapshot: dict[str, Any]) -> QWidget:
+        card = QFrame()
+        card.setObjectName("ManagementSummaryCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+
+        title = QLabel("Yönetim Raporu Aksiyonları")
+        title.setObjectName("ReportSectionTitle")
+
+        subtitle = QLabel(
+            "Yönetim PDF Al butonu FTM Yönetim İmza Raporu'nu üretir. "
+            "Diğer butonlar hızlı kontrol ve karşılaştırma için korunmuştur."
+        )
+        subtitle.setObjectName("ReportSubTitle")
+        subtitle.setWordWrap(True)
+
+        active_badge = QLabel("Aktif: FTM Yönetim İmza Raporu")
+        active_badge.setObjectName("ManagementPlannedBadge")
+
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        title_box.addWidget(active_badge, 0, Qt.AlignLeft)
+
+        today = snapshot["today_date"]
+
+        check_pdf_button = QPushButton("30 Günlük Çek PDF Al")
+        check_pdf_button.setObjectName("ManagementPrimaryButton")
+        check_pdf_button.setCursor(Qt.PointingHandCursor)
+        check_pdf_button.clicked.connect(
+            lambda checked=False: self._create_quick_due_report_pdf(
+                start_date=today,
+                end_date=today + timedelta(days=30),
+                file_label="Yonetim_Ozeti_30_Gunluk_Cek_Raporu",
+            )
+        )
+
+        risk_pdf_button = QPushButton("Risk PDF Al")
+        risk_pdf_button.setObjectName("ManagementDangerButton")
+        risk_pdf_button.setCursor(Qt.PointingHandCursor)
+        risk_pdf_button.clicked.connect(
+            lambda checked=False: self._create_quick_risk_report_pdf(
+                start_date=snapshot["current_year_start"],
+                end_date=snapshot["current_year_end"],
+                file_label="Yonetim_Ozeti_Risk_Raporu",
+            )
+        )
+
+        management_pdf_button = QPushButton("Yönetim PDF Al")
+        management_pdf_button.setObjectName("ManagementPrimaryButton")
+        management_pdf_button.setCursor(Qt.PointingHandCursor)
+        management_pdf_button.clicked.connect(
+            lambda checked=False: self._create_management_signature_pdf(
+                start_date=today,
+                end_date=today + timedelta(days=30),
+                snapshot=snapshot,
+            )
+        )
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+        button_row.addWidget(management_pdf_button)
+        button_row.addWidget(check_pdf_button)
+        button_row.addWidget(risk_pdf_button)
+
+        layout.addLayout(title_box, 1)
+        layout.addLayout(button_row, 0)
+
+        return card
 
     def _build_check_reports_tab(self) -> QWidget:
         tab = QWidget()
@@ -1093,6 +1886,134 @@ class ReportsPage(QWidget):
             on_discount_batch_report_click=self._create_current_month_discount_batch_report_pdf,
             on_financing_cost_report_click=self._create_current_month_financing_cost_report_pdf,
         )
+
+
+    def _build_planned_report_box(
+        self,
+        *,
+        title_text: str,
+        body_text: str,
+        badge_text: str = "Planlanan",
+    ) -> QWidget:
+        box = QFrame()
+        box.setObjectName("PlannedReportBox")
+
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title = QLabel(title_text)
+        title.setObjectName("ReportPlannedTitle")
+        title.setWordWrap(True)
+
+        body = QLabel(body_text)
+        body.setObjectName("ReportPlannedBody")
+        body.setWordWrap(True)
+
+        badge = QLabel(badge_text)
+        badge.setObjectName("ReportPlannedBadge")
+
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addStretch(1)
+        layout.addWidget(badge, 0, Qt.AlignLeft)
+
+        return box
+
+    def _build_partner_reports_tab(self) -> QWidget:
+        tab = QWidget()
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("QuickReportsCard")
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 16, 18, 16)
+        card_layout.setSpacing(14)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+
+        title = QLabel("Cari Hareket Raporu")
+        title.setObjectName("ReportSectionTitle")
+
+        subtitle = QLabel(
+            "Seçilen müşteri / tedarikçi için alınan çekler, alınan çek hareketleri, yazılan çekler ve yazılan çek ödeme / iptal bilgilerini açıklamalı PDF olarak oluşturur."
+        )
+        subtitle.setObjectName("ReportSubTitle")
+        subtitle.setWordWrap(True)
+
+        active_badge = QLabel("Aktif: Cari Hareket Raporu")
+        active_badge.setObjectName("ReportActiveBadge")
+
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        title_box.addWidget(active_badge, 0, Qt.AlignLeft)
+
+        pdf_button = QPushButton("Cari Hareket PDF Al")
+        pdf_button.setObjectName("CustomReportButton")
+        pdf_button.setCursor(Qt.PointingHandCursor)
+        pdf_button.clicked.connect(self._open_partner_statement_report_dialog)
+
+        title_row.addLayout(title_box, 1)
+        title_row.addWidget(pdf_button, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        card_layout.addLayout(title_row)
+
+        planned_grid = QGridLayout()
+        planned_grid.setSpacing(12)
+
+        planned_reports = [
+            (
+                "Cari Çek Pozisyon Raporu",
+                "Cari bazlı açık, sonuçlanan ve problemli çek pozisyonu için planlanan rapor.",
+            ),
+            (
+                "Cari Risk Raporu",
+                "Seçilen carinin riskli, gecikmiş ve problemli çek geçmişi için planlanan rapor.",
+            ),
+            (
+                "Cari Mutabakat Raporu",
+                "Cari mutabakat ve dönemsel hesap kontrolü için planlanan rapor.",
+            ),
+        ]
+
+        for index, planned_report in enumerate(planned_reports):
+            planned_grid.addWidget(
+                self._build_planned_report_box(
+                    title_text=planned_report[0],
+                    body_text=planned_report[1],
+                    badge_text="Planlanan",
+                ),
+                0,
+                index,
+            )
+
+        card_layout.addLayout(planned_grid)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+        return tab
+
+    def _open_partner_statement_report_dialog(self) -> None:
+        try:
+            open_partner_statement_report_dialog(
+                parent=self,
+                created_by=_created_by_text(self.current_user),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Cari Hareket Raporu Açılamadı",
+                f"Cari Hareket Raporu penceresi açılırken hata oluştu:\n\n{exc}",
+            )
 
     def _build_excel_reports_tab(self) -> QWidget:
         return build_excel_reports_tab(
@@ -2081,6 +3002,56 @@ class ReportsPage(QWidget):
         )
 
         return str(reports_folder / file_name)
+
+    def _create_management_signature_pdf(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        snapshot: dict[str, Any] | None = None,
+    ) -> None:
+        suggested_path = self._suggested_pdf_path(
+            file_label="Yonetim_Imza_Raporu",
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "FTM Yönetim İmza Raporu PDF Kaydet",
+            suggested_path,
+            "PDF Dosyası (*.pdf)",
+        )
+
+        if not selected_path:
+            return
+
+        output_path = Path(selected_path)
+
+        if output_path.suffix.lower() != ".pdf":
+            output_path = output_path.with_suffix(".pdf")
+
+        try:
+            created_path = create_management_signature_report_pdf(
+                output_path=output_path,
+                start_date=start_date,
+                end_date=end_date,
+                created_by=_created_by_text(self.current_user),
+                snapshot=snapshot,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Yönetim PDF oluşturulamadı",
+                f"FTM Yönetim İmza Raporu oluşturulurken hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self._ask_open_created_pdf(
+            title="Yönetim PDF oluşturuldu",
+            message="FTM Yönetim İmza Raporu başarıyla oluşturuldu.",
+            created_path=created_path,
+        )
 
     def _create_quick_due_report_pdf(self, *, start_date: date, end_date: date, file_label: str) -> None:
         report_filter = CheckDueReportFilter(

@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,245 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
         ),
         description=(
             "FTM SQLite veritabanı için migration takip sisteminin başlangıç kaydı."
+        ),
+    ),
+    DatabaseMigration(
+        migration_id="20260509_0002_credit_accounts_cards",
+        name="Credit accounts and cards tables",
+        target_version=2,
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS credit_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_id INTEGER NOT NULL,
+                card_name VARCHAR(150) NOT NULL,
+                card_type VARCHAR(30) NOT NULL DEFAULT 'BUSINESS',
+                card_network VARCHAR(30) NOT NULL DEFAULT 'OTHER',
+                last_four_digits VARCHAR(4),
+                currency_code VARCHAR(10) NOT NULL DEFAULT 'TRY',
+                credit_limit NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                statement_cut_day INTEGER,
+                payment_due_day INTEGER,
+                default_payment_bank_account_id INTEGER,
+                notes TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_credit_cards_bank_id_card_name
+                    UNIQUE (bank_id, card_name),
+                CONSTRAINT uq_credit_cards_bank_id_last_four_digits
+                    UNIQUE (bank_id, last_four_digits),
+                CONSTRAINT fk_credit_cards_bank_id
+                    FOREIGN KEY (bank_id)
+                    REFERENCES banks (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_credit_cards_default_payment_bank_account_id
+                    FOREIGN KEY (default_payment_bank_account_id)
+                    REFERENCES bank_accounts (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_cards_bank_id
+            ON credit_cards (bank_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_cards_card_name
+            ON credit_cards (card_name)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_cards_last_four_digits
+            ON credit_cards (last_four_digits)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_cards_default_payment_bank_account_id
+            ON credit_cards (default_payment_bank_account_id)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS credit_card_statements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credit_card_id INTEGER NOT NULL,
+                period_label VARCHAR(20) NOT NULL,
+                statement_date DATE NOT NULL,
+                due_date DATE NOT NULL,
+                statement_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                minimum_payment_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                paid_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                remaining_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                status VARCHAR(30) NOT NULL DEFAULT 'ISSUED',
+                notes TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_credit_card_statements_card_id_period_label
+                    UNIQUE (credit_card_id, period_label),
+                CONSTRAINT fk_credit_card_statements_credit_card_id
+                    FOREIGN KEY (credit_card_id)
+                    REFERENCES credit_cards (id)
+                    ON DELETE RESTRICT
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_statements_credit_card_id
+            ON credit_card_statements (credit_card_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_statements_period_label
+            ON credit_card_statements (period_label)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_statements_statement_date
+            ON credit_card_statements (statement_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_statements_due_date
+            ON credit_card_statements (due_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_statements_status
+            ON credit_card_statements (status)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS credit_card_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                statement_id INTEGER NOT NULL,
+                payment_bank_account_id INTEGER,
+                payment_date DATE NOT NULL,
+                amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                reference_no VARCHAR(100),
+                notes TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_credit_card_payments_statement_id
+                    FOREIGN KEY (statement_id)
+                    REFERENCES credit_card_statements (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_credit_card_payments_payment_bank_account_id
+                    FOREIGN KEY (payment_bank_account_id)
+                    REFERENCES bank_accounts (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_statement_id
+            ON credit_card_payments (statement_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_payment_bank_account_id
+            ON credit_card_payments (payment_bank_account_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_payment_date
+            ON credit_card_payments (payment_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_reference_no
+            ON credit_card_payments (reference_no)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS bank_account_credit_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_account_id INTEGER NOT NULL,
+                limit_name VARCHAR(150) NOT NULL,
+                limit_type VARCHAR(30) NOT NULL DEFAULT 'KMH',
+                currency_code VARCHAR(10) NOT NULL DEFAULT 'TRY',
+                limit_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                usage_mode VARCHAR(40) NOT NULL DEFAULT 'MANUAL',
+                manual_used_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                interest_rate NUMERIC(18, 6) NOT NULL DEFAULT 0.000000,
+                interest_period VARCHAR(30) NOT NULL DEFAULT 'MONTHLY',
+                interest_day INTEGER,
+                contract_start_date DATE,
+                contract_end_date DATE,
+                notes TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_bank_account_credit_limits_account_id_limit_name
+                    UNIQUE (bank_account_id, limit_name),
+                CONSTRAINT fk_bank_account_credit_limits_bank_account_id
+                    FOREIGN KEY (bank_account_id)
+                    REFERENCES bank_accounts (id)
+                    ON DELETE RESTRICT
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limits_bank_account_id
+            ON bank_account_credit_limits (bank_account_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limits_limit_name
+            ON bank_account_credit_limits (limit_name)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limits_limit_type
+            ON bank_account_credit_limits (limit_type)
+            """,
+        ),
+        description=(
+            "Kredili Hesaplar / Kartlar modülü için kredi kartı, ekstre, ödeme "
+            "ve kredili/limitli mevduat hesap tablolarını oluşturur."
+        ),
+    ),
+    DatabaseMigration(
+        migration_id="20260509_0003_credit_card_transactions",
+        name="Credit card transaction table",
+        target_version=3,
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS credit_card_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credit_card_id INTEGER NOT NULL,
+                statement_id INTEGER,
+                transaction_date DATE NOT NULL,
+                merchant_name VARCHAR(200) NOT NULL,
+                description TEXT,
+                amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                currency_code VARCHAR(10) NOT NULL DEFAULT 'TRY',
+                installment_count INTEGER NOT NULL DEFAULT 1,
+                installment_no INTEGER NOT NULL DEFAULT 1,
+                status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+                reference_no VARCHAR(100),
+                notes TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_credit_card_transactions_credit_card_id
+                    FOREIGN KEY (credit_card_id)
+                    REFERENCES credit_cards (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_credit_card_transactions_statement_id
+                    FOREIGN KEY (statement_id)
+                    REFERENCES credit_card_statements (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_credit_card_id
+            ON credit_card_transactions (credit_card_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_statement_id
+            ON credit_card_transactions (statement_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_transaction_date
+            ON credit_card_transactions (transaction_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_merchant_name
+            ON credit_card_transactions (merchant_name)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_status
+            ON credit_card_transactions (status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_reference_no
+            ON credit_card_transactions (reference_no)
+            """,
+        ),
+        description=(
+            "Kredi kartı harcama girişi için işlem tablosunu oluşturur. "
+            "İşlemler ilk aşamada bekleyen harcama olarak kaydedilir; ekstre bağlantısı sonraki fazda yapılır."
         ),
     ),
 )

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
 )
 
 from app.ui.components.summary_card import SummaryCard
@@ -183,8 +184,7 @@ class DashboardPage(QWidget):
         layout.addWidget(self._build_section_label("Yardımcı Göstergeler"))
         layout.addLayout(self._build_money_radar_cards())
 
-        layout.addWidget(self._build_action_items_card(), 0)
-        layout.addStretch(1)
+        layout.addWidget(self._build_action_items_card(), 1)
 
     def _build_section_label(self, title: str) -> QLabel:
         label = QLabel(title)
@@ -414,6 +414,8 @@ class DashboardPage(QWidget):
     def _build_action_items_table_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("Card")
+        card.setMinimumHeight(300)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         card.setCursor(Qt.PointingHandCursor)
         card.setToolTip("Vade Takvimi ekranına gitmek için çift tıkla.")
 
@@ -460,8 +462,11 @@ class DashboardPage(QWidget):
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setWordWrap(False)
         table.setTextElideMode(Qt.ElideRight)
-        table.setMinimumHeight(150)
-        table.setMaximumHeight(260)
+        table.setMinimumHeight(230)
+        table.setMaximumHeight(420)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table.verticalHeader().setDefaultSectionSize(34)
+        table.verticalHeader().setMinimumSectionSize(30)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         table.cellDoubleClicked.connect(lambda row, column: self._open_due_calendar_from_table())
 
@@ -479,7 +484,7 @@ class DashboardPage(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addWidget(table)
+        layout.addWidget(table, 1)
 
         return card
 

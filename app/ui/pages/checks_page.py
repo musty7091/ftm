@@ -30,6 +30,8 @@ from app.services.check_service import (
     discount_received_check,
     mark_received_check_bounced,
     mark_received_check_returned,
+    mark_received_check_returned_with_replacement_new_check,
+    mark_received_check_returned_with_replacement_payment,
     pay_issued_check,
     send_received_check_to_bank,
 )
@@ -2909,7 +2911,6 @@ class ChecksPage(QWidget):
                     received_check_id=payload["received_check_id"],
                     endorse_date=payload["endorse_date"],
                     counterparty_text=payload["counterparty_text"],
-                    purpose_text=payload["purpose_text"],
                     reference_no=payload["reference_no"],
                     description=payload["description"],
                     endorsed_by_user_id=getattr(self.current_user, "id", None),
@@ -3149,27 +3150,90 @@ class ChecksPage(QWidget):
 
         try:
             with session_scope() as session:
-                received_check = mark_received_check_returned(
-                    session,
-                    received_check_id=payload["received_check_id"],
-                    return_date=payload["return_date"],
-                    counterparty_text=payload["counterparty_text"],
-                    purpose_text=payload["purpose_text"],
-                    reference_no=payload["reference_no"],
-                    description=payload["description"],
-                    returned_by_user_id=getattr(self.current_user, "id", None),
-                    acting_user=self.current_user,
-                )
+                returned_received_check_id = None
+                new_received_check_id = None
 
-                returned_received_check_id = received_check.id
+                if payload.get("replacement_payment_type") in {
+                    "CASH_PAYMENT_RECEIVED",
+                    "BANK_TRANSFER_RECEIVED",
+                }:
+                    received_check = mark_received_check_returned_with_replacement_payment(
+                        session,
+                        received_check_id=payload["received_check_id"],
+                        return_date=payload["return_date"],
+                        counterparty_text=payload["counterparty_text"],
+                        replacement_bank_account_id=payload["replacement_bank_account_id"],
+                        replacement_payment_date=payload["replacement_payment_date"],
+                        replacement_amount=payload["replacement_amount"],
+                        replacement_payment_type=payload["replacement_payment_type"],
+                        reference_no=payload["reference_no"],
+                        description=payload["description"],
+                        returned_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    returned_received_check_id = received_check.id
+
+                elif payload.get("replacement_new_check") is not None:
+                    replacement_new_check = payload["replacement_new_check"]
+                    returned_check, new_check = mark_received_check_returned_with_replacement_new_check(
+                        session,
+                        received_check_id=payload["received_check_id"],
+                        return_date=payload["return_date"],
+                        counterparty_text=payload["counterparty_text"],
+                        new_collection_bank_account_id=replacement_new_check["collection_bank_account_id"],
+                        new_drawer_bank_name=replacement_new_check["drawer_bank_name"],
+                        new_drawer_branch_name=replacement_new_check["drawer_branch_name"],
+                        new_check_number=replacement_new_check["check_number"],
+                        new_received_date=replacement_new_check["received_date"],
+                        new_due_date=replacement_new_check["due_date"],
+                        new_amount=replacement_new_check["amount"],
+                        reference_no=payload["reference_no"],
+                        description=payload["description"],
+                        returned_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    returned_received_check_id = returned_check.id
+                    new_received_check_id = new_check.id
+
+                else:
+                    received_check = mark_received_check_returned(
+                        session,
+                        received_check_id=payload["received_check_id"],
+                        return_date=payload["return_date"],
+                        counterparty_text=payload["counterparty_text"],
+                        reference_no=payload["reference_no"],
+                        description=payload["description"],
+                        returned_by_user_id=getattr(self.current_user, "id", None),
+                        acting_user=self.current_user,
+                    )
+                    returned_received_check_id = received_check.id
 
             self._reload_page_data()
 
-            QMessageBox.information(
-                self,
-                "Alınan çek iade işaretlendi",
-                f"Alınan çek başarıyla iade işaretlendi. Çek ID: {returned_received_check_id}",
-            )
+            if new_received_check_id is not None:
+                QMessageBox.information(
+                    self,
+                    "Alınan çek iade edildi ve yeni çek oluşturuldu",
+                    (
+                        f"Alınan çek başarıyla iade işaretlendi. Eski Çek ID: {returned_received_check_id}\n"
+                        f"Yerine alınan yeni çek portföye eklendi. Yeni Çek ID: {new_received_check_id}"
+                    ),
+                )
+            elif payload.get("replacement_payment_type") is not None:
+                QMessageBox.information(
+                    self,
+                    "Alınan çek iade edildi ve tahsilat kaydedildi",
+                    (
+                        f"Alınan çek başarıyla iade işaretlendi. Çek ID: {returned_received_check_id}\n"
+                        "Yerine alınan ödeme seçilen hesaba giriş hareketi olarak kaydedildi."
+                    ),
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Alınan çek iade işaretlendi",
+                    f"Alınan çek başarıyla iade işaretlendi. Çek ID: {returned_received_check_id}",
+                )
 
         except CheckServiceError as exc:
             QMessageBox.warning(

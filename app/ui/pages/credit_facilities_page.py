@@ -1,0 +1,1138 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.db.session import session_scope
+from app.services.credit_facility_service import (
+    CreditFacilityServiceError,
+    activate_credit_card,
+    cancel_credit_card_transaction,
+    deactivate_credit_card,
+    list_credit_card_transactions,
+    list_credit_cards,
+    list_credit_limits,
+)
+from app.ui.pages.credit_facilities.credit_card_dialog import CreditCardDialog
+from app.ui.pages.credit_facilities.credit_card_transaction_dialog import CreditCardTransactionDialog
+
+
+CREDIT_FACILITIES_PAGE_STYLE = """
+QFrame#CreditFacilitiesCard {
+    background-color: #111827;
+    border: 1px solid #24324a;
+    border-radius: 18px;
+}
+
+QFrame#CreditFacilitiesSummaryCard {
+    background-color: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 14px;
+}
+
+QLabel#CreditFacilitiesSectionTitle {
+    color: #f8fafc;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+QLabel#CreditFacilitiesMetricLabel {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#CreditFacilitiesMuted {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+QLabel#CreditFacilitiesSummaryValue {
+    color: #f8fafc;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+QPushButton#CreditFacilitiesPrimaryButton {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: 1px solid #3b82f6;
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#CreditFacilitiesPrimaryButton:hover {
+    background-color: #1d4ed8;
+}
+
+QPushButton#CreditFacilitiesSecondaryButton {
+    background-color: #172033;
+    color: #cbd5e1;
+    border: 1px solid #24324a;
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#CreditFacilitiesSecondaryButton:hover {
+    background-color: #1e293b;
+    color: #ffffff;
+}
+
+QPushButton#CreditFacilitiesWarningButton {
+    background-color: #92400e;
+    color: #ffffff;
+    border: 1px solid #f59e0b;
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#CreditFacilitiesWarningButton:hover {
+    background-color: #b45309;
+}
+
+QPushButton#CreditFacilitiesDangerButton {
+    background-color: #7f1d1d;
+    color: #ffffff;
+    border: 1px solid #ef4444;
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#CreditFacilitiesDangerButton:hover {
+    background-color: #991b1b;
+}
+
+QPushButton:disabled {
+    background-color: rgba(30, 41, 59, 0.55);
+    color: #64748b;
+    border: 1px solid rgba(100, 116, 139, 0.32);
+}
+
+QTabWidget::pane {
+    border: 1px solid #24324a;
+    border-radius: 14px;
+    background-color: #0f172a;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background-color: #111827;
+    color: #94a3b8;
+    border: 1px solid #24324a;
+    border-bottom: none;
+    padding: 10px 14px;
+    margin-right: 4px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    font-weight: 800;
+}
+
+QTabBar::tab:selected {
+    background-color: #1d4ed8;
+    color: #ffffff;
+    border: 1px solid #3b82f6;
+    border-bottom: none;
+}
+
+QTableWidget#CreditFacilitiesTable {
+    background-color: #0f172a;
+    color: #e5e7eb;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    gridline-color: #334155;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+    alternate-background-color: #111827;
+}
+
+QTableWidget#CreditFacilitiesTable::item {
+    padding: 6px;
+    border: none;
+}
+
+QHeaderView::section {
+    background-color: #1f2937;
+    color: #f8fafc;
+    border: 1px solid #334155;
+    padding: 8px;
+    font-weight: 900;
+}
+
+QTableCornerButton::section {
+    background-color: #1f2937;
+    border: 1px solid #334155;
+}
+"""
+
+
+ACTIVE_TRANSACTION_STATUSES = {
+    "PENDING",
+    "IN_STATEMENT",
+}
+
+
+class CreditFacilitiesPage(QWidget):
+    def __init__(self, current_user: Any | None = None) -> None:
+        super().__init__()
+
+        self.current_user = current_user
+        self.setStyleSheet(CREDIT_FACILITIES_PAGE_STYLE)
+
+        self._credit_card_row_ids: list[int | None] = []
+        self._credit_card_row_active: list[bool | None] = []
+        self._credit_card_row_display_names: list[str | None] = []
+        self._transaction_row_ids: list[int | None] = []
+        self._transaction_row_status: list[str | None] = []
+
+        self.credit_cards_table = self._build_table(
+            [
+                "Banka",
+                "Kart Adı",
+                "Son 4",
+                "Para",
+                "Limit",
+                "Kullanılan",
+                "Kalan",
+                "Kesim",
+                "Ödeme",
+                "Durum",
+            ]
+        )
+        self.credit_cards_table.itemSelectionChanged.connect(self._on_credit_card_selection_changed)
+
+        self.transactions_table = self._build_table(
+            [
+                "Kart",
+                "Tarih",
+                "İşyeri / Başlık",
+                "Açıklama",
+                "Tutar",
+                "Para",
+                "Taksit",
+                "Durum",
+                "Referans",
+            ]
+        )
+        self.transactions_table.itemSelectionChanged.connect(self._update_transaction_actions)
+
+        self.credit_limits_table = self._build_table(
+            [
+                "Banka Hesabı",
+                "Limit Adı",
+                "Tip",
+                "Para",
+                "Limit",
+                "Kullanılan",
+                "Kullanım",
+                "Faiz",
+                "Periyot",
+                "Gün",
+                "Durum",
+            ]
+        )
+
+        self.card_count_value_label = self._summary_value_label("0")
+        self.card_limit_value_label = self._summary_value_label("0,00")
+        self.card_used_value_label = self._summary_value_label("0,00")
+        self.card_remaining_value_label = self._summary_value_label("0,00")
+        self.limit_count_value_label = self._summary_value_label("0")
+        self.limit_total_value_label = self._summary_value_label("0,00")
+
+        self.add_credit_card_button: QPushButton | None = None
+        self.edit_credit_card_button: QPushButton | None = None
+        self.toggle_credit_card_button: QPushButton | None = None
+        self.transaction_credit_card_button: QPushButton | None = None
+        self.cancel_transaction_button: QPushButton | None = None
+
+        self.transaction_title_label = QLabel("Harcama Kayıtları")
+        self.transaction_title_label.setObjectName("CreditFacilitiesSectionTitle")
+
+        self.status_label = QLabel("Hazır")
+        self.status_label.setObjectName("CreditFacilitiesMuted")
+        self.status_label.setWordWrap(True)
+
+        self._build_ui()
+        self.refresh_data()
+
+    def _build_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(12, 10, 12, 12)
+        main_layout.setSpacing(10)
+
+        root_card = QFrame()
+        root_card.setObjectName("CreditFacilitiesCard")
+
+        root_layout = QVBoxLayout(root_card)
+        root_layout.setContentsMargins(16, 14, 16, 14)
+        root_layout.setSpacing(12)
+
+        summary_layout = QHBoxLayout()
+        summary_layout.setSpacing(10)
+        summary_layout.addWidget(
+            self._build_summary_card(
+                title="Kredi Kartları",
+                first_label="Aktif kart",
+                first_value_label=self.card_count_value_label,
+                second_label="Toplam limit",
+                second_value_label=self.card_limit_value_label,
+                third_label="Kullanılan",
+                third_value_label=self.card_used_value_label,
+                fourth_label="Kalan",
+                fourth_value_label=self.card_remaining_value_label,
+                hint="Limit sabit kalır; kullanılan ve kalan limit harcamalardan hesaplanır.",
+            )
+        )
+        summary_layout.addWidget(
+            self._build_summary_card(
+                title="Kredili / Limitli Hesaplar",
+                first_label="Aktif tanım",
+                first_value_label=self.limit_count_value_label,
+                second_label="Toplam limit",
+                second_value_label=self.limit_total_value_label,
+                third_label="",
+                third_value_label=None,
+                fourth_label="",
+                fourth_value_label=None,
+                hint="KMH / limitli mevduat genel görünümü.",
+            )
+        )
+
+        tabs = QTabWidget()
+        tabs.addTab(self._build_credit_cards_tab(), "Kredi Kartları")
+        tabs.addTab(self._build_credit_limits_tab(), "Kredili / Limitli Mevduat")
+        tabs.addTab(self._build_future_loans_tab(), "Banka Kredileri / Taksitli Krediler")
+
+        root_layout.addLayout(summary_layout)
+        root_layout.addWidget(tabs, 1)
+        root_layout.addWidget(self.status_label)
+
+        main_layout.addWidget(root_card, 1)
+
+    def _build_credit_cards_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        self.add_credit_card_button = QPushButton("Kart Tanımla")
+        self.add_credit_card_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.add_credit_card_button.clicked.connect(self.open_credit_card_dialog)
+
+        self.edit_credit_card_button = QPushButton("Düzenle")
+        self.edit_credit_card_button.setObjectName("CreditFacilitiesSecondaryButton")
+        self.edit_credit_card_button.setEnabled(False)
+        self.edit_credit_card_button.clicked.connect(self.open_selected_credit_card_edit_dialog)
+
+        self.toggle_credit_card_button = QPushButton("Pasife Al")
+        self.toggle_credit_card_button.setObjectName("CreditFacilitiesWarningButton")
+        self.toggle_credit_card_button.setEnabled(False)
+        self.toggle_credit_card_button.clicked.connect(self.toggle_selected_credit_card_active_state)
+
+        self.transaction_credit_card_button = QPushButton("Harcama Gir")
+        self.transaction_credit_card_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.transaction_credit_card_button.setEnabled(False)
+        self.transaction_credit_card_button.clicked.connect(self.open_credit_card_transaction_dialog)
+
+        statement_button = QPushButton("Ekstre")
+        statement_button.setObjectName("CreditFacilitiesSecondaryButton")
+        statement_button.setEnabled(False)
+        statement_button.setToolTip("Ekstre takibi harcama altyapısından sonra bağlanacak.")
+
+        actions.addWidget(self.add_credit_card_button)
+        actions.addWidget(self.edit_credit_card_button)
+        actions.addWidget(self.toggle_credit_card_button)
+        actions.addWidget(self.transaction_credit_card_button)
+        actions.addWidget(statement_button)
+        actions.addStretch(1)
+
+        hint_label = QLabel(
+            "Kart limiti değişmez; kullanılan ve kalan limit iptal edilmemiş harcamalardan hesaplanır."
+        )
+        hint_label.setObjectName("CreditFacilitiesMuted")
+        hint_label.setWordWrap(True)
+
+        transaction_actions = QHBoxLayout()
+        transaction_actions.setSpacing(8)
+
+        self.cancel_transaction_button = QPushButton("Harcama İptal")
+        self.cancel_transaction_button.setObjectName("CreditFacilitiesDangerButton")
+        self.cancel_transaction_button.setEnabled(False)
+        self.cancel_transaction_button.clicked.connect(self.cancel_selected_transaction)
+
+        transaction_actions.addWidget(self.transaction_title_label)
+        transaction_actions.addStretch(1)
+        transaction_actions.addWidget(self.cancel_transaction_button)
+
+        layout.addLayout(actions)
+        layout.addWidget(hint_label)
+        layout.addWidget(self.credit_cards_table, 1)
+        layout.addLayout(transaction_actions)
+        layout.addWidget(self.transactions_table, 1)
+
+        return tab
+
+    def _build_credit_limits_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        add_button = QPushButton("Limit Tanımla")
+        add_button.setObjectName("CreditFacilitiesPrimaryButton")
+        add_button.setEnabled(False)
+
+        edit_button = QPushButton("Düzenle")
+        edit_button.setObjectName("CreditFacilitiesSecondaryButton")
+        edit_button.setEnabled(False)
+
+        actions.addWidget(add_button)
+        actions.addWidget(edit_button)
+        actions.addStretch(1)
+
+        hint_label = QLabel(
+            "Bu alan banka hesabına bağlı KMH / limitli mevduat / rotatif limit tanımlarını gösterecek."
+        )
+        hint_label.setObjectName("CreditFacilitiesMuted")
+        hint_label.setWordWrap(True)
+
+        layout.addLayout(actions)
+        layout.addWidget(hint_label)
+        layout.addWidget(self.credit_limits_table, 1)
+
+        return tab
+
+    def _build_future_loans_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        info = QLabel(
+            "Banka Kredileri / Taksitli Krediler bölümü sonraki fazda açılacak. "
+            "Burada kredi tanımı, taksit planı, faiz ve kalan anapara takibi yer alacak."
+        )
+        info.setObjectName("CreditFacilitiesMuted")
+        info.setWordWrap(True)
+
+        layout.addWidget(info)
+        layout.addStretch(1)
+
+        return tab
+
+    def _build_summary_card(
+        self,
+        *,
+        title: str,
+        first_label: str,
+        first_value_label: QLabel,
+        second_label: str,
+        second_value_label: QLabel,
+        third_label: str,
+        third_value_label: QLabel | None,
+        fourth_label: str,
+        fourth_value_label: QLabel | None,
+        hint: str,
+    ) -> QWidget:
+        card = QFrame()
+        card.setObjectName("CreditFacilitiesSummaryCard")
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("CreditFacilitiesSectionTitle")
+
+        metrics_layout = QGridLayout()
+        metrics_layout.setHorizontalSpacing(18)
+        metrics_layout.setVerticalSpacing(4)
+
+        first_label_widget = QLabel(first_label)
+        first_label_widget.setObjectName("CreditFacilitiesMetricLabel")
+        second_label_widget = QLabel(second_label)
+        second_label_widget.setObjectName("CreditFacilitiesMetricLabel")
+
+        metrics_layout.addWidget(first_label_widget, 0, 0)
+        metrics_layout.addWidget(second_label_widget, 0, 1)
+        metrics_layout.addWidget(first_value_label, 1, 0)
+        metrics_layout.addWidget(second_value_label, 1, 1)
+
+        if third_value_label is not None:
+            third_label_widget = QLabel(third_label)
+            third_label_widget.setObjectName("CreditFacilitiesMetricLabel")
+            metrics_layout.addWidget(third_label_widget, 0, 2)
+            metrics_layout.addWidget(third_value_label, 1, 2)
+
+        if fourth_value_label is not None:
+            fourth_label_widget = QLabel(fourth_label)
+            fourth_label_widget.setObjectName("CreditFacilitiesMetricLabel")
+            metrics_layout.addWidget(fourth_label_widget, 0, 3)
+            metrics_layout.addWidget(fourth_value_label, 1, 3)
+
+        hint_label = QLabel(hint)
+        hint_label.setObjectName("CreditFacilitiesMuted")
+        hint_label.setWordWrap(True)
+
+        layout.addWidget(title_label)
+        layout.addLayout(metrics_layout)
+        layout.addWidget(hint_label)
+
+        return card
+
+    def _build_table(self, headers: list[str]) -> QTableWidget:
+        table = QTableWidget()
+        table.setObjectName("CreditFacilitiesTable")
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setAlternatingRowColors(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(True)
+
+        return table
+
+    def _summary_value_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("CreditFacilitiesSummaryValue")
+        return label
+
+    def open_credit_card_dialog(self) -> None:
+        dialog = CreditCardDialog(
+            current_user=self.current_user,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+
+    def open_selected_credit_card_edit_dialog(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+
+        if credit_card_id is None:
+            QMessageBox.warning(
+                self,
+                "Kart Seçilmedi",
+                "Düzenlemek için listeden bir kredi kartı seçmelisin.",
+            )
+            return
+
+        dialog = CreditCardDialog(
+            current_user=self.current_user,
+            credit_card_id=credit_card_id,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+
+    def open_credit_card_transaction_dialog(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+        is_active = self._selected_credit_card_is_active()
+
+        if credit_card_id is None:
+            QMessageBox.warning(
+                self,
+                "Kart Seçilmedi",
+                "Harcama girmek için listeden bir kredi kartı seçmelisin.",
+            )
+            return
+
+        if is_active is not True:
+            QMessageBox.warning(
+                self,
+                "Kart Pasif",
+                "Pasif karta harcama girişi yapılamaz.",
+            )
+            return
+
+        dialog = CreditCardTransactionDialog(
+            current_user=self.current_user,
+            credit_card_id=credit_card_id,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self._restore_credit_card_selection(credit_card_id)
+            self.status_label.setText("Kredi kartı harcaması kaydedildi.")
+
+    def toggle_selected_credit_card_active_state(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+        is_active = self._selected_credit_card_is_active()
+
+        if credit_card_id is None or is_active is None:
+            QMessageBox.warning(
+                self,
+                "Kart Seçilmedi",
+                "İşlem yapmak için listeden bir kredi kartı seçmelisin.",
+            )
+            return
+
+        if is_active:
+            question = "Seçili kredi kartı pasife alınacak. Devam etmek istiyor musun?"
+            button_text = "Kartı Pasife Al"
+        else:
+            question = "Seçili kredi kartı tekrar aktif hale getirilecek. Devam etmek istiyor musun?"
+            button_text = "Kartı Aktifleştir"
+
+        answer = QMessageBox.question(
+            self,
+            button_text,
+            question,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                if is_active:
+                    deactivate_credit_card(
+                        session,
+                        credit_card_id=credit_card_id,
+                        updated_by_user_id=self._current_user_id(),
+                    )
+                else:
+                    activate_credit_card(
+                        session,
+                        credit_card_id=credit_card_id,
+                        updated_by_user_id=self._current_user_id(),
+                    )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Kart Durumu Değiştirilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Kart durumu değiştirilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_data()
+        self._restore_credit_card_selection(credit_card_id)
+
+    def cancel_selected_transaction(self) -> None:
+        transaction_id = self._selected_transaction_id()
+        transaction_status = self._selected_transaction_status()
+        credit_card_id = self._selected_credit_card_id()
+
+        if transaction_id is None:
+            QMessageBox.warning(
+                self,
+                "Harcama Seçilmedi",
+                "İptal etmek için listeden bir harcama seçmelisin.",
+            )
+            return
+
+        if transaction_status == "CANCELLED":
+            QMessageBox.information(
+                self,
+                "Harcama Zaten İptal",
+                "Seçili harcama zaten iptal edilmiş.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Harcama İptal",
+            "Seçili kredi kartı harcaması iptal edilecek. Devam etmek istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                cancel_credit_card_transaction(
+                    session,
+                    transaction_id=transaction_id,
+                    updated_by_user_id=self._current_user_id(),
+                )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Harcama İptal Edilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Harcama iptal edilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_data()
+
+        if credit_card_id is not None:
+            self._restore_credit_card_selection(credit_card_id)
+
+        self.status_label.setText("Kredi kartı harcaması iptal edildi.")
+
+    def refresh_data(self) -> None:
+        try:
+            with session_scope() as session:
+                credit_cards = list_credit_cards(session, include_inactive=True)
+                credit_limits = list_credit_limits(session, include_inactive=True)
+                all_transactions = list_credit_card_transactions(
+                    session,
+                    credit_card_id=None,
+                    include_cancelled=True,
+                )
+
+                used_by_card: dict[int, Decimal] = {}
+
+                for transaction in all_transactions:
+                    status_value = transaction.status.value
+
+                    if status_value not in ACTIVE_TRANSACTION_STATUSES:
+                        continue
+
+                    card_id = int(transaction.credit_card_id)
+                    used_by_card[card_id] = used_by_card.get(card_id, Decimal("0.00")) + Decimal(
+                        transaction.amount or 0
+                    )
+
+                card_rows: list[list[Any]] = []
+                card_row_ids: list[int | None] = []
+                card_row_active: list[bool | None] = []
+                card_row_display_names: list[str | None] = []
+                active_card_count = 0
+                card_limit_total = Decimal("0.00")
+                card_used_total = Decimal("0.00")
+
+                for credit_card in credit_cards:
+                    card_id = int(credit_card.id)
+                    card_limit = Decimal(credit_card.credit_limit or 0)
+                    used_amount = used_by_card.get(card_id, Decimal("0.00"))
+                    remaining_amount = card_limit - used_amount
+
+                    if credit_card.is_active:
+                        active_card_count += 1
+                        card_limit_total += card_limit
+                        card_used_total += used_amount
+
+                    bank_name = "-"
+                    if getattr(credit_card, "bank", None) is not None:
+                        bank_name = credit_card.bank.name or "-"
+
+                    display_name = self._credit_card_display_name(
+                        bank_name=bank_name,
+                        card_name=credit_card.card_name,
+                        last_four_digits=credit_card.last_four_digits,
+                    )
+
+                    card_rows.append(
+                        [
+                            bank_name,
+                            credit_card.card_name,
+                            credit_card.last_four_digits or "-",
+                            credit_card.currency_code.value,
+                            self._format_decimal(card_limit),
+                            self._format_decimal(used_amount),
+                            self._format_decimal(remaining_amount),
+                            self._format_day(credit_card.statement_cut_day),
+                            self._format_day(credit_card.payment_due_day),
+                            "Aktif" if credit_card.is_active else "Pasif",
+                        ]
+                    )
+                    card_row_ids.append(card_id)
+                    card_row_active.append(bool(credit_card.is_active))
+                    card_row_display_names.append(display_name)
+
+                limit_rows = []
+                active_limit_count = 0
+                credit_limit_total = Decimal("0.00")
+
+                for credit_limit in credit_limits:
+                    if credit_limit.is_active:
+                        active_limit_count += 1
+                        credit_limit_total += Decimal(credit_limit.limit_amount or 0)
+
+                    account_name = "-"
+                    bank_account = getattr(credit_limit, "bank_account", None)
+                    if bank_account is not None:
+                        bank_name = "-"
+                        if getattr(bank_account, "bank", None) is not None:
+                            bank_name = bank_account.bank.name or "-"
+                        account_name = f"{bank_name} / {bank_account.account_name}"
+
+                    limit_rows.append(
+                        [
+                            account_name,
+                            credit_limit.limit_name,
+                            credit_limit.limit_type.value,
+                            credit_limit.currency_code.value,
+                            self._format_decimal(credit_limit.limit_amount),
+                            self._format_decimal(credit_limit.manual_used_amount),
+                            credit_limit.usage_mode.value,
+                            self._format_decimal(credit_limit.interest_rate),
+                            credit_limit.interest_period.value,
+                            self._format_day(credit_limit.interest_day),
+                            "Aktif" if credit_limit.is_active else "Pasif",
+                        ]
+                    )
+
+            self._credit_card_row_ids = card_row_ids
+            self._credit_card_row_active = card_row_active
+            self._credit_card_row_display_names = card_row_display_names
+
+            self._fill_table(
+                table=self.credit_cards_table,
+                rows=card_rows,
+                empty_message="Henüz tanımlı kredi kartı yok.",
+            )
+            self._fill_table(
+                table=self.credit_limits_table,
+                rows=limit_rows,
+                empty_message="Henüz tanımlı kredili / limitli mevduat hesabı yok.",
+            )
+
+            self.card_count_value_label.setText(str(active_card_count))
+            self.card_limit_value_label.setText(self._format_decimal(card_limit_total))
+            self.card_used_value_label.setText(self._format_decimal(card_used_total))
+            self.card_remaining_value_label.setText(
+                self._format_decimal(card_limit_total - card_used_total)
+            )
+            self.limit_count_value_label.setText(str(active_limit_count))
+            self.limit_total_value_label.setText(self._format_decimal(credit_limit_total))
+
+            self.status_label.setText("Kredili Hesaplar / Kartlar verileri yenilendi.")
+            self._update_credit_card_actions()
+            self.refresh_transactions_for_selected_card()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Kredili Hesaplar / Kartlar",
+                f"Veriler yüklenirken hata oluştu:\n\n{exc}",
+            )
+            self.status_label.setText(f"Veriler yüklenemedi: {exc}")
+
+    def refresh_transactions_for_selected_card(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+
+        if credit_card_id is None:
+            self._transaction_row_ids = []
+            self._transaction_row_status = []
+            self.transaction_title_label.setText("Harcama Kayıtları")
+            self._fill_table(
+                table=self.transactions_table,
+                rows=[],
+                empty_message="Harcama görmek için önce bir kredi kartı seç.",
+            )
+            self._update_transaction_actions()
+            return
+
+        selected_card_name = self._selected_credit_card_display_name() or "Seçili Kart"
+
+        try:
+            with session_scope() as session:
+                transactions = list_credit_card_transactions(
+                    session,
+                    credit_card_id=credit_card_id,
+                    include_cancelled=True,
+                )
+
+                rows: list[list[Any]] = []
+                row_ids: list[int | None] = []
+                row_statuses: list[str | None] = []
+
+                for transaction in transactions:
+                    rows.append(
+                        [
+                            selected_card_name,
+                            self._format_date(transaction.transaction_date),
+                            transaction.merchant_name,
+                            transaction.description or "-",
+                            self._format_decimal(transaction.amount),
+                            transaction.currency_code.value,
+                            f"{transaction.installment_no}/{transaction.installment_count}",
+                            self._transaction_status_text(transaction.status.value),
+                            transaction.reference_no or "-",
+                        ]
+                    )
+                    row_ids.append(int(transaction.id))
+                    row_statuses.append(transaction.status.value)
+
+            self._transaction_row_ids = row_ids
+            self._transaction_row_status = row_statuses
+
+            self.transaction_title_label.setText(f"Harcama Kayıtları - {selected_card_name}")
+            self._fill_table(
+                table=self.transactions_table,
+                rows=rows,
+                empty_message=f"{selected_card_name} için henüz harcama kaydı yok.",
+            )
+            self._update_transaction_actions()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Harcama Listesi",
+                f"Harcama kayıtları yüklenirken hata oluştu:\n\n{exc}",
+            )
+
+    def _fill_table(
+        self,
+        *,
+        table: QTableWidget,
+        rows: list[list[Any]],
+        empty_message: str,
+    ) -> None:
+        table.clearSpans()
+        table.clearSelection()
+
+        if not rows:
+            table.setRowCount(1)
+
+            empty_item = QTableWidgetItem(empty_message)
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsEditable)
+            empty_item.setForeground(QColor("#94a3b8"))
+            empty_item.setTextAlignment(Qt.AlignCenter)
+
+            table.setItem(0, 0, empty_item)
+            table.setSpan(0, 0, 1, table.columnCount())
+
+            for column_index in range(1, table.columnCount()):
+                hidden_item = QTableWidgetItem("")
+                hidden_item.setFlags(hidden_item.flags() & ~Qt.ItemIsEditable)
+                table.setItem(0, column_index, hidden_item)
+
+            table.resizeRowsToContents()
+            return
+
+        table.setRowCount(len(rows))
+
+        for row_index, row_values in enumerate(rows):
+            for column_index, value in enumerate(row_values):
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+                text_value = str(value).strip().upper()
+
+                if text_value in {"AKTIF", "BEKLIYOR"}:
+                    item.setForeground(QColor("#22c55e"))
+                elif text_value in {"PASIF", "İPTAL", "IPTAL"}:
+                    item.setForeground(QColor("#f87171"))
+                elif text_value == "EKSTREDE":
+                    item.setForeground(QColor("#60a5fa"))
+                elif text_value == "İADE":
+                    item.setForeground(QColor("#fbbf24"))
+
+                table.setItem(row_index, column_index, item)
+
+        table.resizeRowsToContents()
+
+    def _on_credit_card_selection_changed(self) -> None:
+        self._update_credit_card_actions()
+        self.refresh_transactions_for_selected_card()
+
+    def _restore_credit_card_selection(self, credit_card_id: int) -> None:
+        for row_index, row_card_id in enumerate(self._credit_card_row_ids):
+            if row_card_id == credit_card_id:
+                self.credit_cards_table.selectRow(row_index)
+                return
+
+    def _selected_credit_card_id(self) -> int | None:
+        row_index = self.credit_cards_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_card_row_ids):
+            return None
+
+        return self._credit_card_row_ids[row_index]
+
+    def _selected_credit_card_is_active(self) -> bool | None:
+        row_index = self.credit_cards_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_card_row_active):
+            return None
+
+        return self._credit_card_row_active[row_index]
+
+    def _selected_credit_card_display_name(self) -> str | None:
+        row_index = self.credit_cards_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_card_row_display_names):
+            return None
+
+        return self._credit_card_row_display_names[row_index]
+
+    def _selected_transaction_id(self) -> int | None:
+        row_index = self.transactions_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._transaction_row_ids):
+            return None
+
+        return self._transaction_row_ids[row_index]
+
+    def _selected_transaction_status(self) -> str | None:
+        row_index = self.transactions_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._transaction_row_status):
+            return None
+
+        return self._transaction_row_status[row_index]
+
+    def _update_credit_card_actions(self) -> None:
+        selected_card_id = self._selected_credit_card_id()
+        selected_is_active = self._selected_credit_card_is_active()
+        has_selection = selected_card_id is not None
+
+        if self.edit_credit_card_button is not None:
+            self.edit_credit_card_button.setEnabled(has_selection)
+
+        if self.toggle_credit_card_button is not None:
+            self.toggle_credit_card_button.setEnabled(has_selection)
+
+            if selected_is_active is False:
+                self.toggle_credit_card_button.setText("Aktifleştir")
+                self.toggle_credit_card_button.setObjectName("CreditFacilitiesPrimaryButton")
+            else:
+                self.toggle_credit_card_button.setText("Pasife Al")
+                self.toggle_credit_card_button.setObjectName("CreditFacilitiesWarningButton")
+
+            self.toggle_credit_card_button.style().unpolish(self.toggle_credit_card_button)
+            self.toggle_credit_card_button.style().polish(self.toggle_credit_card_button)
+            self.toggle_credit_card_button.update()
+
+        if self.transaction_credit_card_button is not None:
+            self.transaction_credit_card_button.setEnabled(has_selection and selected_is_active is True)
+
+    def _update_transaction_actions(self) -> None:
+        transaction_id = self._selected_transaction_id()
+        transaction_status = self._selected_transaction_status()
+
+        if self.cancel_transaction_button is not None:
+            self.cancel_transaction_button.setEnabled(
+                transaction_id is not None and transaction_status not in {"CANCELLED", "IN_STATEMENT"}
+            )
+
+    def _current_user_id(self) -> int | None:
+        if self.current_user is None:
+            return None
+
+        user_id = getattr(self.current_user, "id", None)
+
+        if user_id is None:
+            return None
+
+        try:
+            return int(user_id)
+        except (TypeError, ValueError):
+            return None
+
+    def _credit_card_display_name(
+        self,
+        *,
+        bank_name: str,
+        card_name: str,
+        last_four_digits: Any,
+    ) -> str:
+        digits_text = str(last_four_digits or "").strip()
+
+        if digits_text:
+            return f"{bank_name} / {card_name} (*{digits_text})"
+
+        return f"{bank_name} / {card_name}"
+
+    def _transaction_status_text(self, status: str) -> str:
+        status_map = {
+            "PENDING": "Bekliyor",
+            "IN_STATEMENT": "Ekstrede",
+            "CANCELLED": "İptal",
+            "REFUNDED": "İade",
+        }
+
+        return status_map.get(str(status or "").strip().upper(), str(status or "-"))
+
+    def _format_decimal(self, value: Any) -> str:
+        try:
+            decimal_value = Decimal(value or 0)
+        except Exception:
+            return "0,00"
+
+        formatted = f"{decimal_value:,.2f}"
+        return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def _format_day(self, value: Any) -> str:
+        if value is None:
+            return "-"
+
+        return str(value)
+
+    def _format_date(self, value: Any) -> str:
+        if value is None:
+            return "-"
+
+        try:
+            return value.strftime("%d.%m.%Y")
+        except Exception:
+            return str(value)
+
+
+__all__ = [
+    "CreditFacilitiesPage",
+]

@@ -54,7 +54,7 @@ def _get_project_root() -> Path:
 
 def _load_environment() -> None:
     env_path = _get_project_root() / ".env"
-    load_dotenv(env_path)
+    load_dotenv(env_path, override=True)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -81,6 +81,18 @@ def _env_text(name: str, default: str = "") -> str:
         return default
 
     return value.strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        return default
+
+    try:
+        return int(value.strip())
+    except ValueError:
+        return default
 
 
 def _database_engine() -> str:
@@ -400,6 +412,7 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
 
 def _check_logs(items: list[HealthCheckItem]) -> None:
     log_folder = _get_folder_from_env("LOG_FOLDER", "logs")
+    security_summary_mail_enabled = _env_bool("SECURITY_SUMMARY_MAIL_ENABLED", False)
 
     if not log_folder.exists():
         _add_item(
@@ -444,6 +457,15 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
             "restore_test_log.txt bulunamadı veya boş.",
         )
 
+    if not security_summary_mail_enabled:
+        _add_item(
+            items,
+            "Güvenlik mail logu",
+            "OK",
+            "Güvenlik özet maili kapalı. Bu opsiyonel özellik temel çalışmayı etkilemez.",
+        )
+        return
+
     security_mail_log_line = _read_last_non_empty_line(
         log_folder / "scheduled_security_summary_mail_output.txt"
     )
@@ -460,63 +482,163 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
             items,
             "Güvenlik mail logu",
             "WARN",
-            "scheduled_security_summary_mail_output.txt bulunamadı veya boş.",
+            "Güvenlik özet maili aktif ama scheduled_security_summary_mail_output.txt bulunamadı veya boş.",
         )
+
+
+def _central_mail_settings_are_ready() -> tuple[bool, list[str], dict[str, Any]]:
+    mail_server = _env_text("MAIL_SERVER", settings.mail_server)
+    mail_port = _env_int("MAIL_PORT", settings.mail_port)
+    mail_username = _env_text("MAIL_USERNAME", settings.mail_username)
+    mail_password = _env_text("MAIL_PASSWORD", settings.mail_password)
+    mail_from = _env_text("MAIL_FROM", settings.mail_from or mail_username)
+    mail_use_tls = _env_bool("MAIL_USE_TLS", settings.mail_use_tls)
+
+    missing_fields: list[str] = []
+
+    if not mail_server:
+        missing_fields.append("MAIL_SERVER")
+
+    if mail_port <= 0:
+        missing_fields.append("MAIL_PORT")
+
+    if not mail_username:
+        missing_fields.append("MAIL_USERNAME")
+
+    if not mail_password:
+        missing_fields.append("MAIL_PASSWORD")
+
+    if not mail_from:
+        missing_fields.append("MAIL_FROM")
+
+    details = {
+        "mail_server": mail_server,
+        "mail_port": mail_port,
+        "mail_username": mail_username,
+        "mail_from": mail_from,
+        "mail_use_tls": mail_use_tls,
+    }
+
+    return len(missing_fields) == 0, missing_fields, details
 
 
 def _check_mail_settings(items: list[HealthCheckItem]) -> None:
-    mail_enabled = _env_bool("MAIL_ENABLED", False)
+    mail_enabled = _env_bool("MAIL_ENABLED", settings.mail_enabled)
     backup_mail_enabled = _env_bool("BACKUP_MAIL_ENABLED", False)
     security_summary_mail_enabled = _env_bool("SECURITY_SUMMARY_MAIL_ENABLED", False)
 
-    mail_username = _env_text("MAIL_USERNAME")
-    mail_from = _env_text("MAIL_FROM")
-    backup_mail_to = _env_text("BACKUP_MAIL_TO")
+    backup_mail_to = (
+        _env_text("BACKUP_MAIL_TO")
+        or _env_text("MAIL_TO", settings.mail_to)
+    )
     security_summary_mail_to = _env_text("SECURITY_SUMMARY_MAIL_TO")
 
-    if mail_enabled and mail_username and mail_from:
+    central_mail_ready, missing_fields, mail_details = _central_mail_settings_are_ready()
+
+    if not mail_enabled:
         _add_item(
             items,
-            "SMTP mail ayarı",
+            "Merkezi FTM mail gönderici",
             "OK",
-            f"MAIL_ENABLED=true | MAIL_USERNAME={mail_username} | MAIL_FROM={mail_from}",
+            "Mail gönderimi kapalı. Bu opsiyonel özellik temel çalışmayı etkilemez.",
+        )
+    elif central_mail_ready:
+        _add_item(
+            items,
+            "Merkezi FTM mail gönderici",
+            "OK",
+            (
+                "Merkezi gönderici mail ayarı hazır. "
+                f"Sunucu: {mail_details['mail_server']}:{mail_details['mail_port']} | "
+                f"TLS: {'açık' if mail_details['mail_use_tls'] else 'kapalı'} | "
+                f"Gönderen: {mail_details['mail_from']} | "
+                f"Kullanıcı: {mail_details['mail_username']}"
+            ),
         )
     else:
         _add_item(
             items,
-            "SMTP mail ayarı",
+            "Merkezi FTM mail gönderici",
             "WARN",
-            "Mail ayarları eksik veya MAIL_ENABLED=false.",
+            (
+                "Mail gönderimi aktif ama merkezi gönderici ayarı eksik. "
+                "Eksik alanlar: " + ", ".join(missing_fields)
+            ),
         )
 
-    if backup_mail_enabled and backup_mail_to:
+    if not backup_mail_enabled:
         _add_item(
             items,
             "Yedek mail ayarı",
             "OK",
-            f"BACKUP_MAIL_ENABLED=true | Alıcılar: {backup_mail_to}",
+            (
+                "Yedekleri mail ile gönderme özelliği kapalı. "
+                "Müşteri alıcı maili daha sonra Ayarlar > Yedekleme Maili ekranından tanımlanacak."
+            ),
+        )
+    elif not mail_enabled:
+        _add_item(
+            items,
+            "Yedek mail ayarı",
+            "WARN",
+            "Yedek mail aktif ama merkezi mail gönderimi kapalı.",
+        )
+    elif not central_mail_ready:
+        _add_item(
+            items,
+            "Yedek mail ayarı",
+            "WARN",
+            "Yedek mail aktif ama merkezi gönderici mail ayarı eksik.",
+        )
+    elif not backup_mail_to:
+        _add_item(
+            items,
+            "Yedek mail ayarı",
+            "WARN",
+            "Yedek mail aktif ama alıcı mail adresi tanımlı değil.",
         )
     else:
         _add_item(
             items,
             "Yedek mail ayarı",
-            "WARN",
-            "Yedek mail ayarı eksik veya kapalı.",
+            "OK",
+            f"Yedek mail gönderimi aktif. Alıcı: {backup_mail_to}",
         )
 
-    if security_summary_mail_enabled and security_summary_mail_to:
+    if not security_summary_mail_enabled:
         _add_item(
             items,
             "Güvenlik özet mail ayarı",
             "OK",
-            f"SECURITY_SUMMARY_MAIL_ENABLED=true | Alıcılar: {security_summary_mail_to}",
+            "Güvenlik özet maili kapalı. Bu opsiyonel özellik temel çalışmayı etkilemez.",
+        )
+    elif not mail_enabled:
+        _add_item(
+            items,
+            "Güvenlik özet mail ayarı",
+            "WARN",
+            "Güvenlik özet maili aktif ama merkezi mail gönderimi kapalı.",
+        )
+    elif not central_mail_ready:
+        _add_item(
+            items,
+            "Güvenlik özet mail ayarı",
+            "WARN",
+            "Güvenlik özet maili aktif ama merkezi gönderici mail ayarı eksik.",
+        )
+    elif not security_summary_mail_to:
+        _add_item(
+            items,
+            "Güvenlik özet mail ayarı",
+            "WARN",
+            "Güvenlik özet maili aktif ama alıcı mail adresi tanımlı değil.",
         )
     else:
         _add_item(
             items,
             "Güvenlik özet mail ayarı",
-            "WARN",
-            "Güvenlik özet mail ayarı eksik veya kapalı.",
+            "OK",
+            f"Güvenlik özet maili aktif. Alıcılar: {security_summary_mail_to}",
         )
 
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -33,12 +32,13 @@ from app.services.app_settings_service import (
     describe_app_settings_status,
     ensure_runtime_folders,
     load_app_settings,
-    parse_mail_recipients,
     save_app_settings_dict,
     update_app_settings,
 )
 from app.services.audit_service import write_audit_log
+from app.services.backup_mail_settings_service import load_backup_mail_settings
 from app.services.permission_service import Permission
+from app.ui.pages.settings.backup_mail_settings_dialog import BackupMailSettingsDialog
 from app.ui.permission_ui import (
     set_widget_permission,
     user_has_permission,
@@ -59,20 +59,20 @@ QFrame#SystemSettingsInfoCard {
 }
 
 QFrame#SystemSettingsSuccessCard {
-    background-color: rgba(6, 78, 59, 0.26);
+    background-color: rgba(6, 78, 59, 0.24);
     border: 1px solid rgba(16, 185, 129, 0.38);
     border-radius: 14px;
 }
 
 QFrame#SystemSettingsWarningCard {
-    background-color: rgba(120, 53, 15, 0.26);
+    background-color: rgba(120, 53, 15, 0.24);
     border: 1px solid rgba(245, 158, 11, 0.42);
     border-radius: 14px;
 }
 
-QFrame#SystemSettingsRiskCard {
-    background-color: rgba(127, 29, 29, 0.26);
-    border: 1px solid rgba(248, 113, 113, 0.42);
+QFrame#SystemSettingsActionCard {
+    background-color: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(59, 130, 246, 0.28);
     border-radius: 14px;
 }
 
@@ -100,21 +100,32 @@ QLabel#SystemSettingsTitle {
     font-weight: 900;
 }
 
+QLabel#SystemSettingsSubtitle {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
 QLabel#SystemSettingsSectionTitle {
     color: #f8fafc;
     font-size: 14px;
     font-weight: 900;
 }
 
-QLabel#SystemSettingsSubtitle {
-    color: #94a3b8;
-    font-size: 12px;
-}
-
 QLabel#SystemSettingsFieldLabel {
     color: #bfdbfe;
     font-size: 12px;
     font-weight: 800;
+}
+
+QLabel#SystemSettingsValue {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#SystemSettingsMutedValue {
+    color: #94a3b8;
+    font-size: 12px;
 }
 
 QLabel#SystemSettingsBadge {
@@ -147,16 +158,6 @@ QLabel#SystemSettingsWarnBadge {
     padding: 5px 9px;
 }
 
-QLabel#SystemSettingsFailBadge {
-    color: #fecaca;
-    font-size: 11px;
-    font-weight: 800;
-    background-color: rgba(127, 29, 29, 0.40);
-    border: 1px solid rgba(248, 113, 113, 0.52);
-    border-radius: 8px;
-    padding: 5px 9px;
-}
-
 QLineEdit,
 QTextEdit {
     background-color: #0f172a;
@@ -177,31 +178,6 @@ QTextEdit:disabled {
     background-color: rgba(30, 41, 59, 0.55);
     color: #64748b;
     border: 1px solid rgba(100, 116, 139, 0.32);
-}
-
-QCheckBox {
-    color: #e5e7eb;
-    font-size: 12px;
-    font-weight: 700;
-    spacing: 8px;
-}
-
-QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    border: 1px solid #cbd5e1;
-    background-color: #0b1220;
-}
-
-QCheckBox::indicator:checked {
-    border: 1px solid #93c5fd;
-    background-color: #2563eb;
-}
-
-QCheckBox::indicator:disabled {
-    border: 1px solid #64748b;
-    background-color: #1e293b;
 }
 
 QPushButton#SystemSettingsPrimaryButton {
@@ -243,6 +219,20 @@ QPushButton#SystemSettingsWarningButton:hover {
     background-color: #b45309;
 }
 
+QPushButton#SystemSettingsSecondaryButton {
+    background-color: #172033;
+    color: #cbd5e1;
+    border: 1px solid #24324a;
+    border-radius: 11px;
+    padding: 8px 14px;
+    font-weight: 900;
+}
+
+QPushButton#SystemSettingsSecondaryButton:hover {
+    background-color: #1e293b;
+    color: #ffffff;
+}
+
 QPushButton:disabled {
     background-color: rgba(30, 41, 59, 0.55);
     color: #64748b;
@@ -280,54 +270,119 @@ QTableCornerButton::section {
 """
 
 
+class TechnicalDetailsDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        parent: QWidget | None,
+        rows: list[tuple[str, str, str]],
+    ) -> None:
+        super().__init__(parent)
+
+        self.setWindowTitle("Teknik Sistem Detayları")
+        self.resize(900, 620)
+        self.setMinimumSize(760, 480)
+        self.setSizeGripEnabled(True)
+        self.setStyleSheet(SYSTEM_SETTINGS_TAB_STYLE)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(18, 16, 18, 16)
+        main_layout.setSpacing(12)
+
+        title = QLabel("Teknik Sistem Detayları")
+        title.setObjectName("SystemSettingsTitle")
+
+        subtitle = QLabel(
+            "Bu pencere geliştirici / yönetici kontrolü içindir. Müşteri kullanımında ana ayar ekranı sade tutulur."
+        )
+        subtitle.setObjectName("SystemSettingsSubtitle")
+        subtitle.setWordWrap(True)
+
+        self.table = QTableWidget()
+        self.table.setObjectName("SystemSettingsTable")
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Alan", "Değer", "Durum"])
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+
+        self._fill_table(rows)
+
+        close_button = QPushButton("Kapat")
+        close_button.setObjectName("SystemSettingsSecondaryButton")
+        close_button.clicked.connect(self.accept)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        button_layout.addWidget(close_button)
+
+        main_layout.addWidget(title)
+        main_layout.addWidget(subtitle)
+        main_layout.addWidget(self.table, 1)
+        main_layout.addLayout(button_layout)
+
+    def _fill_table(self, rows: list[tuple[str, str, str]]) -> None:
+        self.table.setRowCount(len(rows))
+
+        for row_index, (field_name, value, status) in enumerate(rows):
+            field_item = QTableWidgetItem(str(field_name))
+            value_item = QTableWidgetItem(str(value))
+            status_item = QTableWidgetItem(str(status))
+
+            field_item.setFlags(field_item.flags() & ~Qt.ItemIsEditable)
+            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            status_item.setTextAlignment(Qt.AlignCenter)
+
+            if status == "OK":
+                status_item.setForeground(QColor("#22c55e"))
+            elif status == "WARN":
+                status_item.setForeground(QColor("#fbbf24"))
+            else:
+                status_item.setForeground(QColor("#f87171"))
+
+            self.table.setItem(row_index, 0, field_item)
+            self.table.setItem(row_index, 1, value_item)
+            self.table.setItem(row_index, 2, status_item)
+
+        self.table.resizeRowsToContents()
+
+
 class SystemSettingsTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
 
         self.setStyleSheet(SYSTEM_SETTINGS_TAB_STYLE)
 
+        self._last_app_settings: Any | None = None
+
         self.generated_at_label = QLabel("")
         self.generated_at_label.setObjectName("SystemSettingsBadge")
 
-        self.db_status_label = QLabel("DB: Kontrol edilmedi")
-        self.db_status_label.setObjectName("SystemSettingsWarnBadge")
+        self.backup_mail_status_label = QLabel("Yedekleme Maili: Kontrol edilmedi")
+        self.backup_mail_status_label.setObjectName("SystemSettingsWarnBadge")
 
-        self.folder_status_label = QLabel("Klasör: Kontrol edilmedi")
-        self.folder_status_label.setObjectName("SystemSettingsWarnBadge")
+        self.backup_mail_recipient_label = QLabel("-")
+        self.backup_mail_recipient_label.setObjectName("SystemSettingsValue")
 
-        self.mail_status_label = QLabel("Mail: Kontrol edilmedi")
-        self.mail_status_label.setObjectName("SystemSettingsWarnBadge")
+        self.backup_mail_last_test_label = QLabel("-")
+        self.backup_mail_last_test_label.setObjectName("SystemSettingsMutedValue")
+        self.backup_mail_last_test_label.setWordWrap(True)
 
         self.company_name_input = QLineEdit()
         self.company_address_input = QTextEdit()
         self.company_phone_input = QLineEdit()
         self.company_email_input = QLineEdit()
 
-        self.backup_folder_input = QLineEdit()
-        self.export_folder_input = QLineEdit()
-        self.log_folder_input = QLineEdit()
-
-        self.control_mail_enabled_checkbox = QCheckBox("Kontrol / uyarı mailleri aktif olsun")
-        self.control_mail_to_input = QTextEdit()
-
         self.report_footer_note_input = QLineEdit()
 
-        self.company_address_input.setFixedHeight(72)
-        self.control_mail_to_input.setFixedHeight(72)
-
-        self.settings_table = QTableWidget()
-        self.settings_table.setObjectName("SystemSettingsTable")
-        self.settings_table.setColumnCount(3)
-        self.settings_table.setHorizontalHeaderLabels(["Alan", "Değer", "Durum"])
-        self.settings_table.setAlternatingRowColors(True)
-        self.settings_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.settings_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.settings_table.verticalHeader().setVisible(False)
-
-        header = self.settings_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.company_address_input.setFixedHeight(84)
 
         self.refresh_button = QPushButton("Ayarları Yenile")
         self.refresh_button.setObjectName("SystemSettingsPrimaryButton")
@@ -344,6 +399,14 @@ class SystemSettingsTab(QWidget):
         self.reset_defaults_button = QPushButton("Varsayılana Dön")
         self.reset_defaults_button.setObjectName("SystemSettingsWarningButton")
         self.reset_defaults_button.clicked.connect(self.reset_to_defaults)
+
+        self.backup_mail_settings_button = QPushButton("Yedekleme Maili Ayarları")
+        self.backup_mail_settings_button.setObjectName("SystemSettingsPrimaryButton")
+        self.backup_mail_settings_button.clicked.connect(self.open_backup_mail_settings_dialog)
+
+        self.technical_details_button = QPushButton("Teknik Detayları Göster")
+        self.technical_details_button.setObjectName("SystemSettingsSecondaryButton")
+        self.technical_details_button.clicked.connect(self.open_technical_details_dialog)
 
         self._build_ui()
 
@@ -372,102 +435,27 @@ class SystemSettingsTab(QWidget):
         title_row.addWidget(self.generated_at_label, 0, Qt.AlignVCenter)
 
         subtitle = QLabel(
-            "Firma bilgileri, klasör yolları, kontrol mail alıcıları ve rapor notu gibi risksiz "
-            "ayarlar bu ekrandan yönetilir. Veritabanı şifresi ve SMTP şifresi gibi kritik bilgiler "
-            ".env dosyasında kalır."
+            "Firma bilgileri, yedekleme maili ve rapor notu bu ekrandan yönetilir. "
+            "SMTP şifresi ve teknik ayarlar müşteriye gösterilmez."
         )
         subtitle.setObjectName("SystemSettingsSubtitle")
         subtitle.setWordWrap(True)
 
+        form_grid = QGridLayout()
+        form_grid.setSpacing(12)
+        form_grid.setColumnStretch(0, 1)
+        form_grid.setColumnStretch(1, 1)
+
+        form_grid.addWidget(self._build_company_group(), 0, 0)
+        form_grid.addWidget(self._build_backup_mail_group(), 0, 1)
+        form_grid.addWidget(self._build_report_group(), 1, 0)
+        form_grid.addWidget(self._build_maintenance_group(), 1, 1)
+
         card_layout.addLayout(title_row)
         card_layout.addWidget(subtitle)
-        card_layout.addLayout(self._build_status_cards())
-        card_layout.addLayout(self._build_form_area())
-        card_layout.addLayout(self._build_actions())
-        card_layout.addWidget(self.settings_table, 1)
+        card_layout.addLayout(form_grid, 1)
 
         main_layout.addWidget(card, 1)
-
-    def _build_status_cards(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setSpacing(10)
-
-        grid.addWidget(
-            self._build_small_card(
-                title="Veritabanı",
-                body="SQLite bağlantısı ve yerel veri dosyası kontrol edilir.",
-                badge=self.db_status_label,
-                object_name="SystemSettingsInfoCard",
-            ),
-            0,
-            0,
-        )
-
-        grid.addWidget(
-            self._build_small_card(
-                title="Dosya Klasörleri",
-                body="Yedek, dışa aktarım ve log klasörleri ayarlanır.",
-                badge=self.folder_status_label,
-                object_name="SystemSettingsInfoCard",
-            ),
-            0,
-            1,
-        )
-
-        grid.addWidget(
-            self._build_small_card(
-                title="Kontrol Maili",
-                body="Sistem kontrol ve uyarı maillerinin alıcıları yönetilir.",
-                badge=self.mail_status_label,
-                object_name="SystemSettingsInfoCard",
-            ),
-            0,
-            2,
-        )
-
-        return grid
-
-    def _build_small_card(
-        self,
-        *,
-        title: str,
-        body: str,
-        badge: QLabel,
-        object_name: str,
-    ) -> QWidget:
-        card = QFrame()
-        card.setObjectName(object_name)
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-
-        title_label = QLabel(title)
-        title_label.setObjectName("SystemSettingsSectionTitle")
-
-        body_label = QLabel(body)
-        body_label.setObjectName("SystemSettingsSubtitle")
-        body_label.setWordWrap(True)
-
-        layout.addWidget(title_label)
-        layout.addWidget(body_label)
-        layout.addStretch(1)
-        layout.addWidget(badge, 0, Qt.AlignLeft)
-
-        return card
-
-    def _build_form_area(self) -> QGridLayout:
-        grid = QGridLayout()
-        grid.setSpacing(12)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-
-        grid.addWidget(self._build_company_group(), 0, 0)
-        grid.addWidget(self._build_folder_group(), 0, 1)
-        grid.addWidget(self._build_mail_group(), 1, 0)
-        grid.addWidget(self._build_report_group(), 1, 1)
-
-        return grid
 
     def _build_company_group(self) -> QWidget:
         group = QGroupBox("Firma Bilgileri")
@@ -490,49 +478,34 @@ class SystemSettingsTab(QWidget):
 
         return group
 
-    def _build_folder_group(self) -> QWidget:
-        group = QGroupBox("Klasör Ayarları")
-
-        layout = QGridLayout(group)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(8)
-
-        hint = QLabel(
-            "Göreli yol yazarsan proje klasörünün altında kullanılır. "
-            "Örnek: backups, exports, logs"
-        )
-        hint.setObjectName("SystemSettingsSubtitle")
-        hint.setWordWrap(True)
-
-        layout.addWidget(hint, 0, 0, 1, 2)
-
-        layout.addWidget(self._field_label("Yedek Klasörü"), 1, 0)
-        layout.addWidget(self.backup_folder_input, 1, 1)
-
-        layout.addWidget(self._field_label("Export Klasörü"), 2, 0)
-        layout.addWidget(self.export_folder_input, 2, 1)
-
-        layout.addWidget(self._field_label("Log Klasörü"), 3, 0)
-        layout.addWidget(self.log_folder_input, 3, 1)
-
-        return group
-
-    def _build_mail_group(self) -> QWidget:
-        group = QGroupBox("Kontrol Mail Ayarları")
+    def _build_backup_mail_group(self) -> QWidget:
+        group = QGroupBox("Yedekleme Maili")
 
         layout = QVBoxLayout(group)
         layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         hint = QLabel(
-            "Birden fazla alıcı için e-posta adreslerini virgül, noktalı virgül veya boşlukla ayırabilirsin."
+            "Müşterinin yedek alıcı mail adresi buradan yönetilir. "
+            "Merkezi gönderici hesap ve uygulama şifresi bu ekranda gösterilmez."
         )
         hint.setObjectName("SystemSettingsSubtitle")
         hint.setWordWrap(True)
 
-        layout.addWidget(self.control_mail_enabled_checkbox)
+        recipient_title = QLabel("Alıcı")
+        recipient_title.setObjectName("SystemSettingsFieldLabel")
+
+        last_test_title = QLabel("Son Test")
+        last_test_title.setObjectName("SystemSettingsFieldLabel")
+
+        layout.addWidget(self.backup_mail_status_label, 0, Qt.AlignLeft)
         layout.addWidget(hint)
-        layout.addWidget(self.control_mail_to_input)
+        layout.addWidget(recipient_title)
+        layout.addWidget(self.backup_mail_recipient_label)
+        layout.addWidget(last_test_title)
+        layout.addWidget(self.backup_mail_last_test_label)
+        layout.addStretch(1)
+        layout.addWidget(self.backup_mail_settings_button, 0, Qt.AlignLeft)
 
         return group
 
@@ -543,9 +516,7 @@ class SystemSettingsTab(QWidget):
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(8)
 
-        hint = QLabel(
-            "Raporlarda kullanılacak güvenli not alanı. Logo ve gelişmiş rapor kimliği sonraki adımda eklenebilir."
-        )
+        hint = QLabel("Raporlarda kullanılacak güvenli not alanı.")
         hint.setObjectName("SystemSettingsSubtitle")
         hint.setWordWrap(True)
 
@@ -556,23 +527,41 @@ class SystemSettingsTab(QWidget):
 
         return group
 
-    def _build_actions(self) -> QHBoxLayout:
-        layout = QHBoxLayout()
+    def _build_maintenance_group(self) -> QWidget:
+        group = QGroupBox("Bakım İşlemleri")
+
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(10)
 
         hint = QLabel(
-            f"Ayar dosyası: {app_settings_file_path()}"
+            "Klasör oluşturma, ayar yenileme ve teknik detay görüntüleme işlemleri burada tutulur."
         )
         hint.setObjectName("SystemSettingsSubtitle")
         hint.setWordWrap(True)
 
-        layout.addWidget(hint, 1)
-        layout.addWidget(self.refresh_button, 0, Qt.AlignVCenter)
-        layout.addWidget(self.create_folders_button, 0, Qt.AlignVCenter)
-        layout.addWidget(self.reset_defaults_button, 0, Qt.AlignVCenter)
-        layout.addWidget(self.save_button, 0, Qt.AlignVCenter)
+        row_one = QHBoxLayout()
+        row_one.setSpacing(8)
+        row_one.addWidget(self.refresh_button)
+        row_one.addWidget(self.create_folders_button)
 
-        return layout
+        row_two = QHBoxLayout()
+        row_two.setSpacing(8)
+        row_two.addWidget(self.technical_details_button)
+        row_two.addWidget(self.reset_defaults_button)
+
+        row_three = QHBoxLayout()
+        row_three.setSpacing(8)
+        row_three.addStretch(1)
+        row_three.addWidget(self.save_button)
+
+        layout.addWidget(hint)
+        layout.addLayout(row_one)
+        layout.addLayout(row_two)
+        layout.addStretch(1)
+        layout.addLayout(row_three)
+
+        return group
 
     def _field_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -584,24 +573,19 @@ class SystemSettingsTab(QWidget):
     def load_settings(self) -> None:
         try:
             app_settings = load_app_settings()
+            self._last_app_settings = app_settings
 
             self.company_name_input.setText(app_settings.company_name)
             self.company_address_input.setPlainText(app_settings.company_address)
             self.company_phone_input.setText(app_settings.company_phone)
             self.company_email_input.setText(app_settings.company_email)
-
-            self.backup_folder_input.setText(app_settings.backup_folder)
-            self.export_folder_input.setText(app_settings.export_folder)
-            self.log_folder_input.setText(app_settings.log_folder)
-
-            self.control_mail_enabled_checkbox.setChecked(app_settings.control_mail_enabled)
-            self.control_mail_to_input.setPlainText(app_settings.control_mail_to)
-
             self.report_footer_note_input.setText(app_settings.report_footer_note)
 
-            rows = self._build_status_rows()
-            self._fill_table(rows)
-            self._update_badges(rows)
+            self._refresh_backup_mail_summary()
+
+            now_text = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            self.generated_at_label.setText(f"Güncelleme: {now_text}")
+
             self.apply_permissions()
 
         except AppSettingsServiceError as exc:
@@ -627,14 +611,6 @@ class SystemSettingsTab(QWidget):
         company_address = self.company_address_input.toPlainText().strip()
         company_phone = self.company_phone_input.text().strip()
         company_email = self.company_email_input.text().strip()
-
-        backup_folder = self.backup_folder_input.text().strip()
-        export_folder = self.export_folder_input.text().strip()
-        log_folder = self.log_folder_input.text().strip()
-
-        control_mail_enabled = self.control_mail_enabled_checkbox.isChecked()
-        control_mail_to = self.control_mail_to_input.toPlainText().strip()
-
         report_footer_note = self.report_footer_note_input.text().strip()
 
         if not company_name:
@@ -645,13 +621,7 @@ class SystemSettingsTab(QWidget):
             )
             return
 
-        if control_mail_enabled and not parse_mail_recipients(control_mail_to):
-            QMessageBox.warning(
-                self,
-                "Kontrol Mail Alıcısı Eksik",
-                "Kontrol maili aktifse en az bir geçerli mail alıcısı yazmalısın.",
-            )
-            return
+        current_settings = self._safe_current_app_settings()
 
         try:
             saved_settings = update_app_settings(
@@ -659,11 +629,11 @@ class SystemSettingsTab(QWidget):
                 company_address=company_address,
                 company_phone=company_phone,
                 company_email=company_email,
-                backup_folder=backup_folder,
-                export_folder=export_folder,
-                log_folder=log_folder,
-                control_mail_enabled=control_mail_enabled,
-                control_mail_to=control_mail_to,
+                backup_folder=current_settings.backup_folder,
+                export_folder=current_settings.export_folder,
+                log_folder=current_settings.log_folder,
+                control_mail_enabled=current_settings.control_mail_enabled,
+                control_mail_to=current_settings.control_mail_to,
                 report_footer_note=report_footer_note,
             )
 
@@ -750,8 +720,8 @@ class SystemSettingsTab(QWidget):
         answer = QMessageBox.question(
             self,
             "Varsayılan Ayarlara Dönülsün mü?",
-            "Risksiz uygulama ayarları varsayılan değerlere döndürülecek.\n\n"
-            "Bu işlem veritabanı ayarlarını, şifreleri veya .env dosyasını değiştirmez.\n\n"
+            "Firma bilgileri, klasör ayarları, kontrol maili ve rapor notu varsayılan değerlere döndürülecek.\n\n"
+            "Bu işlem veritabanını, lisansı, .env dosyasını veya Gmail uygulama şifresini değiştirmez.\n\n"
             "Devam etmek istiyor musun?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -793,6 +763,23 @@ class SystemSettingsTab(QWidget):
                 f"Varsayılan ayarlar yüklenirken hata oluştu:\n\n{exc}",
             )
 
+    def open_backup_mail_settings_dialog(self) -> None:
+        if not self._ensure_update_permission():
+            return
+
+        dialog = BackupMailSettingsDialog(parent=self)
+        dialog.exec()
+
+        self.load_settings()
+
+    def open_technical_details_dialog(self) -> None:
+        rows = self._build_status_rows()
+        dialog = TechnicalDetailsDialog(
+            parent=self,
+            rows=rows,
+        )
+        dialog.exec()
+
     def apply_permissions(self) -> None:
         can_update = user_has_permission(
             current_user=self._current_user(),
@@ -804,15 +791,11 @@ class SystemSettingsTab(QWidget):
             self.company_address_input,
             self.company_phone_input,
             self.company_email_input,
-            self.backup_folder_input,
-            self.export_folder_input,
-            self.log_folder_input,
-            self.control_mail_enabled_checkbox,
-            self.control_mail_to_input,
             self.report_footer_note_input,
             self.save_button,
             self.create_folders_button,
             self.reset_defaults_button,
+            self.backup_mail_settings_button,
         ]
 
         for widget in editable_widgets:
@@ -822,6 +805,48 @@ class SystemSettingsTab(QWidget):
                 tooltip_when_denied="Sistem ayarlarını değiştirmek için SYSTEM_SETTINGS_UPDATE yetkisi gerekir.",
             )
 
+    def _safe_current_app_settings(self) -> Any:
+        if self._last_app_settings is not None:
+            return self._last_app_settings
+
+        app_settings = load_app_settings()
+        self._last_app_settings = app_settings
+        return app_settings
+
+    def _refresh_backup_mail_summary(self) -> None:
+        try:
+            backup_mail_settings = load_backup_mail_settings()
+
+        except Exception as exc:
+            self.backup_mail_status_label.setText("Yedekleme Maili: WARN")
+            self.backup_mail_status_label.setObjectName("SystemSettingsWarnBadge")
+            self.backup_mail_recipient_label.setText("-")
+            self.backup_mail_last_test_label.setText(f"Ayar okunamadı: {exc}")
+            self._refresh_widget_style(self.backup_mail_status_label)
+            return
+
+        if backup_mail_settings.enabled:
+            self.backup_mail_status_label.setText("Yedekleme Maili: Açık")
+            self.backup_mail_status_label.setObjectName("SystemSettingsOkBadge")
+        else:
+            self.backup_mail_status_label.setText("Yedekleme Maili: Kapalı")
+            self.backup_mail_status_label.setObjectName("SystemSettingsBadge")
+
+        self.backup_mail_recipient_label.setText(
+            backup_mail_settings.recipient_email or "Alıcı mail tanımlı değil."
+        )
+
+        if backup_mail_settings.last_test_at or backup_mail_settings.last_test_status:
+            self.backup_mail_last_test_label.setText(
+                f"{backup_mail_settings.last_test_status or '-'} | "
+                f"{backup_mail_settings.last_test_at or '-'} | "
+                f"{backup_mail_settings.last_test_message or '-'}"
+            )
+        else:
+            self.backup_mail_last_test_label.setText("Henüz test maili gönderilmedi.")
+
+        self._refresh_widget_style(self.backup_mail_status_label)
+
     def _build_status_rows(self) -> list[tuple[str, str, str]]:
         rows: list[tuple[str, str, str]] = []
 
@@ -829,6 +854,7 @@ class SystemSettingsTab(QWidget):
         rows.extend(self._database_rows())
         rows.extend(self._runtime_settings_rows())
         rows.extend(self._env_mail_rows())
+        rows.extend(self._backup_mail_rows())
 
         return rows
 
@@ -937,136 +963,95 @@ class SystemSettingsTab(QWidget):
         return rows
 
     def _env_mail_rows(self) -> list[tuple[str, str, str]]:
-        mail_status = "Açık" if settings.mail_enabled else "Kapalı"
+        smtp_password_status = "Tanımlı (gizli)" if settings.mail_password else "-"
 
         rows = [
-            ("SMTP Mail Durumu", mail_status, "OK" if settings.mail_enabled else "WARN"),
-            ("SMTP Sunucu", settings.mail_server or "-", "OK" if settings.mail_server else "WARN"),
-            ("SMTP Port", str(settings.mail_port), "OK" if settings.mail_port else "WARN"),
-            ("SMTP TLS", "Açık" if settings.mail_use_tls else "Kapalı", "OK" if settings.mail_use_tls else "WARN"),
-            ("SMTP Kullanıcı", settings.mail_username or "-", "OK" if settings.mail_enabled and settings.mail_username else "WARN"),
-            ("SMTP Gönderen", settings.mail_from or "-", "OK" if settings.mail_enabled and settings.mail_from else "WARN"),
+            ("SMTP Mail Durumu", "Açık" if settings.mail_enabled else "Kapalı", "OK"),
+            (
+                "SMTP Sunucu",
+                settings.mail_server or "-",
+                "OK" if (not settings.mail_enabled or settings.mail_server) else "WARN",
+            ),
+            (
+                "SMTP Port",
+                str(settings.mail_port),
+                "OK" if (not settings.mail_enabled or settings.mail_port) else "WARN",
+            ),
+            (
+                "SMTP TLS",
+                "Açık" if settings.mail_use_tls else "Kapalı",
+                "OK",
+            ),
+            (
+                "SMTP Kullanıcı",
+                settings.mail_username or "-",
+                "OK" if (not settings.mail_enabled or settings.mail_username) else "WARN",
+            ),
+            (
+                "SMTP Şifre",
+                smtp_password_status,
+                "OK" if (not settings.mail_enabled or settings.mail_password) else "WARN",
+            ),
+            (
+                "SMTP Gönderen",
+                settings.mail_from or "-",
+                "OK" if (not settings.mail_enabled or settings.mail_from) else "WARN",
+            ),
         ]
-
-        if not settings.mail_enabled:
-            rows.append(("SMTP Açıklama", "SMTP mail kapalı. Kontrol mail alıcıları kaydedilebilir ama gönderim yapılamaz.", "WARN"))
 
         return rows
 
-    def _fill_table(self, rows: list[tuple[str, str, str]]) -> None:
-        self.settings_table.setRowCount(len(rows))
+    def _backup_mail_rows(self) -> list[tuple[str, str, str]]:
+        try:
+            backup_mail_settings = load_backup_mail_settings()
 
-        for row_index, (field_name, value, status) in enumerate(rows):
-            field_item = QTableWidgetItem(field_name)
-            value_item = QTableWidgetItem(value)
-            status_item = QTableWidgetItem(status)
+            backup_mail_status = "Açık" if backup_mail_settings.enabled else "Kapalı"
+            recipient_email = backup_mail_settings.recipient_email or "-"
 
-            field_item.setFlags(field_item.flags() & ~Qt.ItemIsEditable)
-            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
-            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            rows = [
+                (
+                    "Yedekleme Mail Durumu",
+                    backup_mail_status,
+                    "OK" if not backup_mail_settings.enabled or backup_mail_settings.recipient_email else "WARN",
+                ),
+                (
+                    "Yedekleme Mail Alıcısı",
+                    recipient_email,
+                    "OK" if not backup_mail_settings.enabled or backup_mail_settings.recipient_email else "WARN",
+                ),
+            ]
 
-            status_item.setTextAlignment(Qt.AlignCenter)
-
-            if status == "OK":
-                status_item.setForeground(QColor("#22c55e"))
-            elif status == "WARN":
-                status_item.setForeground(QColor("#fbbf24"))
+            if backup_mail_settings.last_test_at or backup_mail_settings.last_test_status:
+                rows.append(
+                    (
+                        "Yedekleme Mail Son Test",
+                        (
+                            f"{backup_mail_settings.last_test_status or '-'} | "
+                            f"{backup_mail_settings.last_test_at or '-'} | "
+                            f"{backup_mail_settings.last_test_message or '-'}"
+                        ),
+                        "OK" if backup_mail_settings.last_test_status == "OK" else "WARN",
+                    )
+                )
             else:
-                status_item.setForeground(QColor("#f87171"))
+                rows.append(
+                    (
+                        "Yedekleme Mail Son Test",
+                        "Henüz test maili gönderilmedi.",
+                        "OK" if not backup_mail_settings.enabled else "WARN",
+                    )
+                )
 
-            self.settings_table.setItem(row_index, 0, field_item)
-            self.settings_table.setItem(row_index, 1, value_item)
-            self.settings_table.setItem(row_index, 2, status_item)
+            return rows
 
-        self.settings_table.resizeRowsToContents()
-
-    def _update_badges(self, rows: list[tuple[str, str, str]]) -> None:
-        now_text = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        self.generated_at_label.setText(f"Güncelleme: {now_text}")
-
-        db_statuses = [
-            status
-            for field_name, _value, status in rows
-            if field_name.startswith("DB ")
-        ]
-
-        folder_statuses = [
-            status
-            for field_name, _value, status in rows
-            if "Klasörü" in field_name
-        ]
-
-        mail_statuses = [
-            status
-            for field_name, _value, status in rows
-            if "Mail" in field_name or "SMTP" in field_name or "Kontrol Mail" in field_name
-        ]
-
-        self._set_badge(
-            self.db_status_label,
-            prefix="DB",
-            statuses=db_statuses,
-        )
-
-        self._set_badge(
-            self.folder_status_label,
-            prefix="Klasör",
-            statuses=folder_statuses,
-        )
-
-        self._set_badge(
-            self.mail_status_label,
-            prefix="Mail",
-            statuses=mail_statuses,
-        )
-
-    def _set_badge(
-        self,
-        label: QLabel,
-        *,
-        prefix: str,
-        statuses: list[str],
-    ) -> None:
-        if not statuses:
-            label.setText(f"{prefix}: WARN")
-            label.setObjectName("SystemSettingsWarnBadge")
-            self._refresh_widget_style(label)
-            return
-
-        if "FAIL" in statuses:
-            label.setText(f"{prefix}: FAIL")
-            label.setObjectName("SystemSettingsFailBadge")
-            self._refresh_widget_style(label)
-            return
-
-        if "WARN" in statuses:
-            label.setText(f"{prefix}: WARN")
-            label.setObjectName("SystemSettingsWarnBadge")
-            self._refresh_widget_style(label)
-            return
-
-        label.setText(f"{prefix}: OK")
-        label.setObjectName("SystemSettingsOkBadge")
-        self._refresh_widget_style(label)
-
-    def _refresh_widget_style(self, widget: QWidget) -> None:
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
-        widget.update()
-
-    def _ensure_update_permission(self) -> bool:
-        if user_has_permission(
-            current_user=self._current_user(),
-            permission=Permission.SYSTEM_SETTINGS_UPDATE,
-        ):
-            return True
-
-        QMessageBox.warning(
-            self,
-            "Yetkisiz işlem",
-            "Sistem ayarlarını değiştirmek için SYSTEM_SETTINGS_UPDATE yetkisi gerekir.",
-        )
-        return False
+        except Exception as exc:
+            return [
+                (
+                    "Yedekleme Mail Ayarı",
+                    str(exc),
+                    "WARN",
+                )
+            ]
 
     def _safe_current_settings_dict(self) -> dict[str, Any] | None:
         try:
@@ -1087,6 +1072,20 @@ class SystemSettingsTab(QWidget):
 
         except Exception:
             return None
+
+    def _ensure_update_permission(self) -> bool:
+        if user_has_permission(
+            current_user=self._current_user(),
+            permission=Permission.SYSTEM_SETTINGS_UPDATE,
+        ):
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Yetkisiz işlem",
+            "Sistem ayarlarını değiştirmek için SYSTEM_SETTINGS_UPDATE yetkisi gerekir.",
+        )
+        return False
 
     def _write_settings_audit_log(
         self,
@@ -1135,6 +1134,11 @@ class SystemSettingsTab(QWidget):
             return int(user_id)
         except (TypeError, ValueError):
             return None
+
+    def _refresh_widget_style(self, widget: QWidget) -> None:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
 
 
 def build_system_settings_tab() -> QWidget:
