@@ -211,10 +211,9 @@ class CreditFacilitiesPage(QWidget):
                 "Banka",
                 "Kart Adı",
                 "Son 4",
-                "Para",
-                "Limit",
-                "Kullanılan",
-                "Kalan",
+                "Limit (TL)",
+                "Kullanılan (TL)",
+                "Kalan (TL)",
                 "Kesim",
                 "Ödeme",
                 "Durum",
@@ -228,8 +227,7 @@ class CreditFacilitiesPage(QWidget):
                 "Tarih",
                 "İşyeri / Başlık",
                 "Açıklama",
-                "Tutar",
-                "Para",
+                "Tutar (TL)",
                 "Taksit",
                 "Durum",
                 "Referans",
@@ -254,9 +252,9 @@ class CreditFacilitiesPage(QWidget):
         )
 
         self.card_count_value_label = self._summary_value_label("0")
-        self.card_limit_value_label = self._summary_value_label("0,00")
-        self.card_used_value_label = self._summary_value_label("0,00")
-        self.card_remaining_value_label = self._summary_value_label("0,00")
+        self.card_limit_value_label = self._summary_value_label("0,00 TL")
+        self.card_used_value_label = self._summary_value_label("0,00 TL")
+        self.card_remaining_value_label = self._summary_value_label("0,00 TL")
         self.limit_count_value_label = self._summary_value_label("0")
         self.limit_total_value_label = self._summary_value_label("0,00")
 
@@ -301,7 +299,7 @@ class CreditFacilitiesPage(QWidget):
                 third_value_label=self.card_used_value_label,
                 fourth_label="Kalan",
                 fourth_value_label=self.card_remaining_value_label,
-                hint="Limit sabit kalır; kullanılan ve kalan limit harcamalardan hesaplanır.",
+                hint="Kredi kartları sadece TL takip edilir; kullanılan ve kalan limit harcamalardan hesaplanır.",
             )
         )
         summary_layout.addWidget(
@@ -371,7 +369,8 @@ class CreditFacilitiesPage(QWidget):
         actions.addStretch(1)
 
         hint_label = QLabel(
-            "Kart limiti değişmez; kullanılan ve kalan limit iptal edilmemiş harcamalardan hesaplanır."
+            "Kredi kartları sadece TL çalışır. Kart limiti, kullanılan limit ve kalan limit "
+            "iptal edilmemiş TL harcamalardan hesaplanır."
         )
         hint_label.setObjectName("CreditFacilitiesMuted")
         hint_label.setWordWrap(True)
@@ -774,10 +773,9 @@ class CreditFacilitiesPage(QWidget):
                             bank_name,
                             credit_card.card_name,
                             credit_card.last_four_digits or "-",
-                            credit_card.currency_code.value,
-                            self._format_decimal(card_limit),
-                            self._format_decimal(used_amount),
-                            self._format_decimal(remaining_amount),
+                            self._format_tl(card_limit),
+                            self._format_tl(used_amount),
+                            self._format_tl(remaining_amount),
                             self._format_day(credit_card.statement_cut_day),
                             self._format_day(credit_card.payment_due_day),
                             "Aktif" if credit_card.is_active else "Pasif",
@@ -836,10 +834,10 @@ class CreditFacilitiesPage(QWidget):
             )
 
             self.card_count_value_label.setText(str(active_card_count))
-            self.card_limit_value_label.setText(self._format_decimal(card_limit_total))
-            self.card_used_value_label.setText(self._format_decimal(card_used_total))
+            self.card_limit_value_label.setText(self._format_tl(card_limit_total))
+            self.card_used_value_label.setText(self._format_tl(card_used_total))
             self.card_remaining_value_label.setText(
-                self._format_decimal(card_limit_total - card_used_total)
+                self._format_tl(card_limit_total - card_used_total)
             )
             self.limit_count_value_label.setText(str(active_limit_count))
             self.limit_total_value_label.setText(self._format_decimal(credit_limit_total))
@@ -892,8 +890,7 @@ class CreditFacilitiesPage(QWidget):
                             self._format_date(transaction.transaction_date),
                             transaction.merchant_name,
                             transaction.description or "-",
-                            self._format_decimal(transaction.amount),
-                            transaction.currency_code.value,
+                            self._format_tl(transaction.amount),
                             f"{transaction.installment_no}/{transaction.installment_count}",
                             self._transaction_status_text(transaction.status.value),
                             transaction.reference_no or "-",
@@ -1116,6 +1113,9 @@ class CreditFacilitiesPage(QWidget):
 
         formatted = f"{decimal_value:,.2f}"
         return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def _format_tl(self, value: Any) -> str:
+        return f"{self._format_decimal(value)} TL"
 
     def _format_day(self, value: Any) -> str:
         if value is None:

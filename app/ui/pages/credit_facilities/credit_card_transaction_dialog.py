@@ -31,6 +31,9 @@ from app.ui.components.no_wheel_widgets import (
     NoWheelSpinBox,
 )
 
+CREDIT_CARD_FIXED_CURRENCY_CODE = "TRY"
+CREDIT_CARD_FIXED_CURRENCY_DISPLAY = "TRY / TL"
+
 
 CREDIT_CARD_TRANSACTION_DIALOG_STYLE = """
 QDialog {
@@ -155,7 +158,7 @@ class CreditCardTransactionDialog(QDialog):
         self.current_user = current_user
         self.credit_card_id = int(credit_card_id)
         self.credit_card_name = ""
-        self.credit_card_currency = "TRY"
+        self.credit_card_currency = CREDIT_CARD_FIXED_CURRENCY_CODE
 
         self.setWindowTitle("Kredi Kartı Harcaması Gir")
         self.resize(700, 580)
@@ -219,7 +222,7 @@ class CreditCardTransactionDialog(QDialog):
         title.setObjectName("DialogTitle")
 
         subtitle = QLabel(
-            "Seçili kredi kartına harcama kaydı ekler. Bu kayıt şimdilik bekleyen harcama olarak tutulur; "
+            "Seçili kredi kartına TL harcama kaydı ekler. Bu kayıt şimdilik bekleyen harcama olarak tutulur; "
             "ekstre bağlantısı sonraki fazda yapılacak."
         )
         subtitle.setObjectName("DialogSubtitle")
@@ -260,7 +263,8 @@ class CreditCardTransactionDialog(QDialog):
         form_layout.addRow(self._label("Not"), self.notes_input)
 
         help_label = QLabel(
-            "Not: Tarih, tutar ve taksit alanlarında mouse tekerleği yanlışlıkla değer değiştirmez."
+            "Not: Kredi kartı harcamaları bu modülde sadece TL olarak kaydedilir. "
+            "Tarih, tutar ve taksit alanlarında mouse tekerleği yanlışlıkla değer değiştirmez."
         )
         help_label.setObjectName("DialogHelp")
         help_label.setWordWrap(True)
@@ -299,7 +303,7 @@ class CreditCardTransactionDialog(QDialog):
                     )
 
                 self.credit_card_name = credit_card.card_name
-                self.credit_card_currency = credit_card.currency_code.value
+                self.credit_card_currency = CREDIT_CARD_FIXED_CURRENCY_CODE
                 bank_name = credit_card.bank.name if credit_card.bank else "-"
 
         except Exception as exc:
@@ -312,7 +316,7 @@ class CreditCardTransactionDialog(QDialog):
             return
 
         self.card_info_input.setText(f"{bank_name} / {self.credit_card_name}")
-        self.currency_input.setText(self.credit_card_currency)
+        self.currency_input.setText(CREDIT_CARD_FIXED_CURRENCY_DISPLAY)
 
     def _current_user_id(self) -> int | None:
         if self.current_user is None:

@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -327,6 +327,44 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
         description=(
             "Kredi kartı harcama girişi için işlem tablosunu oluşturur. "
             "İşlemler ilk aşamada bekleyen harcama olarak kaydedilir; ekstre bağlantısı sonraki fazda yapılır."
+        ),
+    ),
+    DatabaseMigration(
+        migration_id="20260510_0004_credit_cards_try_only",
+        name="Credit cards TRY only normalization",
+        target_version=4,
+        statements=(
+            """
+            UPDATE credit_cards
+            SET currency_code = 'TRY'
+            WHERE currency_code IS NULL
+               OR currency_code <> 'TRY'
+            """,
+            """
+            UPDATE credit_card_transactions
+            SET currency_code = 'TRY'
+            WHERE currency_code IS NULL
+               OR currency_code <> 'TRY'
+            """,
+            """
+            UPDATE credit_cards
+            SET default_payment_bank_account_id = NULL
+            WHERE default_payment_bank_account_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM bank_accounts
+                  WHERE bank_accounts.id = credit_cards.default_payment_bank_account_id
+                    AND (
+                        bank_accounts.currency_code IS NULL
+                        OR bank_accounts.currency_code <> 'TRY'
+                    )
+              )
+            """,
+        ),
+        description=(
+            "Kredi kartı ürün kararı gereği kart ve harcama para birimini TRY olarak sabitler. "
+            "TL olmayan varsayılan ödeme hesabı bağlantılarını temizler. "
+            "Banka, kasa, çek ve kredili/limitli mevduat döviz mantığına dokunmaz."
         ),
     ),
 )

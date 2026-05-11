@@ -246,9 +246,10 @@ class CreditCardDialog(QDialog):
         self.last_four_digits_input.setPlaceholderText("Örn: 1234")
         self.last_four_digits_input.setMaxLength(4)
 
-        self.currency_combo = NoWheelComboBox()
-        self.currency_combo.setInsertPolicy(NoWheelComboBox.NoInsert)
-        self.currency_combo.currentIndexChanged.connect(self._update_payment_account_combo)
+        self.currency_input = QLineEdit()
+        self.currency_input.setReadOnly(True)
+        self.currency_input.setText("TRY / TL")
+        self.currency_input.setToolTip("Kredi kartı modülü tek para birimiyle çalışır: TL.")
 
         self.credit_limit_input = NoWheelDoubleSpinBox()
         self.credit_limit_input.setDecimals(2)
@@ -299,13 +300,13 @@ class CreditCardDialog(QDialog):
         if self.is_edit_mode:
             self.subtitle_label.setText(
                 "Seçili kredi kartı bilgilerini günceller. Kartın bağlı olduğu banka değiştirilemez; "
-                "diğer takip bilgileri düzenlenebilir."
+                "kredi kartı para birimi ürün kararı gereği sabit TL olarak tutulur."
             )
             return
 
         self.subtitle_label.setText(
             "İşletmeye ait kredi kartı bilgilerini tanımlar. Bu işlem banka bakiyesini değiştirmez; "
-            "kart sadece takip modülüne eklenir."
+            "kredi kartı modülü ürün kararı gereği sadece TL çalışır."
         )
 
     def _build_ui(self) -> None:
@@ -342,7 +343,7 @@ class CreditCardDialog(QDialog):
         form_layout.addRow(self._label("Kart Türü"), self.card_type_combo)
         form_layout.addRow(self._label("Kart Ağı"), self.card_network_combo)
         form_layout.addRow(self._label("Son 4 Hane"), self.last_four_digits_input)
-        form_layout.addRow(self._label("Para Birimi"), self.currency_combo)
+        form_layout.addRow(self._label("Para Birimi"), self.currency_input)
         form_layout.addRow(self._label("Kart Limiti"), self.credit_limit_input)
         form_layout.addRow(self._label("Hesap Kesim Günü"), self.statement_cut_day_input)
         form_layout.addRow(self._label("Son Ödeme Günü"), self.payment_due_day_input)
@@ -350,8 +351,9 @@ class CreditCardDialog(QDialog):
         form_layout.addRow(self._label("Not"), self.notes_input)
 
         help_label = QLabel(
-            "Not: Gün alanlarında 0 / Yok seçilirse tarih takibi kart tanımı seviyesinde boş bırakılır. "
-            "Mouse tekerleği form alanlarındaki değerleri değiştirmez."
+            "Not: Kredi kartı modülü sadece TL çalışır. Gün alanlarında 0 / Yok seçilirse "
+            "tarih takibi kart tanımı seviyesinde boş bırakılır. Mouse tekerleği form "
+            "alanlarındaki değerleri değiştirmez."
         )
         help_label.setObjectName("DialogHelp")
         help_label.setWordWrap(True)
@@ -438,11 +440,7 @@ class CreditCardDialog(QDialog):
         self.card_network_combo.addItem("Amex", CreditCardNetwork.AMEX)
         self.card_network_combo.addItem("Diğer", CreditCardNetwork.OTHER)
 
-        self.currency_combo.clear()
-        self.currency_combo.addItem("TRY", CurrencyCode.TRY)
-        self.currency_combo.addItem("USD", CurrencyCode.USD)
-        self.currency_combo.addItem("EUR", CurrencyCode.EUR)
-        self.currency_combo.addItem("GBP", CurrencyCode.GBP)
+        self.currency_input.setText("TRY / TL")
 
     def _populate_bank_combo(self) -> None:
         self.bank_combo.clear()
@@ -478,7 +476,6 @@ class CreditCardDialog(QDialog):
                     "card_type": credit_card.card_type,
                     "card_network": credit_card.card_network,
                     "last_four_digits": credit_card.last_four_digits or "",
-                    "currency_code": credit_card.currency_code,
                     "credit_limit": Decimal(credit_card.credit_limit or 0),
                     "statement_cut_day": credit_card.statement_cut_day or 0,
                     "payment_due_day": credit_card.payment_due_day or 0,
@@ -502,7 +499,7 @@ class CreditCardDialog(QDialog):
         self._set_combo_by_data(self.card_type_combo, data["card_type"])
         self._set_combo_by_data(self.card_network_combo, data["card_network"])
         self.last_four_digits_input.setText(str(data["last_four_digits"] or ""))
-        self._set_combo_by_data(self.currency_combo, data["currency_code"])
+        self.currency_input.setText("TRY / TL")
         self.credit_limit_input.setValue(float(data["credit_limit"]))
         self.statement_cut_day_input.setValue(int(data["statement_cut_day"] or 0))
         self.payment_due_day_input.setValue(int(data["payment_due_day"] or 0))
@@ -556,19 +553,8 @@ class CreditCardDialog(QDialog):
         except (TypeError, ValueError):
             return None
 
-    def _selected_currency_code(self) -> CurrencyCode | None:
-        value = self.currency_combo.currentData()
-
-        if isinstance(value, CurrencyCode):
-            return value
-
-        if value is None:
-            return None
-
-        try:
-            return CurrencyCode(str(value))
-        except ValueError:
-            return None
+    def _selected_currency_code(self) -> CurrencyCode:
+        return CurrencyCode.TRY
 
     def _selected_payment_account_id(self) -> int | None:
         value = self.payment_account_combo.currentData()
@@ -609,10 +595,6 @@ class CreditCardDialog(QDialog):
 
         if selected_bank_id is None:
             QMessageBox.warning(self, "Eksik Bilgi", "Banka seçilmelidir.")
-            return
-
-        if selected_currency is None:
-            QMessageBox.warning(self, "Eksik Bilgi", "Para birimi seçilmelidir.")
             return
 
         try:

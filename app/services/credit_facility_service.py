@@ -123,6 +123,18 @@ def _clean_rate(value: Any, field_name: str) -> Decimal:
     return clean_value
 
 
+def _fixed_credit_card_currency_code() -> CurrencyCode:
+    """Kredi kartı modülü ürün kararı gereği her zaman TL çalışır."""
+    return CurrencyCode.TRY
+
+
+def _is_try_currency(value: Any) -> bool:
+    if isinstance(value, CurrencyCode):
+        return value == CurrencyCode.TRY
+
+    return str(value or "").strip().upper() == CurrencyCode.TRY.value
+
+
 def _get_bank_or_raise(session: Session, bank_id: int) -> Bank:
     clean_bank_id = _clean_positive_int(bank_id, "Banka ID")
     bank = session.get(Bank, clean_bank_id)
@@ -283,7 +295,7 @@ def create_credit_card(
     clean_card_type = _clean_enum(card_type, CreditCardType, "Kart türü")
     clean_card_network = _clean_enum(card_network, CreditCardNetwork, "Kart ağı")
     clean_last_four_digits = _clean_last_four_digits(last_four_digits)
-    clean_currency_code = _clean_enum(currency_code, CurrencyCode, "Para birimi")
+    clean_currency_code = _fixed_credit_card_currency_code()
     clean_credit_limit = _clean_money(credit_limit, "Kart limiti")
     clean_statement_cut_day = _clean_optional_day(statement_cut_day, "Hesap kesim günü")
     clean_payment_due_day = _clean_optional_day(payment_due_day, "Son ödeme günü")
@@ -311,9 +323,9 @@ def create_credit_card(
     if default_payment_bank_account_id is not None:
         payment_account = _get_bank_account_or_raise(session, default_payment_bank_account_id)
 
-        if payment_account.currency_code != clean_currency_code:
+        if not _is_try_currency(payment_account.currency_code):
             raise CreditFacilityServiceError(
-                "Varsayılan ödeme hesabı para birimi kart para birimiyle aynı olmalıdır."
+                "Kredi kartı varsayılan ödeme hesabı TL olmalıdır."
             )
 
         clean_default_payment_bank_account_id = payment_account.id
@@ -380,7 +392,7 @@ def update_credit_card(
     clean_card_type = _clean_enum(card_type, CreditCardType, "Kart türü")
     clean_card_network = _clean_enum(card_network, CreditCardNetwork, "Kart ağı")
     clean_last_four_digits = _clean_last_four_digits(last_four_digits)
-    clean_currency_code = _clean_enum(currency_code, CurrencyCode, "Para birimi")
+    clean_currency_code = _fixed_credit_card_currency_code()
     clean_credit_limit = _clean_money(credit_limit, "Kart limiti")
     clean_statement_cut_day = _clean_optional_day(statement_cut_day, "Hesap kesim günü")
     clean_payment_due_day = _clean_optional_day(payment_due_day, "Son ödeme günü")
@@ -414,9 +426,9 @@ def update_credit_card(
     if default_payment_bank_account_id is not None:
         payment_account = _get_bank_account_or_raise(session, default_payment_bank_account_id)
 
-        if payment_account.currency_code != clean_currency_code:
+        if not _is_try_currency(payment_account.currency_code):
             raise CreditFacilityServiceError(
-                "Varsayılan ödeme hesabı para birimi kart para birimiyle aynı olmalıdır."
+                "Kredi kartı varsayılan ödeme hesabı TL olmalıdır."
             )
 
         clean_default_payment_bank_account_id = payment_account.id
@@ -593,7 +605,7 @@ def create_credit_card_transaction(
         merchant_name=clean_merchant_name,
         description=clean_description,
         amount=clean_amount,
-        currency_code=credit_card.currency_code,
+        currency_code=_fixed_credit_card_currency_code(),
         installment_count=clean_installment_count,
         installment_no=1,
         status=CreditCardTransactionStatus.PENDING,
