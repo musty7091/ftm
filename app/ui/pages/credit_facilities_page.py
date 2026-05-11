@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -25,13 +26,19 @@ from app.db.session import session_scope
 from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     activate_credit_card,
+    cancel_credit_card_payment,
     cancel_credit_card_transaction,
     deactivate_credit_card,
+    get_credit_card_debt_summary,
+    get_credit_card_recommendation_status,
+    list_credit_card_payments,
     list_credit_card_transactions,
     list_credit_cards,
     list_credit_limits,
 )
 from app.ui.pages.credit_facilities.credit_card_dialog import CreditCardDialog
+from app.ui.pages.credit_facilities.credit_card_payment_dialog import CreditCardPaymentDialog
+from app.ui.pages.credit_facilities.credit_card_statement_dialog import CreditCardStatementDialog
 from app.ui.pages.credit_facilities.credit_card_transaction_dialog import CreditCardTransactionDialog
 
 
@@ -192,6 +199,10 @@ ACTIVE_TRANSACTION_STATUSES = {
     "IN_STATEMENT",
 }
 
+ACTIVE_PAYMENT_STATUSES = {
+    "RECORDED",
+}
+
 
 class CreditFacilitiesPage(QWidget):
     def __init__(self, current_user: Any | None = None) -> None:
@@ -203,19 +214,23 @@ class CreditFacilitiesPage(QWidget):
         self._credit_card_row_ids: list[int | None] = []
         self._credit_card_row_active: list[bool | None] = []
         self._credit_card_row_display_names: list[str | None] = []
+        self._credit_card_row_remaining_debt: list[Decimal | None] = []
         self._transaction_row_ids: list[int | None] = []
         self._transaction_row_status: list[str | None] = []
+        self._payment_row_ids: list[int | None] = []
+        self._payment_row_status: list[str | None] = []
 
         self.credit_cards_table = self._build_table(
             [
                 "Banka",
                 "Kart Adı",
-                "Son 4",
-                "Limit (TL)",
-                "Kullanılan (TL)",
-                "Kalan (TL)",
-                "Kesim",
-                "Ödeme",
+                "Son 4 Hane",
+                "Kart Limiti",
+                "Harcama",
+                "Kullanılabilir Limit",
+                "Tavsiye",
+                "Kesim Tarihi",
+                "Ödeme Tarihi",
                 "Durum",
             ]
         )
@@ -234,6 +249,18 @@ class CreditFacilitiesPage(QWidget):
             ]
         )
         self.transactions_table.itemSelectionChanged.connect(self._update_transaction_actions)
+
+        self.payments_table = self._build_table(
+            [
+                "Kart",
+                "Tarih",
+                "Ödeme Hesabı",
+                "Tutar (TL)",
+                "Durum",
+                "Referans",
+            ]
+        )
+        self.payments_table.itemSelectionChanged.connect(self._update_payment_actions)
 
         self.credit_limits_table = self._build_table(
             [
@@ -262,10 +289,16 @@ class CreditFacilitiesPage(QWidget):
         self.edit_credit_card_button: QPushButton | None = None
         self.toggle_credit_card_button: QPushButton | None = None
         self.transaction_credit_card_button: QPushButton | None = None
+        self.payment_credit_card_button: QPushButton | None = None
+        self.statement_credit_card_button: QPushButton | None = None
         self.cancel_transaction_button: QPushButton | None = None
+        self.cancel_payment_button: QPushButton | None = None
 
         self.transaction_title_label = QLabel("Harcama Kayıtları")
         self.transaction_title_label.setObjectName("CreditFacilitiesSectionTitle")
+
+        self.payment_title_label = QLabel("Ödeme Kayıtları")
+        self.payment_title_label.setObjectName("CreditFacilitiesSectionTitle")
 
         self.status_label = QLabel("Hazır")
         self.status_label.setObjectName("CreditFacilitiesMuted")
@@ -295,11 +328,11 @@ class CreditFacilitiesPage(QWidget):
                 first_value_label=self.card_count_value_label,
                 second_label="Toplam limit",
                 second_value_label=self.card_limit_value_label,
-                third_label="Kullanılan",
+                third_label="Kalan borç",
                 third_value_label=self.card_used_value_label,
-                fourth_label="Kalan",
+                fourth_label="Kullanılabilir",
                 fourth_value_label=self.card_remaining_value_label,
-                hint="Kredi kartları sadece TL takip edilir; kullanılan ve kalan limit harcamalardan hesaplanır.",
+                hint="Kredi kartları sadece TL takip edilir; ödemeler bankadan düşer ve kart borcunu azaltır.",
             )
         )
         summary_layout.addWidget(
@@ -356,21 +389,28 @@ class CreditFacilitiesPage(QWidget):
         self.transaction_credit_card_button.setEnabled(False)
         self.transaction_credit_card_button.clicked.connect(self.open_credit_card_transaction_dialog)
 
-        statement_button = QPushButton("Ekstre")
-        statement_button.setObjectName("CreditFacilitiesSecondaryButton")
-        statement_button.setEnabled(False)
-        statement_button.setToolTip("Ekstre takibi harcama altyapısından sonra bağlanacak.")
+        self.payment_credit_card_button = QPushButton("Ödeme Gir")
+        self.payment_credit_card_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.payment_credit_card_button.setEnabled(False)
+        self.payment_credit_card_button.clicked.connect(self.open_credit_card_payment_dialog)
+
+        self.statement_credit_card_button = QPushButton("Ekstre")
+        self.statement_credit_card_button.setObjectName("CreditFacilitiesSecondaryButton")
+        self.statement_credit_card_button.setEnabled(False)
+        self.statement_credit_card_button.setToolTip("Seçili kredi kartının dönem içi harcama ve ödeme hareketlerini gösterir.")
+        self.statement_credit_card_button.clicked.connect(self.open_credit_card_statement_dialog)
 
         actions.addWidget(self.add_credit_card_button)
         actions.addWidget(self.edit_credit_card_button)
         actions.addWidget(self.toggle_credit_card_button)
         actions.addWidget(self.transaction_credit_card_button)
-        actions.addWidget(statement_button)
+        actions.addWidget(self.payment_credit_card_button)
+        actions.addWidget(self.statement_credit_card_button)
         actions.addStretch(1)
 
         hint_label = QLabel(
-            "Kredi kartları sadece TL çalışır. Kart limiti, kullanılan limit ve kalan limit "
-            "iptal edilmemiş TL harcamalardan hesaplanır."
+            "Kredi kartları sadece TL çalışır. Ödeme girildiğinde TL banka hesabından çıkış oluşur, "
+            "kart borcu ve kullanılabilir limit otomatik güncellenir."
         )
         hint_label.setObjectName("CreditFacilitiesMuted")
         hint_label.setWordWrap(True)
@@ -387,11 +427,25 @@ class CreditFacilitiesPage(QWidget):
         transaction_actions.addStretch(1)
         transaction_actions.addWidget(self.cancel_transaction_button)
 
+        payment_actions = QHBoxLayout()
+        payment_actions.setSpacing(8)
+
+        self.cancel_payment_button = QPushButton("Ödeme İptal")
+        self.cancel_payment_button.setObjectName("CreditFacilitiesDangerButton")
+        self.cancel_payment_button.setEnabled(False)
+        self.cancel_payment_button.clicked.connect(self.cancel_selected_payment)
+
+        payment_actions.addWidget(self.payment_title_label)
+        payment_actions.addStretch(1)
+        payment_actions.addWidget(self.cancel_payment_button)
+
         layout.addLayout(actions)
         layout.addWidget(hint_label)
         layout.addWidget(self.credit_cards_table, 1)
         layout.addLayout(transaction_actions)
         layout.addWidget(self.transactions_table, 1)
+        layout.addLayout(payment_actions)
+        layout.addWidget(self.payments_table, 1)
 
         return tab
 
@@ -588,6 +642,65 @@ class CreditFacilitiesPage(QWidget):
             self._restore_credit_card_selection(credit_card_id)
             self.status_label.setText("Kredi kartı harcaması kaydedildi.")
 
+    def open_credit_card_payment_dialog(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+        is_active = self._selected_credit_card_is_active()
+        remaining_debt = self._selected_credit_card_remaining_debt()
+
+        if credit_card_id is None:
+            QMessageBox.warning(
+                self,
+                "Kart Seçilmedi",
+                "Ödeme girmek için listeden bir kredi kartı seçmelisin.",
+            )
+            return
+
+        if is_active is not True:
+            QMessageBox.warning(
+                self,
+                "Kart Pasif",
+                "Pasif karta ödeme girişi yapılamaz.",
+            )
+            return
+
+        if remaining_debt is not None and remaining_debt <= Decimal("0.00"):
+            QMessageBox.information(
+                self,
+                "Ödenecek Borç Yok",
+                "Seçili kredi kartı için ödenecek borç bulunmuyor.",
+            )
+            return
+
+        dialog = CreditCardPaymentDialog(
+            current_user=self.current_user,
+            credit_card_id=credit_card_id,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self._restore_credit_card_selection(credit_card_id)
+            self.status_label.setText("Kredi kartı ödemesi kaydedildi.")
+
+    def open_credit_card_statement_dialog(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+
+        if credit_card_id is None:
+            QMessageBox.warning(
+                self,
+                "Kart Seçilmedi",
+                "Ekstre hareketlerini görmek için listeden bir kredi kartı seçmelisin.",
+            )
+            return
+
+        dialog = CreditCardStatementDialog(
+            credit_card_id=credit_card_id,
+            parent=self,
+        )
+
+        dialog.exec()
+        self.status_label.setText("Kredi kartı dönem hareketleri görüntülendi.")
+
     def toggle_selected_credit_card_active_state(self) -> None:
         credit_card_id = self._selected_credit_card_id()
         is_active = self._selected_credit_card_is_active()
@@ -715,48 +828,122 @@ class CreditFacilitiesPage(QWidget):
 
         self.status_label.setText("Kredi kartı harcaması iptal edildi.")
 
+    def cancel_selected_payment(self) -> None:
+        payment_id = self._selected_payment_id()
+        payment_status = self._selected_payment_status()
+        credit_card_id = self._selected_credit_card_id()
+
+        if payment_id is None:
+            QMessageBox.warning(
+                self,
+                "Ödeme Seçilmedi",
+                "İptal etmek için listeden bir ödeme seçmelisin.",
+            )
+            return
+
+        if payment_status == "CANCELLED":
+            QMessageBox.information(
+                self,
+                "Ödeme Zaten İptal",
+                "Seçili ödeme zaten iptal edilmiş.",
+            )
+            return
+
+        cancel_reason, accepted = QInputDialog.getText(
+            self,
+            "Ödeme İptal Nedeni",
+            "Ödeme iptal nedeni:",
+        )
+
+        if not accepted:
+            return
+
+        if not str(cancel_reason or "").strip():
+            QMessageBox.warning(
+                self,
+                "Eksik Bilgi",
+                "Ödeme iptali için açıklama girmelisin.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Ödeme İptal",
+            "Seçili kredi kartı ödemesi ve buna bağlı banka hareketi iptal edilecek. Devam etmek istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                cancel_credit_card_payment(
+                    session,
+                    payment_id=payment_id,
+                    cancel_reason=str(cancel_reason),
+                    cancelled_by_user_id=self._current_user_id(),
+                )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Ödeme İptal Edilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Ödeme iptal edilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_data()
+
+        if credit_card_id is not None:
+            self._restore_credit_card_selection(credit_card_id)
+
+        self.status_label.setText("Kredi kartı ödemesi iptal edildi.")
+
     def refresh_data(self) -> None:
         try:
             with session_scope() as session:
                 credit_cards = list_credit_cards(session, include_inactive=True)
                 credit_limits = list_credit_limits(session, include_inactive=True)
-                all_transactions = list_credit_card_transactions(
-                    session,
-                    credit_card_id=None,
-                    include_cancelled=True,
-                )
-
-                used_by_card: dict[int, Decimal] = {}
-
-                for transaction in all_transactions:
-                    status_value = transaction.status.value
-
-                    if status_value not in ACTIVE_TRANSACTION_STATUSES:
-                        continue
-
-                    card_id = int(transaction.credit_card_id)
-                    used_by_card[card_id] = used_by_card.get(card_id, Decimal("0.00")) + Decimal(
-                        transaction.amount or 0
-                    )
 
                 card_rows: list[list[Any]] = []
                 card_row_ids: list[int | None] = []
                 card_row_active: list[bool | None] = []
                 card_row_display_names: list[str | None] = []
+                card_row_remaining_debt: list[Decimal | None] = []
                 active_card_count = 0
                 card_limit_total = Decimal("0.00")
-                card_used_total = Decimal("0.00")
+                card_remaining_debt_total = Decimal("0.00")
+                card_available_limit_total = Decimal("0.00")
 
                 for credit_card in credit_cards:
                     card_id = int(credit_card.id)
-                    card_limit = Decimal(credit_card.credit_limit or 0)
-                    used_amount = used_by_card.get(card_id, Decimal("0.00"))
-                    remaining_amount = card_limit - used_amount
+                    debt_summary = get_credit_card_debt_summary(session, credit_card_id=card_id)
+
+                    card_limit = Decimal(debt_summary["credit_limit"] or Decimal("0.00"))
+                    remaining_debt = Decimal(debt_summary["remaining_debt"] or Decimal("0.00"))
+                    available_limit = Decimal(debt_summary["available_limit"] or Decimal("0.00"))
+
+                    recommendation = get_credit_card_recommendation_status(
+                        credit_card=credit_card,
+                        available_limit=available_limit,
+                    )
+                    recommendation_label = str(recommendation.get("label") or "-")
 
                     if credit_card.is_active:
                         active_card_count += 1
                         card_limit_total += card_limit
-                        card_used_total += used_amount
+                        card_remaining_debt_total += remaining_debt
+                        card_available_limit_total += available_limit
 
                     bank_name = "-"
                     if getattr(credit_card, "bank", None) is not None:
@@ -774,8 +961,9 @@ class CreditFacilitiesPage(QWidget):
                             credit_card.card_name,
                             credit_card.last_four_digits or "-",
                             self._format_tl(card_limit),
-                            self._format_tl(used_amount),
-                            self._format_tl(remaining_amount),
+                            self._format_tl(remaining_debt),
+                            self._format_tl(available_limit),
+                            recommendation_label,
                             self._format_day(credit_card.statement_cut_day),
                             self._format_day(credit_card.payment_due_day),
                             "Aktif" if credit_card.is_active else "Pasif",
@@ -784,6 +972,7 @@ class CreditFacilitiesPage(QWidget):
                     card_row_ids.append(card_id)
                     card_row_active.append(bool(credit_card.is_active))
                     card_row_display_names.append(display_name)
+                    card_row_remaining_debt.append(remaining_debt)
 
                 limit_rows = []
                 active_limit_count = 0
@@ -821,6 +1010,7 @@ class CreditFacilitiesPage(QWidget):
             self._credit_card_row_ids = card_row_ids
             self._credit_card_row_active = card_row_active
             self._credit_card_row_display_names = card_row_display_names
+            self._credit_card_row_remaining_debt = card_row_remaining_debt
 
             self._fill_table(
                 table=self.credit_cards_table,
@@ -835,16 +1025,15 @@ class CreditFacilitiesPage(QWidget):
 
             self.card_count_value_label.setText(str(active_card_count))
             self.card_limit_value_label.setText(self._format_tl(card_limit_total))
-            self.card_used_value_label.setText(self._format_tl(card_used_total))
-            self.card_remaining_value_label.setText(
-                self._format_tl(card_limit_total - card_used_total)
-            )
+            self.card_used_value_label.setText(self._format_tl(card_remaining_debt_total))
+            self.card_remaining_value_label.setText(self._format_tl(card_available_limit_total))
             self.limit_count_value_label.setText(str(active_limit_count))
             self.limit_total_value_label.setText(self._format_decimal(credit_limit_total))
 
             self.status_label.setText("Kredili Hesaplar / Kartlar verileri yenilendi.")
             self._update_credit_card_actions()
             self.refresh_transactions_for_selected_card()
+            self.refresh_payments_for_selected_card()
 
         except Exception as exc:
             QMessageBox.warning(
@@ -878,12 +1067,22 @@ class CreditFacilitiesPage(QWidget):
                     credit_card_id=credit_card_id,
                     include_cancelled=True,
                 )
+                payments = list_credit_card_payments(
+                    session,
+                    credit_card_id=credit_card_id,
+                    include_cancelled=True,
+                )
+                payment_status_by_transaction_id = self._build_transaction_payment_status_map(
+                    transactions=transactions,
+                    payments=payments,
+                )
 
                 rows: list[list[Any]] = []
                 row_ids: list[int | None] = []
                 row_statuses: list[str | None] = []
 
                 for transaction in transactions:
+                    transaction_id = int(transaction.id)
                     rows.append(
                         [
                             selected_card_name,
@@ -892,11 +1091,14 @@ class CreditFacilitiesPage(QWidget):
                             transaction.description or "-",
                             self._format_tl(transaction.amount),
                             f"{transaction.installment_no}/{transaction.installment_count}",
-                            self._transaction_status_text(transaction.status.value),
+                            payment_status_by_transaction_id.get(
+                                transaction_id,
+                                self._transaction_status_text(transaction.status.value),
+                            ),
                             transaction.reference_no or "-",
                         ]
                     )
-                    row_ids.append(int(transaction.id))
+                    row_ids.append(transaction_id)
                     row_statuses.append(transaction.status.value)
 
             self._transaction_row_ids = row_ids
@@ -915,6 +1117,75 @@ class CreditFacilitiesPage(QWidget):
                 self,
                 "Harcama Listesi",
                 f"Harcama kayıtları yüklenirken hata oluştu:\n\n{exc}",
+            )
+
+    def refresh_payments_for_selected_card(self) -> None:
+        credit_card_id = self._selected_credit_card_id()
+
+        if credit_card_id is None:
+            self._payment_row_ids = []
+            self._payment_row_status = []
+            self.payment_title_label.setText("Ödeme Kayıtları")
+            self._fill_table(
+                table=self.payments_table,
+                rows=[],
+                empty_message="Ödeme görmek için önce bir kredi kartı seç.",
+            )
+            self._update_payment_actions()
+            return
+
+        selected_card_name = self._selected_credit_card_display_name() or "Seçili Kart"
+
+        try:
+            with session_scope() as session:
+                payments = list_credit_card_payments(
+                    session,
+                    credit_card_id=credit_card_id,
+                    include_cancelled=True,
+                )
+
+                rows: list[list[Any]] = []
+                row_ids: list[int | None] = []
+                row_statuses: list[str | None] = []
+
+                for payment in payments:
+                    account_label = "-"
+                    payment_account = getattr(payment, "payment_bank_account", None)
+                    if payment_account is not None:
+                        bank_name = "-"
+                        if getattr(payment_account, "bank", None) is not None:
+                            bank_name = payment_account.bank.name or "-"
+                        account_label = f"{bank_name} / {payment_account.account_name}"
+
+                    rows.append(
+                        [
+                            selected_card_name,
+                            self._format_date(payment.payment_date),
+                            account_label,
+                            self._format_tl(payment.amount),
+                            self._payment_status_text(payment.status.value),
+                            payment.reference_no or "-",
+                        ]
+                    )
+                    row_ids.append(int(payment.id))
+                    row_statuses.append(payment.status.value)
+
+            self._payment_row_ids = row_ids
+            self._payment_row_status = row_statuses
+
+            self.payment_title_label.setText(f"Ödeme Kayıtları - {selected_card_name}")
+            self._fill_table(
+                table=self.payments_table,
+                rows=rows,
+                empty_message=f"{selected_card_name} için henüz ödeme kaydı yok.",
+            )
+            self._update_payment_actions()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Ödeme Listesi",
+                f"Ödeme kayıtları yüklenirken hata oluştu:\n\n{exc}",
             )
 
     def _fill_table(
@@ -955,13 +1226,33 @@ class CreditFacilitiesPage(QWidget):
 
                 text_value = str(value).strip().upper()
 
-                if text_value in {"AKTIF", "BEKLIYOR"}:
+                if text_value in {
+                    "AKTIF",
+                    "KAYITLI",
+                    "ÖDENDI",
+                    "ÖDENDİ",
+                    "TAVSIYE EDILEN",
+                    "TAVSİYE EDİLEN",
+                }:
                     item.setForeground(QColor("#22c55e"))
-                elif text_value in {"PASIF", "İPTAL", "IPTAL"}:
+                elif text_value in {"PASIF", "İPTAL", "IPTAL", "LIMIT YETERSIZ", "LİMİT YETERSİZ"}:
                     item.setForeground(QColor("#f87171"))
-                elif text_value == "EKSTREDE":
+                elif text_value in {"EKSTREDE", "UYGUN"}:
                     item.setForeground(QColor("#60a5fa"))
-                elif text_value == "İADE":
+                elif text_value in {
+                    "BORÇTA",
+                    "KISMI ÖDENDI",
+                    "KISMI ÖDENDİ",
+                    "KISMİ ÖDENDI",
+                    "KISMİ ÖDENDİ",
+                    "İADE",
+                    "KESIME YAKIN",
+                    "KESİME YAKIN",
+                    "BUGÜN KESIM",
+                    "BUGÜN KESİM",
+                    "TARIH YOK",
+                    "TARİH YOK",
+                }:
                     item.setForeground(QColor("#fbbf24"))
 
                 table.setItem(row_index, column_index, item)
@@ -971,6 +1262,7 @@ class CreditFacilitiesPage(QWidget):
     def _on_credit_card_selection_changed(self) -> None:
         self._update_credit_card_actions()
         self.refresh_transactions_for_selected_card()
+        self.refresh_payments_for_selected_card()
 
     def _restore_credit_card_selection(self, credit_card_id: int) -> None:
         for row_index, row_card_id in enumerate(self._credit_card_row_ids):
@@ -1011,6 +1303,17 @@ class CreditFacilitiesPage(QWidget):
 
         return self._credit_card_row_display_names[row_index]
 
+    def _selected_credit_card_remaining_debt(self) -> Decimal | None:
+        row_index = self.credit_cards_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_card_row_remaining_debt):
+            return None
+
+        return self._credit_card_row_remaining_debt[row_index]
+
     def _selected_transaction_id(self) -> int | None:
         row_index = self.transactions_table.currentRow()
 
@@ -1033,10 +1336,34 @@ class CreditFacilitiesPage(QWidget):
 
         return self._transaction_row_status[row_index]
 
+    def _selected_payment_id(self) -> int | None:
+        row_index = self.payments_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._payment_row_ids):
+            return None
+
+        return self._payment_row_ids[row_index]
+
+    def _selected_payment_status(self) -> str | None:
+        row_index = self.payments_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._payment_row_status):
+            return None
+
+        return self._payment_row_status[row_index]
+
     def _update_credit_card_actions(self) -> None:
         selected_card_id = self._selected_credit_card_id()
         selected_is_active = self._selected_credit_card_is_active()
+        selected_remaining_debt = self._selected_credit_card_remaining_debt()
         has_selection = selected_card_id is not None
+        has_payable_debt = selected_remaining_debt is not None and selected_remaining_debt > Decimal("0.00")
 
         if self.edit_credit_card_button is not None:
             self.edit_credit_card_button.setEnabled(has_selection)
@@ -1058,6 +1385,14 @@ class CreditFacilitiesPage(QWidget):
         if self.transaction_credit_card_button is not None:
             self.transaction_credit_card_button.setEnabled(has_selection and selected_is_active is True)
 
+        if self.payment_credit_card_button is not None:
+            self.payment_credit_card_button.setEnabled(
+                has_selection and selected_is_active is True and has_payable_debt
+            )
+
+        if self.statement_credit_card_button is not None:
+            self.statement_credit_card_button.setEnabled(has_selection)
+
     def _update_transaction_actions(self) -> None:
         transaction_id = self._selected_transaction_id()
         transaction_status = self._selected_transaction_status()
@@ -1065,6 +1400,15 @@ class CreditFacilitiesPage(QWidget):
         if self.cancel_transaction_button is not None:
             self.cancel_transaction_button.setEnabled(
                 transaction_id is not None and transaction_status not in {"CANCELLED", "IN_STATEMENT"}
+            )
+
+    def _update_payment_actions(self) -> None:
+        payment_id = self._selected_payment_id()
+        payment_status = self._selected_payment_status()
+
+        if self.cancel_payment_button is not None:
+            self.cancel_payment_button.setEnabled(
+                payment_id is not None and payment_status not in {"CANCELLED"}
             )
 
     def _current_user_id(self) -> int | None:
@@ -1095,12 +1439,87 @@ class CreditFacilitiesPage(QWidget):
 
         return f"{bank_name} / {card_name}"
 
+    def _build_transaction_payment_status_map(
+        self,
+        *,
+        transactions: list[Any],
+        payments: list[Any],
+    ) -> dict[int, str]:
+        active_payment_total = Decimal("0.00")
+
+        for payment in payments:
+            payment_status = str(getattr(payment.status, "value", payment.status) or "").strip().upper()
+
+            if payment_status != "RECORDED":
+                continue
+
+            try:
+                active_payment_total += Decimal(payment.amount or 0)
+            except Exception:
+                continue
+
+        remaining_payment_coverage = active_payment_total
+        status_by_transaction_id: dict[int, str] = {}
+
+        active_transactions = []
+
+        for transaction in transactions:
+            transaction_status = str(
+                getattr(transaction.status, "value", transaction.status) or ""
+            ).strip().upper()
+
+            if transaction_status not in ACTIVE_TRANSACTION_STATUSES:
+                continue
+
+            active_transactions.append(transaction)
+
+        active_transactions.sort(
+            key=lambda item: (
+                item.transaction_date,
+                int(item.id),
+            )
+        )
+
+        for transaction in active_transactions:
+            transaction_id = int(transaction.id)
+
+            try:
+                transaction_amount = Decimal(transaction.amount or 0)
+            except Exception:
+                transaction_amount = Decimal("0.00")
+
+            if transaction_amount <= Decimal("0.00"):
+                status_by_transaction_id[transaction_id] = "Borçta"
+                continue
+
+            if remaining_payment_coverage >= transaction_amount:
+                status_by_transaction_id[transaction_id] = "Ödendi"
+                remaining_payment_coverage -= transaction_amount
+                continue
+
+            if remaining_payment_coverage > Decimal("0.00"):
+                status_by_transaction_id[transaction_id] = "Kısmi Ödendi"
+                remaining_payment_coverage = Decimal("0.00")
+                continue
+
+            status_by_transaction_id[transaction_id] = "Borçta"
+
+        return status_by_transaction_id
+
     def _transaction_status_text(self, status: str) -> str:
         status_map = {
-            "PENDING": "Bekliyor",
+            "PENDING": "Borçta",
             "IN_STATEMENT": "Ekstrede",
             "CANCELLED": "İptal",
             "REFUNDED": "İade",
+        }
+
+        return status_map.get(str(status or "").strip().upper(), str(status or "-"))
+
+    def _payment_status_text(self, status: str) -> str:
+        status_map = {
+            "RECORDED": "Kayıtlı",
+            "CANCELLED": "İptal",
         }
 
         return status_map.get(str(status or "").strip().upper(), str(status or "-"))

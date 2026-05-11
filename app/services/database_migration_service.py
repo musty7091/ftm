@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -365,6 +365,147 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
             "Kredi kartı ürün kararı gereği kart ve harcama para birimini TRY olarak sabitler. "
             "TL olmayan varsayılan ödeme hesabı bağlantılarını temizler. "
             "Banka, kasa, çek ve kredili/limitli mevduat döviz mantığına dokunmaz."
+        ),
+    ),
+
+    DatabaseMigration(
+        migration_id="20260511_0005_credit_card_direct_payments",
+        name="Credit card direct payments",
+        target_version=5,
+        statements=(
+            """
+            CREATE TABLE credit_card_payments_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credit_card_id INTEGER,
+                statement_id INTEGER,
+                payment_bank_account_id INTEGER,
+                bank_transaction_id INTEGER,
+                payment_date DATE NOT NULL,
+                amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                status VARCHAR(30) NOT NULL DEFAULT 'RECORDED',
+                reference_no VARCHAR(100),
+                notes TEXT,
+                created_by_user_id INTEGER,
+                cancelled_by_user_id INTEGER,
+                cancelled_at DATETIME,
+                cancel_reason TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_credit_card_payments_bank_transaction_id
+                    UNIQUE (bank_transaction_id),
+                CONSTRAINT fk_credit_card_payments_credit_card_id
+                    FOREIGN KEY (credit_card_id)
+                    REFERENCES credit_cards (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_credit_card_payments_statement_id
+                    FOREIGN KEY (statement_id)
+                    REFERENCES credit_card_statements (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_credit_card_payments_payment_bank_account_id
+                    FOREIGN KEY (payment_bank_account_id)
+                    REFERENCES bank_accounts (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_credit_card_payments_bank_transaction_id
+                    FOREIGN KEY (bank_transaction_id)
+                    REFERENCES bank_transactions (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_credit_card_payments_created_by_user_id
+                    FOREIGN KEY (created_by_user_id)
+                    REFERENCES users (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_credit_card_payments_cancelled_by_user_id
+                    FOREIGN KEY (cancelled_by_user_id)
+                    REFERENCES users (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            INSERT INTO credit_card_payments_new (
+                id,
+                credit_card_id,
+                statement_id,
+                payment_bank_account_id,
+                bank_transaction_id,
+                payment_date,
+                amount,
+                status,
+                reference_no,
+                notes,
+                created_by_user_id,
+                cancelled_by_user_id,
+                cancelled_at,
+                cancel_reason,
+                created_at,
+                updated_at
+            )
+            SELECT
+                credit_card_payments.id,
+                credit_card_statements.credit_card_id,
+                credit_card_payments.statement_id,
+                credit_card_payments.payment_bank_account_id,
+                NULL,
+                credit_card_payments.payment_date,
+                credit_card_payments.amount,
+                'RECORDED',
+                credit_card_payments.reference_no,
+                credit_card_payments.notes,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                credit_card_payments.created_at,
+                credit_card_payments.updated_at
+            FROM credit_card_payments
+            LEFT JOIN credit_card_statements
+                ON credit_card_statements.id = credit_card_payments.statement_id
+            """,
+            """
+            DROP TABLE credit_card_payments
+            """,
+            """
+            ALTER TABLE credit_card_payments_new
+            RENAME TO credit_card_payments
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_credit_card_id
+            ON credit_card_payments (credit_card_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_statement_id
+            ON credit_card_payments (statement_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_payment_bank_account_id
+            ON credit_card_payments (payment_bank_account_id)
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_credit_card_payments_bank_transaction_id
+            ON credit_card_payments (bank_transaction_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_payment_date
+            ON credit_card_payments (payment_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_status
+            ON credit_card_payments (status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_reference_no
+            ON credit_card_payments (reference_no)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_created_by_user_id
+            ON credit_card_payments (created_by_user_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_payments_cancelled_by_user_id
+            ON credit_card_payments (cancelled_by_user_id)
+            """,
+        ),
+        description=(
+            "Kredi kartı ödemelerini ekstreye zorunlu bağlı olmadan doğrudan karta kaydedebilecek hale getirir. "
+            "Mevcut ekstre ödemelerini korur, kredi kartı bağlantısını statement kaydından taşır ve banka hareketi bağlantısı için alan açar."
         ),
     ),
 )

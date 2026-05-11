@@ -11,6 +11,7 @@ from app.db.session import Base
 from app.db.types import MONEY, RATE
 from app.models.enums import (
     CreditCardNetwork,
+    CreditCardPaymentStatus,
     CreditCardStatementStatus,
     CreditCardTransactionStatus,
     CreditCardType,
@@ -137,6 +138,12 @@ class CreditCard(Base):
 
     transactions: Mapped[List["CreditCardTransaction"]] = relationship(
         "CreditCardTransaction",
+        back_populates="credit_card",
+        cascade="save-update, merge",
+    )
+
+    payments: Mapped[List["CreditCardPayment"]] = relationship(
+        "CreditCardPayment",
         back_populates="credit_card",
         cascade="save-update, merge",
     )
@@ -362,15 +369,28 @@ class CreditCardPayment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
-    statement_id: Mapped[int] = mapped_column(
-        ForeignKey("credit_card_statements.id", ondelete="RESTRICT"),
-        nullable=False,
+    credit_card_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("credit_cards.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+
+    statement_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("credit_card_statements.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
     payment_bank_account_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("bank_accounts.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
+    )
+
+    bank_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bank_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
         index=True,
     )
 
@@ -383,8 +403,37 @@ class CreditCardPayment(Base):
         server_default="0.00",
     )
 
+    status: Mapped[CreditCardPaymentStatus] = mapped_column(
+        Enum(
+            CreditCardPaymentStatus,
+            native_enum=False,
+            validate_strings=True,
+            length=30,
+            name="credit_card_payment_status",
+        ),
+        nullable=False,
+        default=CreditCardPaymentStatus.RECORDED,
+        server_default=CreditCardPaymentStatus.RECORDED.value,
+        index=True,
+    )
+
     reference_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -399,17 +448,33 @@ class CreditCardPayment(Base):
         onupdate=func.now(),
     )
 
-    statement: Mapped["CreditCardStatement"] = relationship(
+    credit_card: Mapped[Optional["CreditCard"]] = relationship(
+        "CreditCard",
+        back_populates="payments",
+    )
+
+    statement: Mapped[Optional["CreditCardStatement"]] = relationship(
         "CreditCardStatement",
         back_populates="payments",
     )
 
     payment_bank_account = relationship("BankAccount")
+    bank_transaction = relationship("BankTransaction")
+
+    created_by_user = relationship(
+        "User",
+        foreign_keys=[created_by_user_id],
+    )
+
+    cancelled_by_user = relationship(
+        "User",
+        foreign_keys=[cancelled_by_user_id],
+    )
 
     def __repr__(self) -> str:
         return (
-            f"<CreditCardPayment id={self.id} statement_id={self.statement_id} "
-            f"amount={self.amount}>"
+            f"<CreditCardPayment id={self.id} credit_card_id={self.credit_card_id} "
+            f"statement_id={self.statement_id} amount={self.amount} status={self.status!r}>"
         )
 
 

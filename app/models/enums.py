@@ -48,6 +48,7 @@ class FinancialSourceType(StrEnum):
     ISSUED_CHECK = "ISSUED_CHECK"
     RECEIVED_CHECK = "RECEIVED_CHECK"
     POS_SETTLEMENT = "POS_SETTLEMENT"
+    CREDIT_CARD_PAYMENT = "CREDIT_CARD_PAYMENT"
     MANUAL_ADJUSTMENT = "MANUAL_ADJUSTMENT"
     OTHER = "OTHER"
 
@@ -128,6 +129,21 @@ class CreditCardTransactionStatus(StrEnum):
     IN_STATEMENT = "IN_STATEMENT"
     CANCELLED = "CANCELLED"
     REFUNDED = "REFUNDED"
+
+
+class CreditCardPaymentStatus(StrEnum):
+    RECORDED = "RECORDED"
+    CANCELLED = "CANCELLED"
+
+
+class CreditCardRecommendationStatus(StrEnum):
+    RECOMMENDED = "RECOMMENDED"
+    SUITABLE = "SUITABLE"
+    NEAR_CUT_OFF = "NEAR_CUT_OFF"
+    CUT_OFF_TODAY = "CUT_OFF_TODAY"
+    LIMIT_INSUFFICIENT = "LIMIT_INSUFFICIENT"
+    DATE_MISSING = "DATE_MISSING"
+    PASSIVE = "PASSIVE"
 
 
 class CreditLimitType(StrEnum):
