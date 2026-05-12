@@ -6,8 +6,8 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QDate, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QDialog,
@@ -31,6 +31,7 @@ from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     calculate_credit_limit_period_report,
     create_credit_limit_period_interest_transaction,
+    get_credit_limit_debt_summary,
 )
 from app.reports.credit_limit_period_pdf_report import (
     CreditLimitPeriodPdfReportError,
@@ -345,24 +346,26 @@ class CreditLimitPeriodReportDialog(QDialog):
         self.payment_total_value_label = self._metric_value_label("0,00")
         self.ending_debt_value_label = self._metric_value_label("0,00")
         self.calculated_interest_value_label = self._metric_value_label("0,00")
+        self.recorded_interest_debt_value_label = self._metric_value_label("0,00")
+        self.fee_debt_value_label = self._metric_value_label("0,00")
+        self.unrecorded_interest_value_label = self._metric_value_label("0,00")
         self.total_period_debt_value_label = self._metric_value_label("0,00")
+        self.carryover_principal_value_label = self._metric_value_label("0,00")
+        self.carryover_interest_fee_value_label = self._metric_value_label("0,00")
+        self.carryover_unrecorded_interest_value_label = self._metric_value_label("0,00")
+        self.carryover_total_value_label = self._metric_value_label("0,00")
 
-        self.movements_table = self._build_table(
-            [
-                "İşlem Tarihi",
-                "Faize Etki Tarihi",
-                "Tür",
-                "Tutar",
-                "Durum",
-                "Referans",
-                "Açıklama",
-            ]
-        )
-        self.daily_interest_table = self._build_table(
+        self.combined_report_table = self._build_table(
             [
                 "Tarih",
+                "Kayıt",
+                "Tür",
+                "Tutar",
+                "Dağılım",
+                "Faize Etki",
                 "Faize Esas Borç",
                 "Günlük Faiz",
+                "Açıklama",
             ]
         )
 
@@ -402,19 +405,23 @@ class CreditLimitPeriodReportDialog(QDialog):
 
         wrapper_layout.addWidget(self._build_summary_card())
 
-        movements_title = QLabel("Dönem Hareketleri")
-        movements_title.setObjectName("SectionTitle")
-        wrapper_layout.addWidget(movements_title)
-        wrapper_layout.addWidget(self.movements_table, 1)
+        combined_title = QLabel("Günlük Faiz Dökümü - Tam Liste")
+        combined_title.setObjectName("SectionTitle")
+        wrapper_layout.addWidget(combined_title)
 
-        daily_title = QLabel("Günlük Faiz Dökümü")
-        daily_title.setObjectName("SectionTitle")
-        wrapper_layout.addWidget(daily_title)
-        wrapper_layout.addWidget(self.daily_interest_table, 1)
+        combined_help_label = QLabel(
+            "Bu tabloda dönem içindeki limit kullanımları, ödemeler, faiz/masraf kayıtları ve günlük faiz hesabı tek listede gösterilir. "
+            "Ödeme satırındaki dağılım, ödemenin ne kadarının masrafa, faize ve ana paraya gittiğini açıklar."
+        )
+        combined_help_label.setObjectName("DialogHelp")
+        combined_help_label.setWordWrap(True)
+        wrapper_layout.addWidget(combined_help_label)
+        wrapper_layout.addWidget(self.combined_report_table, 1)
 
         help_label = QLabel(
             "Not: Limit kullanımı aynı gün faize girer. Limit ödemesi bankaların valör uygulamasına uygun şekilde ertesi gün borçtan düşer. "
             "Bu nedenle aynı gün kullanılıp kapatılan limit için en az 1 günlük faiz oluşabilir. "
+            "Dönem borçlu kapanırsa ana para sonraki döneme devreder; kaydedilmiş faiz ve masraf ayrıca toplam ödenecek borç olarak taşınır. "
             "Faizi Kaydet işlemi yalnızca faiz tahakkuku oluşturur; banka hesabından otomatik para çıkışı yapmaz."
         )
         help_label.setObjectName("DialogHelp")
@@ -453,13 +460,22 @@ class CreditLimitPeriodReportDialog(QDialog):
         self._add_metric(grid, 0, 2, "Limit", self.limit_amount_value_label)
         self._add_metric(grid, 0, 3, "Faiz Oranı", self.interest_rate_value_label)
 
-        self._add_metric(grid, 2, 0, "Dönem Başı Borç", self.opening_debt_value_label)
+        self._add_metric(grid, 2, 0, "Dönem Başı Faize Esas", self.opening_debt_value_label)
         self._add_metric(grid, 2, 1, "Dönem Kullanımı", self.usage_total_value_label)
         self._add_metric(grid, 2, 2, "Dönem Ödemesi", self.payment_total_value_label)
-        self._add_metric(grid, 2, 3, "Dönem Sonu Ana Para", self.ending_debt_value_label)
+        self._add_metric(grid, 2, 3, "Dönem Sonu Faize Esas", self.ending_debt_value_label)
 
         self._add_metric(grid, 4, 0, "Hesaplanan Faiz", self.calculated_interest_value_label)
-        self._add_metric(grid, 4, 1, "Toplam Dönem Borcu", self.total_period_debt_value_label)
+        self._add_metric(grid, 4, 1, "Kaydedilmemiş Faiz", self.unrecorded_interest_value_label)
+        self._add_metric(grid, 4, 2, "Faiz Borcu", self.recorded_interest_debt_value_label)
+        self._add_metric(grid, 4, 3, "Masraf Borcu", self.fee_debt_value_label)
+
+        self._add_metric(grid, 6, 0, "Toplam Ödenecek", self.total_period_debt_value_label)
+
+        self._add_metric(grid, 8, 0, "Devreden Ana Para", self.carryover_principal_value_label)
+        self._add_metric(grid, 8, 1, "Devreden Faiz / Masraf", self.carryover_interest_fee_value_label)
+        self._add_metric(grid, 8, 2, "Kaydedilmemiş Faiz", self.carryover_unrecorded_interest_value_label)
+        self._add_metric(grid, 8, 3, "Sonraki Döneme Devir", self.carryover_total_value_label)
 
         layout.addWidget(title)
         layout.addLayout(grid)
@@ -556,6 +572,18 @@ class CreditLimitPeriodReportDialog(QDialog):
                     credit_limit_id=self.credit_limit_id,
                     period_start=period_start,
                     period_end=period_end,
+                )
+                report["_value_date_summary"] = get_credit_limit_debt_summary(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    as_of_date=period_end,
+                    apply_value_dates=True,
+                )
+                report["_booked_summary"] = get_credit_limit_debt_summary(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    as_of_date=period_end,
+                    apply_value_dates=False,
                 )
                 calculated_interest = self._to_decimal(report.get("calculated_interest_total"))
 
@@ -696,10 +724,26 @@ class CreditLimitPeriodReportDialog(QDialog):
             )
             return
 
+        open_result = QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(Path(generated_path).resolve()))
+        )
+
+        if open_result:
+            QMessageBox.information(
+                self,
+                "PDF Raporu Oluşturuldu",
+                f"Kredili / limitli mevduat dönem raporu başarıyla oluşturuldu ve açılıyor.\n\nDosya:\n{generated_path}",
+            )
+            return
+
         QMessageBox.information(
             self,
             "PDF Raporu Oluşturuldu",
-            f"Kredili / limitli mevduat dönem raporu başarıyla oluşturuldu.\n\nDosya:\n{generated_path}",
+            (
+                "Kredili / limitli mevduat dönem raporu başarıyla oluşturuldu. "
+                "Ancak PDF otomatik açılamadı. Dosyayı elle açabilirsin.\n\n"
+                f"Dosya:\n{generated_path}"
+            ),
         )
 
     def _default_pdf_filename(self, period_start: date, period_end: date) -> str:
@@ -792,6 +836,18 @@ class CreditLimitPeriodReportDialog(QDialog):
                     period_start=period_start,
                     period_end=period_end,
                 )
+                report["_value_date_summary"] = get_credit_limit_debt_summary(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    as_of_date=period_end,
+                    apply_value_dates=True,
+                )
+                report["_booked_summary"] = get_credit_limit_debt_summary(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    as_of_date=period_end,
+                    apply_value_dates=False,
+                )
 
         except CreditFacilityServiceError as exc:
             QMessageBox.warning(
@@ -811,15 +867,23 @@ class CreditLimitPeriodReportDialog(QDialog):
 
         self._currency_code = str(report.get("currency_code") or self._currency_code)
         self._populate_summary(report)
-        self._populate_movements_table(report.get("movement_rows", []))
-        self._populate_daily_interest_table(report.get("daily_rows", []))
+        self._populate_combined_report_table(report)
 
     def _populate_summary(self, report: dict[str, Any]) -> None:
         period_start = report.get("period_start")
         period_end = report.get("period_end")
         calculated_interest = self._to_decimal(report.get("calculated_interest_total"))
-        ending_principal = self._to_decimal(report.get("ending_interest_basis_debt"))
-        total_period_debt = ending_principal + calculated_interest
+        recorded_interest = self._to_decimal(report.get("period_recorded_interest_total"))
+        unrecorded_interest = max(calculated_interest - recorded_interest, Decimal("0.00"))
+        ending_interest_basis = self._to_decimal(report.get("ending_interest_basis_debt"))
+        booked_summary = self._summary_dict(report, "_booked_summary")
+
+        booked_principal_debt = self._to_decimal(booked_summary.get("booked_principal_debt"))
+        booked_interest_debt = self._to_decimal(booked_summary.get("booked_interest_debt"))
+        booked_fee_debt = self._to_decimal(booked_summary.get("booked_fee_debt"))
+        booked_total_debt = self._to_decimal(booked_summary.get("booked_total_debt"))
+        carryover_interest_fee = booked_interest_debt + booked_fee_debt
+        total_payable_debt = booked_total_debt + unrecorded_interest
 
         self.limit_name_value_label.setText(self._credit_limit_title or str(report.get("limit_name") or "-"))
         self.period_value_label.setText(
@@ -832,57 +896,90 @@ class CreditLimitPeriodReportDialog(QDialog):
         self.opening_debt_value_label.setText(self._format_money(report.get("opening_interest_basis_debt")))
         self.usage_total_value_label.setText(self._format_money(report.get("period_usage_total")))
         self.payment_total_value_label.setText(self._format_money(report.get("period_payment_total")))
-        self.ending_debt_value_label.setText(self._format_money(ending_principal))
+        self.ending_debt_value_label.setText(self._format_money(ending_interest_basis))
         self.calculated_interest_value_label.setText(self._format_money(calculated_interest))
-        self.total_period_debt_value_label.setText(self._format_money(total_period_debt))
+        self.unrecorded_interest_value_label.setText(self._format_money(unrecorded_interest))
+        self.recorded_interest_debt_value_label.setText(self._format_money(booked_interest_debt))
+        self.fee_debt_value_label.setText(self._format_money(booked_fee_debt))
+        self.total_period_debt_value_label.setText(self._format_money(total_payable_debt))
+        self.carryover_principal_value_label.setText(self._format_money(booked_principal_debt))
+        self.carryover_interest_fee_value_label.setText(self._format_money(carryover_interest_fee))
+        self.carryover_unrecorded_interest_value_label.setText(self._format_money(unrecorded_interest))
+        self.carryover_total_value_label.setText(self._format_money(total_payable_debt))
 
-    def _populate_movements_table(self, rows: list[dict[str, Any]]) -> None:
+    def _populate_combined_report_table(self, report: dict[str, Any]) -> None:
         table_rows: list[list[Any]] = []
+        row_types: list[str] = []
+        movement_rows = report.get("movement_rows", [])
+        daily_rows = report.get("daily_rows", [])
+        movements_by_transaction_date: dict[date, list[dict[str, Any]]] = {}
 
-        sorted_rows = sorted(
-            rows,
-            key=lambda item: (
-                item.get("transaction_date") or date.min,
-                item.get("effective_date") or date.min,
-                int(item.get("id") or 0),
-            ),
-        )
+        for movement in movement_rows:
+            transaction_date = movement.get("transaction_date")
 
-        for row in sorted_rows:
-            table_rows.append(
-                [
-                    self._format_date(row.get("transaction_date")),
-                    self._format_date(row.get("effective_date")),
-                    self._transaction_type_text(row.get("transaction_type")),
-                    self._format_money(row.get("amount"), currency_code=row.get("currency_code")),
-                    self._transaction_status_text(row.get("status")),
-                    row.get("reference_no") or "-",
-                    row.get("description") or "-",
-                ]
+            if isinstance(transaction_date, date):
+                movements_by_transaction_date.setdefault(transaction_date, []).append(movement)
+
+        for movement_list in movements_by_transaction_date.values():
+            movement_list.sort(
+                key=lambda item: (
+                    item.get("effective_date") or date.min,
+                    int(item.get("id") or 0),
+                )
             )
 
-        self._fill_table(
-            table=self.movements_table,
-            rows=table_rows,
-            empty_message="Bu dönemde limit hareketi bulunamadı.",
-        )
+        for daily_row in daily_rows:
+            current_day = daily_row.get("date")
 
-    def _populate_daily_interest_table(self, rows: list[dict[str, Any]]) -> None:
-        table_rows: list[list[Any]] = []
+            if isinstance(current_day, date):
+                for movement in movements_by_transaction_date.get(current_day, []):
+                    transaction_type = str(movement.get("transaction_type") or "").strip().upper()
+                    movement_currency_code = str(movement.get("currency_code") or self._currency_code)
+                    table_rows.append(
+                        [
+                            self._format_date(movement.get("transaction_date")),
+                            "Hareket",
+                            self._transaction_type_text(transaction_type),
+                            self._format_money(movement.get("amount"), currency_code=movement_currency_code),
+                            self._component_distribution_text(movement, movement_currency_code),
+                            self._format_date(movement.get("effective_date")),
+                            "-",
+                            "-",
+                            self._movement_note_text(movement),
+                        ]
+                    )
+                    row_types.append(transaction_type)
 
-        for row in rows:
+            interest_basis_debt = self._to_decimal(daily_row.get("interest_basis_debt"))
+            daily_interest = self._to_decimal(daily_row.get("daily_interest"))
+
+            if daily_interest > Decimal("0.00"):
+                daily_note = "Faiz oluştu. Gün sonu faize esas borç üzerinden hesaplandı."
+            elif interest_basis_debt > Decimal("0.00"):
+                daily_note = "Faize esas borç var; günlük faiz yuvarlama nedeniyle sıfır görünebilir."
+            else:
+                daily_note = "Faize esas borç yok."
+
             table_rows.append(
                 [
-                    self._format_date(row.get("date")),
-                    self._format_money(row.get("interest_basis_debt"), currency_code=row.get("currency_code")),
-                    self._format_money(row.get("daily_interest"), currency_code=row.get("currency_code")),
+                    self._format_date(daily_row.get("date")),
+                    "Gün Sonu",
+                    "Günlük Faiz",
+                    "-",
+                    "-",
+                    "-",
+                    self._format_money(interest_basis_debt, currency_code=daily_row.get("currency_code")),
+                    self._format_money(daily_interest, currency_code=daily_row.get("currency_code")),
+                    daily_note,
                 ]
             )
+            row_types.append("DAILY_INTEREST")
 
         self._fill_table(
-            table=self.daily_interest_table,
+            table=self.combined_report_table,
             rows=table_rows,
-            empty_message="Seçili dönem için günlük faiz satırı oluşmadı.",
+            empty_message="Seçili dönem için hareket veya günlük faiz satırı oluşmadı.",
+            row_types=row_types,
         )
 
     def _fill_table(
@@ -891,6 +988,7 @@ class CreditLimitPeriodReportDialog(QDialog):
         table: QTableWidget,
         rows: list[list[Any]],
         empty_message: str,
+        row_types: list[str] | None = None,
     ) -> None:
         table.clearSpans()
         table.clearSelection()
@@ -919,17 +1017,77 @@ class CreditLimitPeriodReportDialog(QDialog):
                 item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
+                row_type = ""
+                if row_types is not None and row_index < len(row_types):
+                    row_type = str(row_types[row_index] or "").strip().upper()
+
                 upper_value = str(value).strip().upper()
-                if upper_value in {"AKTIF", "KULLANIM", "LIMIT KULLANIMI"}:
+                if row_type == "USAGE" or upper_value in {"AKTIF", "KULLANIM", "LIMIT KULLANIMI", "LİMİT KULLANIMI"}:
                     item.setForeground(QColor("#22c55e"))
-                elif upper_value in {"ÖDEME", "LIMIT ÖDEMESI", "LİMİT ÖDEMESİ"}:
+                elif row_type == "PAYMENT" or upper_value in {"ÖDEME", "LIMIT ÖDEMESI", "LİMİT ÖDEMESİ"}:
                     item.setForeground(QColor("#38bdf8"))
+                elif row_type in {"INTEREST", "FEE"} or upper_value in {"FAIZ TAHAKKUKU", "FAİZ TAHAKKUKU", "MASRAF"}:
+                    item.setForeground(QColor("#f59e0b"))
+                elif row_type == "DAILY_INTEREST" and column_index in {6, 7}:
+                    item.setForeground(QColor("#f8fafc"))
                 elif upper_value in {"IPTAL", "İPTAL"}:
                     item.setForeground(QColor("#ef4444"))
 
                 table.setItem(row_index, column_index, item)
 
         table.resizeRowsToContents()
+
+    def _summary_dict(self, report: dict[str, Any], key: str) -> dict[str, Any]:
+        value = report.get(key)
+
+        if isinstance(value, dict):
+            return value
+
+        return {}
+
+    def _component_distribution_text(self, movement: dict[str, Any], currency_code: str) -> str:
+        parts: list[str] = []
+        principal_amount = self._to_decimal(movement.get("principal_amount"))
+        interest_amount = self._to_decimal(movement.get("interest_amount"))
+        fee_amount = self._to_decimal(movement.get("fee_amount"))
+
+        if principal_amount > Decimal("0.00"):
+            parts.append(f"Ana: {self._format_money(principal_amount, currency_code=currency_code)}")
+
+        if interest_amount > Decimal("0.00"):
+            parts.append(f"Faiz: {self._format_money(interest_amount, currency_code=currency_code)}")
+
+        if fee_amount > Decimal("0.00"):
+            parts.append(f"Masraf: {self._format_money(fee_amount, currency_code=currency_code)}")
+
+        return " | ".join(parts) if parts else "-"
+
+    def _movement_note_text(self, movement: dict[str, Any]) -> str:
+        transaction_type = str(movement.get("transaction_type") or "").strip().upper()
+        status_text = self._transaction_status_text(movement.get("status"))
+        reference_no = str(movement.get("reference_no") or "").strip()
+        description = str(movement.get("description") or "").strip()
+        note_parts: list[str] = []
+
+        if transaction_type == "USAGE":
+            note_parts.append("Kullanım aynı gün faize girer")
+        elif transaction_type == "PAYMENT":
+            note_parts.append("Ödeme dağılımı: masraf > faiz > ana para")
+            note_parts.append("Ana para T+1 valörle düşer")
+        elif transaction_type == "INTEREST":
+            note_parts.append("Faiz tahakkuku borca kaydedildi")
+        elif transaction_type == "FEE":
+            note_parts.append("Masraf borca kaydedildi")
+
+        note_parts.append(f"Durum: {status_text}")
+
+        if reference_no:
+            note_parts.append(f"Ref: {reference_no}")
+
+        if description:
+            note_parts.append(description)
+
+        return " | ".join(note_parts) if note_parts else "-"
 
     def _selected_date(self, date_edit: NoWheelDateEdit) -> date:
         qdate = date_edit.date()
