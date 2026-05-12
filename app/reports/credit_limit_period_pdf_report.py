@@ -17,10 +17,8 @@ from app.reports.report_pdf_base import (
 from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     calculate_credit_limit_period_report,
+    get_credit_limit_debt_summary,
 )
-
-
-CURRENCY_DISPLAY_ORDER = ["TRY", "USD", "EUR", "GBP"]
 
 
 TRANSACTION_TYPE_TEXTS = {
@@ -144,7 +142,7 @@ def _current_user_text(created_by: Any) -> str:
     return text or "FTM Kullanıcısı"
 
 
-def _credit_limit_header_text(credit_limit: BankAccountCreditLimit) -> tuple[str, str, str, str]:
+def _credit_limit_header_text(credit_limit: BankAccountCreditLimit) -> tuple[str, str, str, str, str, str]:
     bank_account = credit_limit.bank_account
     bank_name = "-"
     account_name = "-"
@@ -156,14 +154,39 @@ def _credit_limit_header_text(credit_limit: BankAccountCreditLimit) -> tuple[str
             bank_name = bank_account.bank.name or "-"
 
     limit_name = credit_limit.limit_name or "-"
+    limit_type = credit_limit.limit_type.value if credit_limit.limit_type else "-"
     currency_code = credit_limit.currency_code.value if credit_limit.currency_code else "TRY"
     full_name = f"{bank_name} / {account_name} / {limit_name}"
 
-    return bank_name, account_name, limit_name, currency_code, full_name
+    return bank_name, account_name, limit_name, limit_type, currency_code, full_name
+
+
+def _summary_dict(report_data: dict[str, Any], key: str) -> dict[str, Any]:
+    value = report_data.get(key)
+    if isinstance(value, dict):
+        return value
+    return {}
 
 
 def _report_summary_value(report_data: dict[str, Any], key: str) -> Decimal:
     return _decimal_or_zero(report_data.get(key))
+
+
+def _nested_summary_value(
+    report_data: dict[str, Any],
+    summary_key: str,
+    value_key: str,
+    fallback_key: str | None = None,
+) -> Decimal:
+    summary = _summary_dict(report_data, summary_key)
+
+    if value_key in summary:
+        return _decimal_or_zero(summary.get(value_key))
+
+    if fallback_key is not None:
+        return _report_summary_value(report_data, fallback_key)
+
+    return Decimal("0.00")
 
 
 def _daily_rows(report_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -201,6 +224,15 @@ def _active_day_count(report_data: dict[str, Any]) -> int:
     return len(_active_daily_rows(report_data))
 
 
+def _movement_count_by_type(report_data: dict[str, Any], transaction_type: str) -> int:
+    normalized_type = str(transaction_type or "").strip().upper()
+    return sum(
+        1
+        for row in _movement_rows(report_data)
+        if str(row.get("transaction_type") or "").strip().upper() == normalized_type
+    )
+
+
 def _max_interest_basis_debt(report_data: dict[str, Any]) -> Decimal:
     debts = [
         _decimal_or_zero(row.get("interest_basis_debt"))
@@ -227,14 +259,72 @@ def _average_interest_basis_debt(report_data: dict[str, Any]) -> Decimal:
     return (total / Decimal(str(len(rows)))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _summary_cards(report_data: dict[str, Any], currency_code: str) -> list[FtmSummaryCard]:
-    ending_principal = _report_summary_value(report_data, "ending_interest_basis_debt")
-    calculated_interest = _report_summary_value(report_data, "calculated_interest_total")
-    total_period_debt = ending_principal + calculated_interest
-    available_limit = _report_summary_value(report_data, "limit_amount") - ending_principal
+def _ending_interest_basis_debt(report_data: dict[str, Any]) -> Decimal:
+    return _report_summary_value(report_data, "ending_interest_basis_debt")
 
-    if available_limit < Decimal("0.00"):
-        available_limit = Decimal("0.00")
+
+def _booked_principal_debt(report_data: dict[str, Any]) -> Decimal:
+    return _nested_summary_value(
+        report_data,
+        "_booked_summary",
+        "booked_principal_debt",
+        fallback_key="ending_interest_basis_debt",
+    )
+
+
+def _booked_total_debt(report_data: dict[str, Any]) -> Decimal:
+    return _nested_summary_value(
+        report_data,
+        "_booked_summary",
+        "booked_total_debt",
+        fallback_key="ending_interest_basis_debt",
+    )
+
+
+def _booked_available_limit(report_data: dict[str, Any]) -> Decimal:
+    limit_amount = _report_summary_value(report_data, "limit_amount")
+    fallback = max(limit_amount - _booked_principal_debt(report_data), Decimal("0.00"))
+
+    value = _nested_summary_value(
+        report_data,
+        "_booked_summary",
+        "booked_available_limit",
+    )
+
+    return value if value > Decimal("0.00") else fallback
+
+
+def _value_date_available_limit(report_data: dict[str, Any]) -> Decimal:
+    limit_amount = _report_summary_value(report_data, "limit_amount")
+    fallback = max(limit_amount - _ending_interest_basis_debt(report_data), Decimal("0.00"))
+
+    value = _nested_summary_value(
+        report_data,
+        "_value_date_summary",
+        "available_limit",
+    )
+
+    return value if value > Decimal("0.00") else fallback
+
+
+def _calculated_interest(report_data: dict[str, Any]) -> Decimal:
+    return _report_summary_value(report_data, "calculated_interest_total")
+
+
+def _report_total_debt(report_data: dict[str, Any]) -> Decimal:
+    return _booked_principal_debt(report_data) + _calculated_interest(report_data)
+
+
+def _value_date_gap(report_data: dict[str, Any]) -> Decimal:
+    return _ending_interest_basis_debt(report_data) - _booked_principal_debt(report_data)
+
+
+def _summary_cards(report_data: dict[str, Any], currency_code: str) -> list[FtmSummaryCard]:
+    ending_interest_basis = _ending_interest_basis_debt(report_data)
+    payable_principal = _booked_principal_debt(report_data)
+    calculated_interest = _calculated_interest(report_data)
+    total_period_debt = _report_total_debt(report_data)
+    available_limit = _booked_available_limit(report_data)
 
     return [
         FtmSummaryCard(
@@ -246,20 +336,26 @@ def _summary_cards(report_data: dict[str, Any], currency_code: str) -> list[FtmS
         FtmSummaryCard(
             title="Dönem Kullanımı",
             value=_format_currency_amount(report_data.get("period_usage_total"), currency_code),
-            hint="Dönem içi limit kullanımları",
+            hint=f"{_movement_count_by_type(report_data, 'USAGE')} kullanım hareketi",
             card_type="risk" if _report_summary_value(report_data, "period_usage_total") > Decimal("0.00") else "normal",
         ),
         FtmSummaryCard(
             title="Dönem Ödemesi",
             value=_format_currency_amount(report_data.get("period_payment_total"), currency_code),
-            hint="Ödemeler T+1 valörle dikkate alınır",
+            hint="Ödemeler T+1 valörle faize etki eder",
             card_type="success" if _report_summary_value(report_data, "period_payment_total") > Decimal("0.00") else "normal",
         ),
         FtmSummaryCard(
-            title="Dönem Sonu Ana Para",
-            value=_format_currency_amount(ending_principal, currency_code),
-            hint="Faize esas kalan ana para borcu",
-            card_type="risk" if ending_principal > Decimal("0.00") else "success",
+            title="Faize Esas Borç",
+            value=_format_currency_amount(ending_interest_basis, currency_code),
+            hint="Valör tarihine göre faiz hesabına giren borç",
+            card_type="warning" if ending_interest_basis > Decimal("0.00") else "success",
+        ),
+        FtmSummaryCard(
+            title="Ödenebilir Ana Para",
+            value=_format_currency_amount(payable_principal, currency_code),
+            hint="Kayıtlı kullanım - kayıtlı ödeme",
+            card_type="risk" if payable_principal > Decimal("0.00") else "success",
         ),
         FtmSummaryCard(
             title="Hesaplanan Faiz",
@@ -270,19 +366,13 @@ def _summary_cards(report_data: dict[str, Any], currency_code: str) -> list[FtmS
         FtmSummaryCard(
             title="Toplam Dönem Borcu",
             value=_format_currency_amount(total_period_debt, currency_code),
-            hint="Ana para + hesaplanan faiz",
+            hint="Ödenebilir ana para + hesaplanan faiz",
             card_type="risk" if total_period_debt > Decimal("0.00") else "success",
-        ),
-        FtmSummaryCard(
-            title="Aktif Kullanım Günü",
-            value=f"{_active_day_count(report_data)} gün",
-            hint="Faize esas borcun sıfırdan büyük olduğu gün sayısı",
-            card_type="warning" if _active_day_count(report_data) > 0 else "normal",
         ),
         FtmSummaryCard(
             title="Kullanılabilir Limit",
             value=_format_currency_amount(available_limit, currency_code),
-            hint="Limit - dönem sonu ana para",
+            hint="Limit - ödenebilir ana para",
             card_type="success" if available_limit > Decimal("0.00") else "risk",
         ),
     ]
@@ -291,85 +381,86 @@ def _summary_cards(report_data: dict[str, Any], currency_code: str) -> list[FtmS
 def _executive_commentary(report_data: dict[str, Any], currency_code: str) -> str:
     usage_total = _report_summary_value(report_data, "period_usage_total")
     payment_total = _report_summary_value(report_data, "period_payment_total")
-    ending_principal = _report_summary_value(report_data, "ending_interest_basis_debt")
-    calculated_interest = _report_summary_value(report_data, "calculated_interest_total")
+    ending_interest_basis = _ending_interest_basis_debt(report_data)
+    payable_principal = _booked_principal_debt(report_data)
+    calculated_interest = _calculated_interest(report_data)
     active_days = _active_day_count(report_data)
     max_debt = _max_interest_basis_debt(report_data)
+    average_debt = _average_interest_basis_debt(report_data)
+    valour_gap = _value_date_gap(report_data)
 
     if usage_total <= Decimal("0.00") and payment_total <= Decimal("0.00"):
         return (
-            "Seçili dönemde limit hareketi bulunmamaktadır. Bu nedenle günlük faiz hesabı dönem boyunca sıfır borç üzerinden ilerlemiştir."
+            "Seçili dönemde limit kullanım veya ödeme hareketi bulunmamaktadır. "
+            "Bu nedenle günlük faiz hesabı dönem boyunca sıfır borç üzerinden ilerlemiştir."
         )
 
     sentences = [
         f"Dönem içinde {_format_currency_amount(usage_total, currency_code)} limit kullanımı ve {_format_currency_amount(payment_total, currency_code)} limit ödemesi kaydedilmiştir.",
-        f"Ödeme hareketleri banka valör mantığına uygun olarak ertesi gün faize etki eder; bu nedenle aynı gün kullanılıp kapatılan tutarlar için en az 1 günlük faiz oluşabilir.",
-        f"Bu dönemde faize esas borç {active_days} gün boyunca sıfırın üzerinde kalmış, en yüksek faize esas borç {_format_currency_amount(max_debt, currency_code)} seviyesine ulaşmıştır.",
-        f"Dönem sonunda ana para borcu {_format_currency_amount(ending_principal, currency_code)}, hesaplanan faiz ise {_format_currency_amount(calculated_interest, currency_code)} olarak hesaplanmıştır.",
+        f"Ödeme hareketleri T+1 banka valörüyle değerlendirilir; ödeme işlem tarihi ile faize etki tarihi farklı olabilir.",
+        f"Faize esas borç {active_days} gün boyunca sıfırın üzerinde kalmış, en yüksek seviye {_format_currency_amount(max_debt, currency_code)}, ortalama seviye {_format_currency_amount(average_debt, currency_code)} olmuştur.",
+        f"Dönem sonunda faize esas borç {_format_currency_amount(ending_interest_basis, currency_code)}, ödenebilir ana para {_format_currency_amount(payable_principal, currency_code)}, hesaplanan faiz {_format_currency_amount(calculated_interest, currency_code)} olarak hesaplanmıştır.",
     ]
+
+    if valour_gap > Decimal("0.00"):
+        sentences.append(
+            f"Faize esas borç ile ödenebilir ana para arasındaki {_format_currency_amount(valour_gap, currency_code)} fark, henüz faize etki tarihine ulaşmamış ödeme valöründen kaynaklanmaktadır."
+        )
+    elif valour_gap < Decimal("0.00"):
+        sentences.append(
+            f"Ödenebilir ana para, dönem sonu faize esas borçtan {_format_currency_amount(abs(valour_gap), currency_code)} yüksek görünmektedir; bu fark kayıtlı fakat dönem faiz hesabına henüz yansımamış hareketlerden kaynaklanabilir."
+        )
 
     return " ".join(sentences)
 
 
-def _movements_table_rows(report_data: dict[str, Any], currency_code: str) -> tuple[list[list[str]], list[str]]:
-    table_rows: list[list[str]] = []
-    row_styles: list[str] = []
+def _management_findings(report_data: dict[str, Any], currency_code: str) -> tuple[list[list[str]], list[str]]:
+    active_days = _active_day_count(report_data)
+    calculated_interest = _calculated_interest(report_data)
+    valour_gap = _value_date_gap(report_data)
+    payable_principal = _booked_principal_debt(report_data)
 
-    rows = sorted(
-        _movement_rows(report_data),
-        key=lambda item: (
-            item.get("transaction_date") or date.min,
-            item.get("effective_date") or date.min,
-            int(item.get("id") or 0),
-        ),
-    )
+    rows = [
+        [
+            "Valör Kuralı",
+            "T+1 ödeme valörü",
+            "Limit kullanımı aynı gün, limit ödemesi ertesi gün faiz hesabına etki eder.",
+        ],
+        [
+            "Aktif Kullanım Günü",
+            f"{active_days} gün",
+            "Faize esas borcun sıfırdan büyük olduğu gün sayısıdır.",
+        ],
+        [
+            "En Yüksek Faize Esas Borç",
+            _format_currency_amount(_max_interest_basis_debt(report_data), currency_code),
+            "Dönem içinde bankanın faiz hesaplayacağı en yüksek günlük bakiye seviyesidir.",
+        ],
+        [
+            "Hesaplanan Faiz",
+            _format_currency_amount(calculated_interest, currency_code),
+            "Bu rapor yalnızca hesaplama yapar; veritabanına faiz tahakkuku kaydetmez.",
+        ],
+        [
+            "Ödenebilir Ana Para",
+            _format_currency_amount(payable_principal, currency_code),
+            "Kayıtlı kullanımlar ve kayıtlı ödemeler sonrası kapatılabilecek ana para borcudur.",
+        ],
+    ]
 
-    for row in rows:
-        transaction_type = str(row.get("transaction_type") or "").strip().upper()
-        status = str(row.get("status") or "").strip().upper()
+    row_styles = ["MUTED", "WARNING" if active_days > 0 else "MUTED", "WARNING", "WARNING" if calculated_interest > Decimal("0.00") else "MUTED", "RISK" if payable_principal > Decimal("0.00") else "SUCCESS"]
 
-        table_rows.append(
+    if valour_gap != Decimal("0.00"):
+        rows.append(
             [
-                _format_date_tr(row.get("transaction_date")),
-                _format_date_tr(row.get("effective_date")),
-                _transaction_type_text(transaction_type),
-                _format_currency_amount(row.get("amount"), row.get("currency_code") or currency_code),
-                _transaction_status_text(status),
-                _shorten_text(row.get("reference_no"), 18),
-                _shorten_text(row.get("description"), 58),
+                "Valör Farkı",
+                _format_currency_amount(valour_gap, currency_code),
+                "Faize esas borç ile ödenebilir ana para arasındaki dönem sonu farktır.",
             ]
         )
-        row_styles.append(REPORT_ROW_STYLE_BY_TYPE.get(transaction_type, "NORMAL"))
+        row_styles.append("WARNING")
 
-    if not table_rows:
-        table_rows.append(["-", "-", "Hareket yok", "0,00", "-", "-", "Seçili dönemde hareket bulunamadı."])
-        row_styles.append("MUTED")
-
-    return table_rows, row_styles
-
-
-def _daily_interest_table_rows(report_data: dict[str, Any], currency_code: str) -> tuple[list[list[str]], list[str]]:
-    table_rows: list[list[str]] = []
-    row_styles: list[str] = []
-
-    for row in _daily_rows(report_data):
-        interest_basis_debt = _decimal_or_zero(row.get("interest_basis_debt"))
-        daily_interest = _decimal_or_zero(row.get("daily_interest"))
-
-        table_rows.append(
-            [
-                _format_date_tr(row.get("date")),
-                _format_currency_amount(interest_basis_debt, row.get("currency_code") or currency_code),
-                _format_currency_amount(daily_interest, row.get("currency_code") or currency_code),
-            ]
-        )
-        row_styles.append("WARNING" if daily_interest > Decimal("0.00") else "MUTED")
-
-    if not table_rows:
-        table_rows.append(["-", _format_currency_amount(0, currency_code), _format_currency_amount(0, currency_code)])
-        row_styles.append("MUTED")
-
-    return table_rows, row_styles
+    return rows, row_styles
 
 
 def _daily_interest_and_movement_table_rows(report_data: dict[str, Any], currency_code: str) -> tuple[list[list[str]], list[str]]:
@@ -401,7 +492,14 @@ def _daily_interest_and_movement_table_rows(report_data: dict[str, Any], currenc
                 status = str(movement.get("status") or "").strip().upper()
                 reference_no = _safe_text(movement.get("reference_no"), "-")
                 description = _safe_text(movement.get("description"), "-")
-                movement_note_parts = [f"Durum: {_transaction_status_text(status)}"]
+                movement_note_parts: list[str] = []
+
+                if transaction_type == "USAGE":
+                    movement_note_parts.append("Kullanım aynı gün faize girer")
+                elif transaction_type == "PAYMENT":
+                    movement_note_parts.append("Ödeme T+1 valörle düşer")
+
+                movement_note_parts.append(f"Durum: {_transaction_status_text(status)}")
 
                 if reference_no != "-":
                     movement_note_parts.append(f"Ref: {reference_no}")
@@ -427,10 +525,10 @@ def _daily_interest_and_movement_table_rows(report_data: dict[str, Any], currenc
         daily_interest = _decimal_or_zero(daily_row.get("daily_interest"))
 
         if daily_interest > Decimal("0.00"):
-            daily_note = "Faiz oluştu. Günlük hesap, faize etki etmiş hareketlerden sonra hesaplandı."
+            daily_note = "Faiz oluştu. Gün sonu bakiye üzerinden hesaplandı."
             daily_row_style = "WARNING"
         elif interest_basis_debt > Decimal("0.00"):
-            daily_note = "Faize esas borç var; günlük faiz tutarı yuvarlama nedeniyle sıfır görünebilir."
+            daily_note = "Faize esas borç var; günlük faiz yuvarlama nedeniyle sıfır görünebilir."
             daily_row_style = "WARNING"
         else:
             daily_note = "Faize esas borç yok."
@@ -468,43 +566,22 @@ def _daily_interest_and_movement_table_rows(report_data: dict[str, Any], currenc
     return table_rows, row_styles
 
 
-def _daily_interest_focus_rows(report_data: dict[str, Any], currency_code: str) -> tuple[list[list[str]], list[str]]:
-    focus_rows = _active_daily_rows(report_data)
-
-    if not focus_rows:
-        return [
-            ["-", _format_currency_amount(0, currency_code), _format_currency_amount(0, currency_code)]
-        ], ["MUTED"]
-
-    table_rows: list[list[str]] = []
-    row_styles: list[str] = []
-
-    for row in focus_rows:
-        daily_interest = _decimal_or_zero(row.get("daily_interest"))
-        table_rows.append(
-            [
-                _format_date_tr(row.get("date")),
-                _format_currency_amount(row.get("interest_basis_debt"), row.get("currency_code") or currency_code),
-                _format_currency_amount(daily_interest, row.get("currency_code") or currency_code),
-            ]
-        )
-        row_styles.append("WARNING" if daily_interest > Decimal("0.00") else "MUTED")
-
-    return table_rows, row_styles
-
-
 def _build_management_totals(report_data: dict[str, Any], currency_code: str) -> list[tuple[str, str]]:
-    ending_principal = _report_summary_value(report_data, "ending_interest_basis_debt")
-    calculated_interest = _report_summary_value(report_data, "calculated_interest_total")
-    total_period_debt = ending_principal + calculated_interest
+    ending_interest_basis = _ending_interest_basis_debt(report_data)
+    payable_principal = _booked_principal_debt(report_data)
+    calculated_interest = _calculated_interest(report_data)
+    total_period_debt = _report_total_debt(report_data)
 
     return [
-        ("Dönem Başı Borç", _format_currency_amount(report_data.get("opening_interest_basis_debt"), currency_code)),
+        ("Dönem Başı Faize Esas Borç", _format_currency_amount(report_data.get("opening_interest_basis_debt"), currency_code)),
         ("Dönem Kullanımı", _format_currency_amount(report_data.get("period_usage_total"), currency_code)),
         ("Dönem Ödemesi", _format_currency_amount(report_data.get("period_payment_total"), currency_code)),
-        ("Dönem Sonu Ana Para", _format_currency_amount(ending_principal, currency_code)),
+        ("Dönem Sonu Faize Esas Borç", _format_currency_amount(ending_interest_basis, currency_code)),
+        ("Ödenebilir Ana Para", _format_currency_amount(payable_principal, currency_code)),
         ("Hesaplanan Faiz", _format_currency_amount(calculated_interest, currency_code)),
         ("Toplam Dönem Borcu", _format_currency_amount(total_period_debt, currency_code)),
+        ("Kullanılabilir Limit", _format_currency_amount(_booked_available_limit(report_data), currency_code)),
+        ("Valörlü Kullanılabilir Limit", _format_currency_amount(_value_date_available_limit(report_data), currency_code)),
         ("En Yüksek Faize Esas Borç", _format_currency_amount(_max_interest_basis_debt(report_data), currency_code)),
         ("Ortalama Faize Esas Borç", _format_currency_amount(_average_interest_basis_debt(report_data), currency_code)),
     ]
@@ -538,7 +615,7 @@ def create_credit_limit_period_pdf_report(
                 f"Kredili / limitli hesap bulunamadı. ID: {credit_limit_id}"
             )
 
-        bank_name, account_name, limit_name, currency_code, full_name = _credit_limit_header_text(credit_limit)
+        bank_name, account_name, limit_name, limit_type, currency_code, full_name = _credit_limit_header_text(credit_limit)
 
         try:
             report_data = calculate_credit_limit_period_report(
@@ -546,6 +623,18 @@ def create_credit_limit_period_pdf_report(
                 credit_limit_id=int(credit_limit_id),
                 period_start=period_start,
                 period_end=period_end,
+            )
+            report_data["_value_date_summary"] = get_credit_limit_debt_summary(
+                session,
+                credit_limit_id=int(credit_limit_id),
+                as_of_date=period_end,
+                apply_value_dates=True,
+            )
+            report_data["_booked_summary"] = get_credit_limit_debt_summary(
+                session,
+                credit_limit_id=int(credit_limit_id),
+                as_of_date=period_end,
+                apply_value_dates=False,
             )
         except CreditFacilityServiceError as exc:
             raise CreditLimitPeriodPdfReportError(str(exc)) from exc
@@ -569,7 +658,7 @@ def create_credit_limit_period_pdf_report(
     elements.append(builder.section_title("Yönetici Özeti"))
     elements.append(
         builder.paragraph(
-            f"Limit Hesabı: {full_name} | Banka: {bank_name} | Hesap: {account_name} | Limit Tipi: {limit_name}",
+            f"Limit Hesabı: {full_name} | Banka: {bank_name} | Hesap: {account_name} | Tür: {limit_type} | Limit Adı: {limit_name}",
             "subtitle",
         )
     )
@@ -577,15 +666,21 @@ def create_credit_limit_period_pdf_report(
     elements.append(builder.build_summary_cards(_summary_cards(report_data, currency_code), columns=4))
     elements.append(builder.spacer(5))
 
+    findings_rows, findings_row_styles = _management_findings(report_data, currency_code)
+
     elements.append(
         KeepTogether(
             [
                 builder.section_title("Finansal Değerlendirme"),
                 builder.paragraph(_executive_commentary(report_data, currency_code), "normal"),
                 builder.spacer(4),
-                builder.build_total_table(
-                    title="Yönetici Kontrol Toplamları",
-                    totals=_build_management_totals(report_data, currency_code),
+                builder.build_data_table(
+                    headers=["Konu", "Değer", "Yönetici Notu"],
+                    rows=findings_rows,
+                    col_widths=[45, 48, 160],
+                    numeric_columns=set(),
+                    center_columns={1},
+                    row_statuses=findings_row_styles,
                 ),
             ]
         )
@@ -594,8 +689,15 @@ def create_credit_limit_period_pdf_report(
     elements.append(builder.spacer(5))
     elements.append(
         builder.paragraph(
-            "Valör notu: Limit kullanımı aynı gün faize girer. Limit ödemesi banka uygulamasına uygun olarak ertesi gün borçtan düşer. Bu nedenle aynı gün kullanılıp kapatılan limitlerde dahi en az 1 günlük faiz oluşabilir.",
+            "Rapor notu: Faize Esas Borç bankanın valör tarihine göre faiz hesaplayacağı bakiyeyi, Ödenebilir Ana Para ise kayda girilmiş kullanım ve ödemeler sonrası kapatılabilecek ana para borcunu ifade eder. Limit ödemeleri T+1 valörle faize etki eder.",
             "small",
+        )
+    )
+    elements.append(builder.spacer(4))
+    elements.append(
+        builder.build_total_table(
+            title="Yönetici Kontrol Toplamları",
+            totals=_build_management_totals(report_data, currency_code),
         )
     )
 
@@ -605,7 +707,7 @@ def create_credit_limit_period_pdf_report(
     elements.append(builder.section_title("Günlük Faiz Dökümü - Tam Liste"))
     elements.append(
         builder.paragraph(
-            "Bu tek tabloda dönem içindeki limit kullanımları, limit ödemeleri ve her günün faize esas borç/günlük faiz hesabı birlikte gösterilir. Ödeme satırlarında işlem tarihi ile faize etki tarihi ayrı görünür; T+1 valör farkı buradan takip edilir.",
+            "Bu tabloda dönem içindeki limit kullanımları, limit ödemeleri ve her günün faize esas borç/günlük faiz hesabı tek yerde gösterilir. Ödeme satırlarında işlem tarihi ile faize etki tarihi ayrı görünür; T+1 valör farkı buradan takip edilir.",
             "small",
         )
     )
