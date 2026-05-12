@@ -274,8 +274,8 @@ class CreditLimitTransactionDialog(QDialog):
         self._summary: dict[str, Any] = {}
 
         self.setWindowTitle("Limit Kullan" if self.is_usage_mode else "Limit Öde")
-        self.resize(720, 560)
-        self.setMinimumSize(620, 500)
+        self.resize(720, 640 if self.is_payment_mode else 560)
+        self.setMinimumSize(620, 560 if self.is_payment_mode else 500)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(CREDIT_LIMIT_TRANSACTION_DIALOG_STYLE)
 
@@ -442,11 +442,18 @@ class CreditLimitTransactionDialog(QDialog):
             form_layout.addRow(self._label("Para Birimi"), self.currency_input)
             form_layout.addRow(self._label("Banka Hareketi"), self.create_bank_entry_checkbox)
         else:
+            form_layout.addRow(self._label("Ödenebilir Ana Para"), self.payable_principal_debt_input)
+            form_layout.addRow(self._label("Faiz Borcu"), self.interest_debt_input)
+            form_layout.addRow(self._label("Masraf Borcu"), self.fee_debt_input)
             form_layout.addRow(self._label("Toplam Ödenecek"), self.total_payable_debt_input)
             form_layout.addRow(self._label("Ödeme Tutarı"), self.amount_input)
             form_layout.addRow(self._label("Ödeme Hesabı"), self.payment_account_combo)
             form_layout.addRow(self._label("İşlem Tarihi"), self.transaction_date_input)
+            form_layout.addRow(self._label("Ana Para Etki Tarihi"), self.effective_date_input)
             form_layout.addRow(self._label("Para Birimi"), self.currency_input)
+            form_layout.addRow(self._label("Masrafa Ayrılan"), self.fee_allocation_input)
+            form_layout.addRow(self._label("Faize Ayrılan"), self.interest_allocation_input)
+            form_layout.addRow(self._label("Ana Paraya Ayrılan"), self.principal_allocation_input)
             form_layout.addRow(self._label("Dağılım Özeti"), self.allocation_summary_input)
 
         form_layout.addRow(self._label("Referans No"), self.reference_no_input)
