@@ -733,6 +733,35 @@ def create_credit_card_transaction(
     if clean_installment_count > 120:
         raise CreditFacilityServiceError("Taksit sayısı 120 değerinden büyük olamaz.")
 
+    debt_summary = get_credit_card_debt_summary(
+        session,
+        credit_card_id=credit_card.id,
+    )
+    available_limit = money(
+        debt_summary.get("available_limit") or Decimal("0.00"),
+        field_name="Kullanılabilir limit",
+    )
+
+    if clean_amount > available_limit:
+        available_limit_text = (
+            f"{available_limit:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+        clean_amount_text = (
+            f"{clean_amount:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+
+        raise CreditFacilityServiceError(
+            "Harcama tutarı kullanılabilir kart limitini aşamaz. "
+            f"Kullanılabilir limit: {available_limit_text} TL. "
+            f"Girilen harcama: {clean_amount_text} TL."
+        )
+
     transaction = CreditCardTransaction(
         credit_card_id=credit_card.id,
         statement_id=None,
@@ -766,7 +795,6 @@ def create_credit_card_transaction(
     )
 
     return transaction
-
 
 def cancel_credit_card_transaction(
     session: Session,
