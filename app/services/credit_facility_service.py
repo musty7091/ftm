@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Optional, TypeVar
 
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.bank import Bank, BankAccount
 from app.models.credit_facility import (
     BankAccountCreditLimit,
+    BankAccountCreditLimitTransaction,
     CreditCard,
     CreditCardPayment,
     CreditCardTransaction,
@@ -23,6 +24,8 @@ from app.models.enums import (
     CreditCardRecommendationStatus,
     CreditCardTransactionStatus,
     CreditCardType,
+    CreditLimitTransactionStatus,
+    CreditLimitTransactionType,
     CreditLimitType,
     CreditLimitUsageMode,
     CurrencyCode,
@@ -53,6 +56,22 @@ ACTIVE_TRANSACTION_STATUSES = {
 
 ACTIVE_PAYMENT_STATUSES = {
     CreditCardPaymentStatus.RECORDED,
+}
+
+ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES = {
+    CreditLimitTransactionStatus.ACTIVE,
+}
+
+CREDIT_LIMIT_PRINCIPAL_INCREASE_TYPES = {
+    CreditLimitTransactionType.USAGE,
+    CreditLimitTransactionType.ADJUSTMENT,
+}
+
+CREDIT_LIMIT_DEBT_INCREASE_TYPES = {
+    CreditLimitTransactionType.USAGE,
+    CreditLimitTransactionType.INTEREST,
+    CreditLimitTransactionType.FEE,
+    CreditLimitTransactionType.ADJUSTMENT,
 }
 
 
@@ -302,6 +321,36 @@ def _serialize_credit_limit(credit_limit: BankAccountCreditLimit) -> dict[str, A
         "is_active": credit_limit.is_active,
     }
 
+
+
+
+def _serialize_credit_limit_transaction(
+    transaction: BankAccountCreditLimitTransaction,
+) -> dict[str, Any]:
+    return {
+        "id": transaction.id,
+        "credit_limit_id": transaction.credit_limit_id,
+        "transaction_type": transaction.transaction_type.value,
+        "transaction_date": transaction.transaction_date.isoformat()
+        if transaction.transaction_date
+        else None,
+        "effective_date": transaction.effective_date.isoformat()
+        if transaction.effective_date
+        else None,
+        "amount": str(transaction.amount),
+        "currency_code": transaction.currency_code.value,
+        "bank_transaction_id": transaction.bank_transaction_id,
+        "status": transaction.status.value,
+        "reference_no": transaction.reference_no,
+        "description": transaction.description,
+        "notes": transaction.notes,
+        "created_by_user_id": transaction.created_by_user_id,
+        "cancelled_by_user_id": transaction.cancelled_by_user_id,
+        "cancelled_at": transaction.cancelled_at.isoformat()
+        if transaction.cancelled_at
+        else None,
+        "cancel_reason": transaction.cancel_reason,
+    }
 
 def get_credit_card_by_name(
     session: Session,
@@ -1386,6 +1435,835 @@ def deactivate_credit_limit(
     return credit_limit
 
 
+def get_credit_limit_or_raise(
+    session: Session,
+    credit_limit_id: int,
+) -> BankAccountCreditLimit:
+    clean_credit_limit_id = _clean_positive_int(credit_limit_id, "Kredili hesap limiti ID")
+    credit_limit = session.get(BankAccountCreditLimit, clean_credit_limit_id)
+
+    if credit_limit is None:
+        raise CreditFacilityServiceError(
+            f"Kredili / limitli hesap tanımı bulunamadı. ID: {clean_credit_limit_id}"
+        )
+
+    return credit_limit
+
+
+def activate_credit_limit(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    updated_by_user_id: Optional[int],
+) -> BankAccountCreditLimit:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+
+    old_values = _serialize_credit_limit(credit_limit)
+    credit_limit.is_active = True
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=updated_by_user_id,
+        action="CREDIT_LIMIT_ACTIVATED",
+        entity_type="BankAccountCreditLimit",
+        entity_id=credit_limit.id,
+        description=f"Kredili / limitli hesap tanımı aktifleştirildi: {credit_limit.limit_name}",
+        old_values=old_values,
+        new_values=_serialize_credit_limit(credit_limit),
+    )
+
+    return credit_limit
+
+
+def _validate_credit_limit_is_active(credit_limit: BankAccountCreditLimit) -> None:
+    if not credit_limit.is_active:
+        raise CreditFacilityServiceError("Pasif kredili / limitli hesap üzerinde işlem yapılamaz.")
+
+
+def _credit_limit_currency_code(credit_limit: BankAccountCreditLimit) -> CurrencyCode:
+    if isinstance(credit_limit.currency_code, CurrencyCode):
+        return credit_limit.currency_code
+
+    try:
+        return CurrencyCode(str(credit_limit.currency_code).strip().upper())
+    except ValueError as exc:
+        raise CreditFacilityServiceError("Limit para birimi geçersiz.") from exc
+
+
+def _credit_limit_effective_date(
+    *,
+    transaction_type: CreditLimitTransactionType,
+    transaction_date: date,
+) -> date:
+    if transaction_type == CreditLimitTransactionType.PAYMENT:
+        return transaction_date + timedelta(days=1)
+
+    return transaction_date
+
+
+def _clean_credit_limit_transaction_type(
+    value: CreditLimitTransactionType | str,
+) -> CreditLimitTransactionType:
+    return _clean_enum(value, CreditLimitTransactionType, "Limit hareket tipi")
+
+
+def _clean_credit_limit_transaction_status(
+    value: CreditLimitTransactionStatus | str,
+) -> CreditLimitTransactionStatus:
+    return _clean_enum(value, CreditLimitTransactionStatus, "Limit hareket durumu")
+
+
+def _credit_limit_debt_increase_amount(
+    transaction: BankAccountCreditLimitTransaction,
+) -> Decimal:
+    if transaction.status not in ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES:
+        return Decimal("0.00")
+
+    transaction_type = transaction.transaction_type
+    amount = money(transaction.amount or Decimal("0.00"), field_name="Limit hareket tutarı")
+
+    if transaction_type in CREDIT_LIMIT_DEBT_INCREASE_TYPES:
+        return amount
+
+    return Decimal("0.00")
+
+
+def _credit_limit_payment_amount(
+    transaction: BankAccountCreditLimitTransaction,
+) -> Decimal:
+    if transaction.status not in ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES:
+        return Decimal("0.00")
+
+    if transaction.transaction_type != CreditLimitTransactionType.PAYMENT:
+        return Decimal("0.00")
+
+    return money(transaction.amount or Decimal("0.00"), field_name="Limit ödeme tutarı")
+
+
+def _credit_limit_interest_basis_effect(
+    transaction: BankAccountCreditLimitTransaction,
+) -> Decimal:
+    if transaction.status not in ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES:
+        return Decimal("0.00")
+
+    amount = money(transaction.amount or Decimal("0.00"), field_name="Limit hareket tutarı")
+
+    if transaction.transaction_type in CREDIT_LIMIT_PRINCIPAL_INCREASE_TYPES:
+        return amount
+
+    if transaction.transaction_type == CreditLimitTransactionType.PAYMENT:
+        return -amount
+
+    return Decimal("0.00")
+
+
+def _monthly_interest_rate_fraction(credit_limit: BankAccountCreditLimit) -> Decimal:
+    clean_rate = rate(credit_limit.interest_rate or Decimal("0.000000"), field_name="Faiz oranı")
+    return clean_rate / Decimal("100")
+
+
+def _daily_credit_limit_interest(
+    *,
+    balance: Decimal,
+    credit_limit: BankAccountCreditLimit,
+    current_date: date,
+) -> Decimal:
+    clean_balance = money(balance, field_name="Faize esas bakiye")
+
+    if clean_balance <= Decimal("0.00"):
+        return Decimal("0.00")
+
+    clean_rate = rate(credit_limit.interest_rate or Decimal("0.000000"), field_name="Faiz oranı")
+
+    if clean_rate <= Decimal("0.000000"):
+        return Decimal("0.00")
+
+    if credit_limit.interest_period == InterestPeriod.DAILY:
+        raw_interest = clean_balance * (clean_rate / Decimal("100"))
+    elif credit_limit.interest_period == InterestPeriod.YEARLY:
+        raw_interest = clean_balance * (clean_rate / Decimal("100")) / Decimal("365")
+    else:
+        raw_interest = clean_balance * (clean_rate / Decimal("100")) / Decimal("30")
+
+    return money(raw_interest, field_name="Günlük faiz")
+
+
+def _date_range_inclusive(start_date: date, end_date: date) -> list[date]:
+    if end_date < start_date:
+        raise CreditFacilityServiceError("Dönem bitiş tarihi başlangıç tarihinden eski olamaz.")
+
+    days = (end_date - start_date).days
+    return [start_date + timedelta(days=offset) for offset in range(days + 1)]
+
+
+def list_credit_limit_transactions(
+    session: Session,
+    *,
+    credit_limit_id: int | None = None,
+    include_cancelled: bool = True,
+) -> list[BankAccountCreditLimitTransaction]:
+    statement = (
+        select(BankAccountCreditLimitTransaction)
+        .options(
+            joinedload(BankAccountCreditLimitTransaction.credit_limit),
+            joinedload(BankAccountCreditLimitTransaction.bank_transaction),
+        )
+        .order_by(
+            BankAccountCreditLimitTransaction.transaction_date.desc(),
+            BankAccountCreditLimitTransaction.id.desc(),
+        )
+    )
+
+    if credit_limit_id is not None:
+        clean_credit_limit_id = _clean_positive_int(credit_limit_id, "Kredili hesap limiti ID")
+        statement = statement.where(
+            BankAccountCreditLimitTransaction.credit_limit_id == clean_credit_limit_id
+        )
+
+    if not include_cancelled:
+        statement = statement.where(
+            BankAccountCreditLimitTransaction.status != CreditLimitTransactionStatus.CANCELLED
+        )
+
+    return list(session.execute(statement).scalars().all())
+
+
+def _credit_limit_summary_transaction_is_effective(
+    transaction: BankAccountCreditLimitTransaction,
+    *,
+    as_of_date: date,
+    apply_value_dates: bool,
+) -> bool:
+    if not apply_value_dates:
+        return True
+
+    movement_effective_date = transaction.effective_date or transaction.transaction_date
+
+    if movement_effective_date is None:
+        return False
+
+    return movement_effective_date <= as_of_date
+
+
+def get_credit_limit_debt_summary(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    as_of_date: date | None = None,
+    apply_value_dates: bool = True,
+) -> dict[str, Any]:
+    """
+    Kredili / limitli hesap borç özetini hesaplar.
+
+    Varsayılan hesaplama banka valör mantığını dikkate alır:
+    - Limit kullanımı aynı gün borca/faize girer.
+    - Limit ödemesi faize ve kullanılabilir limite ertesi gün etki eder.
+
+    apply_value_dates=False kullanıldığında tüm aktif hareketler işlem tarihi/valör ayrımı
+    yapılmadan dikkate alınır. Bu seçenek, ikinci kez ödeme gibi fazla ödeme risklerini
+    servis seviyesinde engellemek için kullanılır.
+    """
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    clean_as_of_date = as_of_date or date.today()
+    transactions = list_credit_limit_transactions(
+        session,
+        credit_limit_id=credit_limit.id,
+        include_cancelled=False,
+    )
+
+    usage_total = Decimal("0.00")
+    payment_total = Decimal("0.00")
+    interest_total = Decimal("0.00")
+    fee_total = Decimal("0.00")
+    adjustment_total = Decimal("0.00")
+
+    booked_usage_total = Decimal("0.00")
+    booked_payment_total = Decimal("0.00")
+    booked_interest_total = Decimal("0.00")
+    booked_fee_total = Decimal("0.00")
+    booked_adjustment_total = Decimal("0.00")
+
+    effective_transaction_count = 0
+
+    for transaction in transactions:
+        amount = money(transaction.amount or Decimal("0.00"), field_name="Limit hareket tutarı")
+
+        if transaction.transaction_type == CreditLimitTransactionType.USAGE:
+            booked_usage_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.PAYMENT:
+            booked_payment_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.INTEREST:
+            booked_interest_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.FEE:
+            booked_fee_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.ADJUSTMENT:
+            booked_adjustment_total += amount
+
+        if not _credit_limit_summary_transaction_is_effective(
+            transaction,
+            as_of_date=clean_as_of_date,
+            apply_value_dates=apply_value_dates,
+        ):
+            continue
+
+        effective_transaction_count += 1
+
+        if transaction.transaction_type == CreditLimitTransactionType.USAGE:
+            usage_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.PAYMENT:
+            payment_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.INTEREST:
+            interest_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.FEE:
+            fee_total += amount
+        elif transaction.transaction_type == CreditLimitTransactionType.ADJUSTMENT:
+            adjustment_total += amount
+
+    principal_base = money(usage_total + adjustment_total, field_name="Kullanılan ana para")
+    principal_debt = money(max(principal_base - payment_total, Decimal("0.00")), field_name="Ana para borcu")
+    total_debt_before_payment = money(
+        usage_total + adjustment_total + interest_total + fee_total,
+        field_name="Ödeme öncesi toplam borç",
+    )
+    remaining_total_debt = money(
+        max(total_debt_before_payment - payment_total, Decimal("0.00")),
+        field_name="Toplam borç",
+    )
+
+    booked_principal_base = money(
+        booked_usage_total + booked_adjustment_total,
+        field_name="Kayıtlı kullanılan ana para",
+    )
+    booked_principal_debt = money(
+        max(booked_principal_base - booked_payment_total, Decimal("0.00")),
+        field_name="Kayıtlı ana para borcu",
+    )
+    booked_total_debt_before_payment = money(
+        booked_usage_total + booked_adjustment_total + booked_interest_total + booked_fee_total,
+        field_name="Kayıtlı ödeme öncesi toplam borç",
+    )
+    booked_total_debt = money(
+        max(booked_total_debt_before_payment - booked_payment_total, Decimal("0.00")),
+        field_name="Kayıtlı toplam borç",
+    )
+
+    limit_amount = money(credit_limit.limit_amount or Decimal("0.00"), field_name="Limit tutarı")
+    available_limit = money(max(limit_amount - principal_debt, Decimal("0.00")), field_name="Kullanılabilir limit")
+    booked_available_limit = money(
+        max(limit_amount - booked_principal_debt, Decimal("0.00")),
+        field_name="Kayıtlı kullanılabilir limit",
+    )
+
+    return {
+        "credit_limit_id": credit_limit.id,
+        "currency_code": _credit_limit_currency_code(credit_limit).value,
+        "limit_amount": limit_amount,
+        "summary_as_of_date": clean_as_of_date,
+        "uses_value_dates": bool(apply_value_dates),
+        "usage_total": money(usage_total, field_name="Toplam kullanım"),
+        "payment_total": money(payment_total, field_name="Toplam ödeme"),
+        "interest_total": money(interest_total, field_name="Toplam faiz"),
+        "fee_total": money(fee_total, field_name="Toplam masraf"),
+        "adjustment_total": money(adjustment_total, field_name="Toplam düzeltme"),
+        "principal_debt": principal_debt,
+        "total_debt": remaining_total_debt,
+        "available_limit": available_limit,
+        "booked_usage_total": money(booked_usage_total, field_name="Kayıtlı toplam kullanım"),
+        "booked_payment_total": money(booked_payment_total, field_name="Kayıtlı toplam ödeme"),
+        "booked_interest_total": money(booked_interest_total, field_name="Kayıtlı toplam faiz"),
+        "booked_fee_total": money(booked_fee_total, field_name="Kayıtlı toplam masraf"),
+        "booked_adjustment_total": money(booked_adjustment_total, field_name="Kayıtlı toplam düzeltme"),
+        "booked_principal_debt": booked_principal_debt,
+        "booked_total_debt": booked_total_debt,
+        "booked_available_limit": booked_available_limit,
+        "transaction_count": len(transactions),
+        "effective_transaction_count": effective_transaction_count,
+    }
+
+
+def create_credit_limit_usage_transaction(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    transaction_date: date,
+    amount: Decimal,
+    reference_no: Optional[str],
+    description: Optional[str],
+    notes: Optional[str],
+    create_bank_account_entry: bool,
+    created_by_user_id: Optional[int],
+) -> BankAccountCreditLimitTransaction:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    _validate_credit_limit_is_active(credit_limit)
+
+    clean_amount = _clean_money(amount, "Limit kullanım tutarı")
+    clean_reference_no = _clean_optional_text(reference_no)
+    clean_description = _clean_optional_text(description)
+    clean_notes = _clean_optional_text(notes)
+
+    if clean_amount <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Limit kullanım tutarı sıfırdan büyük olmalıdır.")
+
+    summary = get_credit_limit_debt_summary(session, credit_limit_id=credit_limit.id)
+    available_limit = money(summary["available_limit"], field_name="Kullanılabilir limit")
+
+    if clean_amount > available_limit:
+        raise CreditFacilityServiceError(
+            "Limit kullanım tutarı kullanılabilir limitten büyük olamaz. "
+            f"Kullanılabilir limit: {available_limit} {_credit_limit_currency_code(credit_limit).value}"
+        )
+
+    transaction = BankAccountCreditLimitTransaction(
+        credit_limit_id=credit_limit.id,
+        transaction_type=CreditLimitTransactionType.USAGE,
+        transaction_date=transaction_date,
+        effective_date=_credit_limit_effective_date(
+            transaction_type=CreditLimitTransactionType.USAGE,
+            transaction_date=transaction_date,
+        ),
+        amount=clean_amount,
+        currency_code=_credit_limit_currency_code(credit_limit),
+        bank_transaction_id=None,
+        status=CreditLimitTransactionStatus.ACTIVE,
+        reference_no=clean_reference_no,
+        description=clean_description,
+        notes=clean_notes,
+        created_by_user_id=created_by_user_id,
+    )
+
+    session.add(transaction)
+    session.flush()
+
+    if create_bank_account_entry:
+        bank_account = _get_bank_account_or_raise(session, credit_limit.bank_account_id)
+
+        if not bank_account.is_active:
+            raise CreditFacilityServiceError("Pasif banka hesabına limit kullanım girişi oluşturulamaz.")
+
+        if bank_account.currency_code != _credit_limit_currency_code(credit_limit):
+            raise CreditFacilityServiceError("Limit para birimi ile bağlı banka hesabı para birimi aynı olmalıdır.")
+
+        try:
+            bank_transaction = create_bank_transaction(
+                session,
+                bank_account_id=bank_account.id,
+                transaction_date=transaction_date,
+                value_date=transaction_date,
+                direction=TransactionDirection.IN,
+                status=BankTransactionStatus.REALIZED,
+                amount=clean_amount,
+                currency_code=_credit_limit_currency_code(credit_limit),
+                source_type=FinancialSourceType.CREDIT_LIMIT_USAGE,
+                source_id=transaction.id,
+                reference_no=clean_reference_no,
+                description=clean_description or f"Limit kullanımı: {credit_limit.limit_name}",
+                created_by_user_id=created_by_user_id,
+            )
+        except BankTransactionServiceError as exc:
+            raise CreditFacilityServiceError(str(exc)) from exc
+
+        transaction.bank_transaction_id = bank_transaction.id
+        session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="CREDIT_LIMIT_TRANSACTION_CREATED",
+        entity_type="BankAccountCreditLimitTransaction",
+        entity_id=transaction.id,
+        description=f"Limit kullanım hareketi oluşturuldu: {credit_limit.limit_name} / {transaction.amount}",
+        old_values=None,
+        new_values=_serialize_credit_limit_transaction(transaction),
+    )
+
+    return transaction
+
+
+def create_credit_limit_payment_transaction(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    payment_bank_account_id: int,
+    transaction_date: date,
+    amount: Decimal,
+    reference_no: Optional[str],
+    description: Optional[str],
+    notes: Optional[str],
+    created_by_user_id: Optional[int],
+) -> BankAccountCreditLimitTransaction:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    _validate_credit_limit_is_active(credit_limit)
+    payment_account = _get_bank_account_or_raise(session, payment_bank_account_id)
+
+    if not payment_account.is_active:
+        raise CreditFacilityServiceError("Pasif banka hesabından limit ödemesi yapılamaz.")
+
+    if payment_account.currency_code != _credit_limit_currency_code(credit_limit):
+        raise CreditFacilityServiceError("Limit ödemesi, limit para birimiyle aynı para birimindeki hesaptan yapılmalıdır.")
+
+    clean_amount = _clean_money(amount, "Limit ödeme tutarı")
+    clean_reference_no = _clean_optional_text(reference_no)
+    clean_description = _clean_optional_text(description)
+    clean_notes = _clean_optional_text(notes)
+
+    if clean_amount <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Limit ödeme tutarı sıfırdan büyük olmalıdır.")
+
+    summary = get_credit_limit_debt_summary(
+        session,
+        credit_limit_id=credit_limit.id,
+        apply_value_dates=False,
+    )
+    total_debt = money(summary["booked_total_debt"], field_name="Kayıtlı toplam borç")
+
+    if total_debt <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Bu limitli hesap için ödenecek borç bulunmuyor.")
+
+    if clean_amount > total_debt:
+        raise CreditFacilityServiceError(
+            "Limit ödeme tutarı mevcut borçtan büyük olamaz. "
+            f"Mevcut borç: {total_debt} {_credit_limit_currency_code(credit_limit).value}"
+        )
+
+    transaction = BankAccountCreditLimitTransaction(
+        credit_limit_id=credit_limit.id,
+        transaction_type=CreditLimitTransactionType.PAYMENT,
+        transaction_date=transaction_date,
+        effective_date=_credit_limit_effective_date(
+            transaction_type=CreditLimitTransactionType.PAYMENT,
+            transaction_date=transaction_date,
+        ),
+        amount=clean_amount,
+        currency_code=_credit_limit_currency_code(credit_limit),
+        bank_transaction_id=None,
+        status=CreditLimitTransactionStatus.ACTIVE,
+        reference_no=clean_reference_no,
+        description=clean_description,
+        notes=clean_notes,
+        created_by_user_id=created_by_user_id,
+    )
+
+    session.add(transaction)
+    session.flush()
+
+    try:
+        bank_transaction = create_bank_transaction(
+            session,
+            bank_account_id=payment_account.id,
+            transaction_date=transaction_date,
+            value_date=transaction_date,
+            direction=TransactionDirection.OUT,
+            status=BankTransactionStatus.REALIZED,
+            amount=clean_amount,
+            currency_code=_credit_limit_currency_code(credit_limit),
+            source_type=FinancialSourceType.CREDIT_LIMIT_PAYMENT,
+            source_id=transaction.id,
+            reference_no=clean_reference_no,
+            description=clean_description or f"Limit ödemesi: {credit_limit.limit_name}",
+            created_by_user_id=created_by_user_id,
+        )
+    except BankTransactionServiceError as exc:
+        raise CreditFacilityServiceError(str(exc)) from exc
+
+    transaction.bank_transaction_id = bank_transaction.id
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="CREDIT_LIMIT_TRANSACTION_CREATED",
+        entity_type="BankAccountCreditLimitTransaction",
+        entity_id=transaction.id,
+        description=f"Limit ödeme hareketi oluşturuldu: {credit_limit.limit_name} / {transaction.amount}",
+        old_values=None,
+        new_values=_serialize_credit_limit_transaction(transaction),
+    )
+
+    return transaction
+
+
+def create_credit_limit_interest_transaction(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    transaction_date: date,
+    amount: Decimal,
+    reference_no: Optional[str],
+    description: Optional[str],
+    notes: Optional[str],
+    created_by_user_id: Optional[int],
+) -> BankAccountCreditLimitTransaction:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    _validate_credit_limit_is_active(credit_limit)
+
+    clean_amount = _clean_money(amount, "Faiz tutarı")
+    clean_reference_no = _clean_optional_text(reference_no)
+    clean_description = _clean_optional_text(description)
+    clean_notes = _clean_optional_text(notes)
+
+    if clean_amount <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Faiz tutarı sıfırdan büyük olmalıdır.")
+
+    transaction = BankAccountCreditLimitTransaction(
+        credit_limit_id=credit_limit.id,
+        transaction_type=CreditLimitTransactionType.INTEREST,
+        transaction_date=transaction_date,
+        effective_date=transaction_date,
+        amount=clean_amount,
+        currency_code=_credit_limit_currency_code(credit_limit),
+        bank_transaction_id=None,
+        status=CreditLimitTransactionStatus.ACTIVE,
+        reference_no=clean_reference_no,
+        description=clean_description,
+        notes=clean_notes,
+        created_by_user_id=created_by_user_id,
+    )
+
+    session.add(transaction)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="CREDIT_LIMIT_TRANSACTION_CREATED",
+        entity_type="BankAccountCreditLimitTransaction",
+        entity_id=transaction.id,
+        description=f"Limit faiz tahakkuku oluşturuldu: {credit_limit.limit_name} / {transaction.amount}",
+        old_values=None,
+        new_values=_serialize_credit_limit_transaction(transaction),
+    )
+
+    return transaction
+
+
+def create_credit_limit_fee_transaction(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    transaction_date: date,
+    amount: Decimal,
+    reference_no: Optional[str],
+    description: Optional[str],
+    notes: Optional[str],
+    created_by_user_id: Optional[int],
+) -> BankAccountCreditLimitTransaction:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    _validate_credit_limit_is_active(credit_limit)
+
+    clean_amount = _clean_money(amount, "Masraf tutarı")
+    clean_reference_no = _clean_optional_text(reference_no)
+    clean_description = _clean_optional_text(description)
+    clean_notes = _clean_optional_text(notes)
+
+    if clean_amount <= Decimal("0.00"):
+        raise CreditFacilityServiceError("Masraf tutarı sıfırdan büyük olmalıdır.")
+
+    transaction = BankAccountCreditLimitTransaction(
+        credit_limit_id=credit_limit.id,
+        transaction_type=CreditLimitTransactionType.FEE,
+        transaction_date=transaction_date,
+        effective_date=transaction_date,
+        amount=clean_amount,
+        currency_code=_credit_limit_currency_code(credit_limit),
+        bank_transaction_id=None,
+        status=CreditLimitTransactionStatus.ACTIVE,
+        reference_no=clean_reference_no,
+        description=clean_description,
+        notes=clean_notes,
+        created_by_user_id=created_by_user_id,
+    )
+
+    session.add(transaction)
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=created_by_user_id,
+        action="CREDIT_LIMIT_TRANSACTION_CREATED",
+        entity_type="BankAccountCreditLimitTransaction",
+        entity_id=transaction.id,
+        description=f"Limit masraf hareketi oluşturuldu: {credit_limit.limit_name} / {transaction.amount}",
+        old_values=None,
+        new_values=_serialize_credit_limit_transaction(transaction),
+    )
+
+    return transaction
+
+
+def cancel_credit_limit_transaction(
+    session: Session,
+    *,
+    transaction_id: int,
+    cancel_reason: str,
+    cancelled_by_user_id: Optional[int],
+) -> BankAccountCreditLimitTransaction:
+    clean_transaction_id = _clean_positive_int(transaction_id, "Limit hareket ID")
+    clean_cancel_reason = _clean_required_text(cancel_reason, "İptal nedeni")
+    transaction = session.get(BankAccountCreditLimitTransaction, clean_transaction_id)
+
+    if transaction is None:
+        raise CreditFacilityServiceError(f"Limit hareketi bulunamadı. Hareket ID: {clean_transaction_id}")
+
+    if transaction.status == CreditLimitTransactionStatus.CANCELLED:
+        return transaction
+
+    old_values = _serialize_credit_limit_transaction(transaction)
+
+    if transaction.bank_transaction_id is not None:
+        try:
+            cancel_bank_transaction(
+                session,
+                bank_transaction_id=int(transaction.bank_transaction_id),
+                cancel_reason=f"Limitli hesap hareket iptali: {clean_cancel_reason}",
+                cancelled_by_user_id=cancelled_by_user_id,
+            )
+        except BankTransactionServiceError as exc:
+            raise CreditFacilityServiceError(str(exc)) from exc
+
+    transaction.status = CreditLimitTransactionStatus.CANCELLED
+    transaction.cancelled_by_user_id = cancelled_by_user_id
+    transaction.cancelled_at = datetime.now()
+    transaction.cancel_reason = clean_cancel_reason
+
+    session.flush()
+
+    write_audit_log(
+        session,
+        user_id=cancelled_by_user_id,
+        action="CREDIT_LIMIT_TRANSACTION_CANCELLED",
+        entity_type="BankAccountCreditLimitTransaction",
+        entity_id=transaction.id,
+        description=f"Limitli hesap hareketi iptal edildi. Hareket ID: {transaction.id}",
+        old_values=old_values,
+        new_values=_serialize_credit_limit_transaction(transaction),
+    )
+
+    return transaction
+
+
+def calculate_credit_limit_period_report(
+    session: Session,
+    *,
+    credit_limit_id: int,
+    period_start: date,
+    period_end: date,
+) -> dict[str, Any]:
+    credit_limit = get_credit_limit_or_raise(session, credit_limit_id)
+    _date_range_inclusive(period_start, period_end)
+
+    transactions = list_credit_limit_transactions(
+        session,
+        credit_limit_id=credit_limit.id,
+        include_cancelled=False,
+    )
+
+    active_transactions = [
+        transaction
+        for transaction in transactions
+        if transaction.effective_date is not None and transaction.effective_date <= period_end
+    ]
+    active_transactions.sort(key=lambda item: (item.effective_date, item.id or 0))
+
+    opening_interest_basis = Decimal("0.00")
+    movements_by_effective_date: dict[date, list[BankAccountCreditLimitTransaction]] = {}
+    period_movement_rows: list[dict[str, Any]] = []
+
+    for transaction in active_transactions:
+        effect = _credit_limit_interest_basis_effect(transaction)
+
+        if transaction.effective_date < period_start:
+            opening_interest_basis = max(opening_interest_basis + effect, Decimal("0.00"))
+            continue
+
+        movements_by_effective_date.setdefault(transaction.effective_date, []).append(transaction)
+
+        if period_start <= transaction.transaction_date <= period_end:
+            period_movement_rows.append(
+                {
+                    "id": transaction.id,
+                    "transaction_type": transaction.transaction_type.value,
+                    "transaction_date": transaction.transaction_date,
+                    "effective_date": transaction.effective_date,
+                    "amount": money(transaction.amount or Decimal("0.00"), field_name="Limit hareket tutarı"),
+                    "currency_code": transaction.currency_code.value,
+                    "description": transaction.description,
+                    "reference_no": transaction.reference_no,
+                    "status": transaction.status.value,
+                }
+            )
+
+    current_interest_basis = money(opening_interest_basis, field_name="Dönem başı faize esas borç")
+    daily_rows: list[dict[str, Any]] = []
+    calculated_interest_total = Decimal("0.00")
+
+    for current_day in _date_range_inclusive(period_start, period_end):
+        for transaction in movements_by_effective_date.get(current_day, []):
+            current_interest_basis = max(
+                current_interest_basis + _credit_limit_interest_basis_effect(transaction),
+                Decimal("0.00"),
+            )
+            current_interest_basis = money(current_interest_basis, field_name="Faize esas borç")
+
+        daily_interest = _daily_credit_limit_interest(
+            balance=current_interest_basis,
+            credit_limit=credit_limit,
+            current_date=current_day,
+        )
+        calculated_interest_total += daily_interest
+
+        daily_rows.append(
+            {
+                "date": current_day,
+                "interest_basis_debt": current_interest_basis,
+                "daily_interest": daily_interest,
+                "currency_code": _credit_limit_currency_code(credit_limit).value,
+            }
+        )
+
+    period_usage_total = Decimal("0.00")
+    period_payment_total = Decimal("0.00")
+    period_interest_total = Decimal("0.00")
+    period_fee_total = Decimal("0.00")
+
+    for row in period_movement_rows:
+        row_amount = money(row["amount"], field_name="Dönem hareket tutarı")
+        row_type = row["transaction_type"]
+
+        if row_type == CreditLimitTransactionType.USAGE.value:
+            period_usage_total += row_amount
+        elif row_type == CreditLimitTransactionType.PAYMENT.value:
+            period_payment_total += row_amount
+        elif row_type == CreditLimitTransactionType.INTEREST.value:
+            period_interest_total += row_amount
+        elif row_type == CreditLimitTransactionType.FEE.value:
+            period_fee_total += row_amount
+
+    ending_interest_basis = daily_rows[-1]["interest_basis_debt"] if daily_rows else current_interest_basis
+
+    return {
+        "credit_limit_id": credit_limit.id,
+        "limit_name": credit_limit.limit_name,
+        "bank_account_id": credit_limit.bank_account_id,
+        "currency_code": _credit_limit_currency_code(credit_limit).value,
+        "period_start": period_start,
+        "period_end": period_end,
+        "limit_amount": money(credit_limit.limit_amount or Decimal("0.00"), field_name="Limit tutarı"),
+        "monthly_interest_rate": rate(credit_limit.interest_rate or Decimal("0.000000"), field_name="Faiz oranı"),
+        "interest_period": credit_limit.interest_period.value,
+        "opening_interest_basis_debt": money(opening_interest_basis, field_name="Dönem başı borç"),
+        "period_usage_total": money(period_usage_total, field_name="Dönem kullanım toplamı"),
+        "period_payment_total": money(period_payment_total, field_name="Dönem ödeme toplamı"),
+        "period_recorded_interest_total": money(period_interest_total, field_name="Dönem kayıtlı faiz toplamı"),
+        "period_fee_total": money(period_fee_total, field_name="Dönem masraf toplamı"),
+        "calculated_interest_total": money(calculated_interest_total, field_name="Hesaplanan faiz toplamı"),
+        "ending_interest_basis_debt": money(ending_interest_basis, field_name="Dönem sonu ana para borcu"),
+        "movement_rows": period_movement_rows,
+        "daily_rows": daily_rows,
+    }
+
+
 __all__ = [
     "CreditFacilityServiceError",
     "create_credit_card",
@@ -1408,6 +2286,16 @@ __all__ = [
     "create_credit_limit",
     "update_credit_limit",
     "deactivate_credit_limit",
+    "activate_credit_limit",
     "get_credit_limit_by_name",
+    "get_credit_limit_or_raise",
     "list_credit_limits",
+    "list_credit_limit_transactions",
+    "get_credit_limit_debt_summary",
+    "create_credit_limit_usage_transaction",
+    "create_credit_limit_payment_transaction",
+    "create_credit_limit_interest_transaction",
+    "create_credit_limit_fee_transaction",
+    "cancel_credit_limit_transaction",
+    "calculate_credit_limit_period_report",
 ]

@@ -26,11 +26,16 @@ from app.db.session import session_scope
 from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     activate_credit_card,
+    activate_credit_limit,
+    cancel_credit_limit_transaction,
     cancel_credit_card_payment,
     cancel_credit_card_transaction,
     deactivate_credit_card,
+    deactivate_credit_limit,
     get_credit_card_debt_summary,
     get_credit_card_recommendation_status,
+    get_credit_limit_debt_summary,
+    list_credit_limit_transactions,
     list_credit_card_payments,
     list_credit_card_transactions,
     list_credit_cards,
@@ -40,6 +45,9 @@ from app.ui.pages.credit_facilities.credit_card_dialog import CreditCardDialog
 from app.ui.pages.credit_facilities.credit_card_payment_dialog import CreditCardPaymentDialog
 from app.ui.pages.credit_facilities.credit_card_statement_dialog import CreditCardStatementDialog
 from app.ui.pages.credit_facilities.credit_card_transaction_dialog import CreditCardTransactionDialog
+from app.ui.pages.credit_facilities.credit_limit_dialog import CreditLimitDialog
+from app.ui.pages.credit_facilities.credit_limit_period_report_dialog import CreditLimitPeriodReportDialog
+from app.ui.pages.credit_facilities.credit_limit_transaction_dialog import CreditLimitTransactionDialog
 
 
 CREDIT_FACILITIES_PAGE_STYLE = """
@@ -203,6 +211,10 @@ ACTIVE_PAYMENT_STATUSES = {
     "RECORDED",
 }
 
+ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES = {
+    "ACTIVE",
+}
+
 
 class CreditFacilitiesPage(QWidget):
     def __init__(self, current_user: Any | None = None) -> None:
@@ -219,6 +231,12 @@ class CreditFacilitiesPage(QWidget):
         self._transaction_row_status: list[str | None] = []
         self._payment_row_ids: list[int | None] = []
         self._payment_row_status: list[str | None] = []
+        self._credit_limit_row_ids: list[int | None] = []
+        self._credit_limit_row_active: list[bool | None] = []
+        self._credit_limit_row_display_names: list[str | None] = []
+        self._credit_limit_row_total_debt: list[Decimal | None] = []
+        self._credit_limit_transaction_row_ids: list[int | None] = []
+        self._credit_limit_transaction_row_status: list[str | None] = []
 
         self.credit_cards_table = self._build_table(
             [
@@ -269,13 +287,31 @@ class CreditFacilitiesPage(QWidget):
                 "Tip",
                 "Para",
                 "Limit",
-                "Kullanılan",
-                "Kullanım",
-                "Faiz",
-                "Periyot",
+                "Faize Esas Borç",
+                "Ödenebilir Borç",
+                "Faiz / Masraf",
+                "Kullanılabilir",
+                "Faiz Oranı",
                 "Gün",
                 "Durum",
             ]
+        )
+        self.credit_limits_table.itemSelectionChanged.connect(self._on_credit_limit_selection_changed)
+
+        self.credit_limit_transactions_table = self._build_table(
+            [
+                "Limit Hesabı",
+                "İşlem Tarihi",
+                "Faize Etki Tarihi",
+                "Tür",
+                "Tutar",
+                "Durum",
+                "Referans",
+                "Açıklama",
+            ]
+        )
+        self.credit_limit_transactions_table.itemSelectionChanged.connect(
+            self._update_credit_limit_transaction_actions
         )
 
         self.card_count_value_label = self._summary_value_label("0")
@@ -284,6 +320,8 @@ class CreditFacilitiesPage(QWidget):
         self.card_remaining_value_label = self._summary_value_label("0,00 TL")
         self.limit_count_value_label = self._summary_value_label("0")
         self.limit_total_value_label = self._summary_value_label("0,00")
+        self.limit_debt_value_label = self._summary_value_label("0,00")
+        self.limit_available_value_label = self._summary_value_label("0,00")
 
         self.add_credit_card_button: QPushButton | None = None
         self.edit_credit_card_button: QPushButton | None = None
@@ -294,11 +332,22 @@ class CreditFacilitiesPage(QWidget):
         self.cancel_transaction_button: QPushButton | None = None
         self.cancel_payment_button: QPushButton | None = None
 
+        self.add_credit_limit_button: QPushButton | None = None
+        self.edit_credit_limit_button: QPushButton | None = None
+        self.toggle_credit_limit_button: QPushButton | None = None
+        self.use_credit_limit_button: QPushButton | None = None
+        self.pay_credit_limit_button: QPushButton | None = None
+        self.period_report_credit_limit_button: QPushButton | None = None
+        self.cancel_credit_limit_transaction_button: QPushButton | None = None
+
         self.transaction_title_label = QLabel("Harcama Kayıtları")
         self.transaction_title_label.setObjectName("CreditFacilitiesSectionTitle")
 
         self.payment_title_label = QLabel("Ödeme Kayıtları")
         self.payment_title_label.setObjectName("CreditFacilitiesSectionTitle")
+
+        self.credit_limit_transaction_title_label = QLabel("Limit Hareketleri")
+        self.credit_limit_transaction_title_label.setObjectName("CreditFacilitiesSectionTitle")
 
         self.status_label = QLabel("Hazır")
         self.status_label.setObjectName("CreditFacilitiesMuted")
@@ -342,11 +391,11 @@ class CreditFacilitiesPage(QWidget):
                 first_value_label=self.limit_count_value_label,
                 second_label="Toplam limit",
                 second_value_label=self.limit_total_value_label,
-                third_label="",
-                third_value_label=None,
-                fourth_label="",
-                fourth_value_label=None,
-                hint="KMH / limitli mevduat genel görünümü.",
+                third_label="Ödenebilir borç",
+                third_value_label=self.limit_debt_value_label,
+                fourth_label="Kullanılabilir",
+                fourth_value_label=self.limit_available_value_label,
+                hint="Ödenebilir borç kayıtlı gerçek borçtur; faize esas borç ve kullanılabilir limit valör tarihine göre hesaplanır.",
             )
         )
 
@@ -458,27 +507,70 @@ class CreditFacilitiesPage(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
-        add_button = QPushButton("Limit Tanımla")
-        add_button.setObjectName("CreditFacilitiesPrimaryButton")
-        add_button.setEnabled(False)
+        self.add_credit_limit_button = QPushButton("Limit Tanımla")
+        self.add_credit_limit_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.add_credit_limit_button.clicked.connect(self.open_credit_limit_dialog)
 
-        edit_button = QPushButton("Düzenle")
-        edit_button.setObjectName("CreditFacilitiesSecondaryButton")
-        edit_button.setEnabled(False)
+        self.edit_credit_limit_button = QPushButton("Düzenle")
+        self.edit_credit_limit_button.setObjectName("CreditFacilitiesSecondaryButton")
+        self.edit_credit_limit_button.setEnabled(False)
+        self.edit_credit_limit_button.clicked.connect(self.open_selected_credit_limit_edit_dialog)
 
-        actions.addWidget(add_button)
-        actions.addWidget(edit_button)
+        self.toggle_credit_limit_button = QPushButton("Pasife Al")
+        self.toggle_credit_limit_button.setObjectName("CreditFacilitiesWarningButton")
+        self.toggle_credit_limit_button.setEnabled(False)
+        self.toggle_credit_limit_button.clicked.connect(self.toggle_selected_credit_limit_active_state)
+
+        self.use_credit_limit_button = QPushButton("Limit Kullan")
+        self.use_credit_limit_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.use_credit_limit_button.setEnabled(False)
+        self.use_credit_limit_button.setToolTip("Seçili limitli hesap için kullanım hareketi oluşturur. Kullanım aynı gün faize etki eder.")
+        self.use_credit_limit_button.clicked.connect(self.open_credit_limit_usage_dialog)
+
+        self.pay_credit_limit_button = QPushButton("Limit Öde")
+        self.pay_credit_limit_button.setObjectName("CreditFacilitiesPrimaryButton")
+        self.pay_credit_limit_button.setEnabled(False)
+        self.pay_credit_limit_button.setToolTip("Seçili limitli hesap için ödeme hareketi oluşturur. Ödeme faiz hesabında ertesi gün borçtan düşer.")
+        self.pay_credit_limit_button.clicked.connect(self.open_credit_limit_payment_dialog)
+
+        self.period_report_credit_limit_button = QPushButton("Dönem Raporu")
+        self.period_report_credit_limit_button.setObjectName("CreditFacilitiesSecondaryButton")
+        self.period_report_credit_limit_button.setEnabled(False)
+        self.period_report_credit_limit_button.setToolTip("Seçili limitli hesabın dönem hareketlerini ve günlük faiz hesabını gösterir.")
+        self.period_report_credit_limit_button.clicked.connect(self.open_credit_limit_period_report_dialog)
+
+        actions.addWidget(self.add_credit_limit_button)
+        actions.addWidget(self.edit_credit_limit_button)
+        actions.addWidget(self.toggle_credit_limit_button)
+        actions.addWidget(self.use_credit_limit_button)
+        actions.addWidget(self.pay_credit_limit_button)
+        actions.addWidget(self.period_report_credit_limit_button)
         actions.addStretch(1)
 
         hint_label = QLabel(
-            "Bu alan banka hesabına bağlı KMH / limitli mevduat / rotatif limit tanımlarını gösterecek."
+            "Limit kullanımı aynı gün faize etki eder. Limit ödemesi banka valörü nedeniyle faiz hesabında "
+            "ertesi gün borçtan düşer. Hareket dökümünde işlem tarihi ve faize etki tarihi ayrı gösterilir."
         )
         hint_label.setObjectName("CreditFacilitiesMuted")
         hint_label.setWordWrap(True)
 
+        movement_actions = QHBoxLayout()
+        movement_actions.setSpacing(8)
+
+        self.cancel_credit_limit_transaction_button = QPushButton("Hareket İptal")
+        self.cancel_credit_limit_transaction_button.setObjectName("CreditFacilitiesDangerButton")
+        self.cancel_credit_limit_transaction_button.setEnabled(False)
+        self.cancel_credit_limit_transaction_button.clicked.connect(self.cancel_selected_credit_limit_transaction)
+
+        movement_actions.addWidget(self.credit_limit_transaction_title_label)
+        movement_actions.addStretch(1)
+        movement_actions.addWidget(self.cancel_credit_limit_transaction_button)
+
         layout.addLayout(actions)
         layout.addWidget(hint_label)
         layout.addWidget(self.credit_limits_table, 1)
+        layout.addLayout(movement_actions)
+        layout.addWidget(self.credit_limit_transactions_table, 1)
 
         return tab
 
@@ -700,6 +792,245 @@ class CreditFacilitiesPage(QWidget):
 
         dialog.exec()
         self.status_label.setText("Kredi kartı dönem hareketleri görüntülendi.")
+
+    def open_credit_limit_dialog(self) -> None:
+        dialog = CreditLimitDialog(
+            current_user=self.current_user,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self.status_label.setText("Limitli hesap tanımı kaydedildi.")
+
+    def open_selected_credit_limit_edit_dialog(self) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+
+        if credit_limit_id is None:
+            QMessageBox.warning(
+                self,
+                "Limit Seçilmedi",
+                "Düzenlemek için listeden bir limitli hesap seçmelisin.",
+            )
+            return
+
+        dialog = CreditLimitDialog(
+            current_user=self.current_user,
+            credit_limit_id=credit_limit_id,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self._restore_credit_limit_selection(credit_limit_id)
+            self.status_label.setText("Limitli hesap tanımı güncellendi.")
+
+    def toggle_selected_credit_limit_active_state(self) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+        is_active = self._selected_credit_limit_is_active()
+        display_name = self._selected_credit_limit_display_name() or "Seçili limitli hesap"
+
+        if credit_limit_id is None or is_active is None:
+            QMessageBox.warning(
+                self,
+                "Limit Seçilmedi",
+                "İşlem yapmak için listeden bir limitli hesap seçmelisin.",
+            )
+            return
+
+        if is_active:
+            question = f"{display_name} pasife alınacak. Devam etmek istiyor musun?"
+            button_text = "Limiti Pasife Al"
+        else:
+            question = f"{display_name} tekrar aktif hale getirilecek. Devam etmek istiyor musun?"
+            button_text = "Limiti Aktifleştir"
+
+        answer = QMessageBox.question(
+            self,
+            button_text,
+            question,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                if is_active:
+                    deactivate_credit_limit(
+                        session,
+                        credit_limit_id=credit_limit_id,
+                        updated_by_user_id=self._current_user_id(),
+                    )
+                else:
+                    activate_credit_limit(
+                        session,
+                        credit_limit_id=credit_limit_id,
+                        updated_by_user_id=self._current_user_id(),
+                    )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Limit Durumu Değiştirilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Limit durumu değiştirilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_data()
+        self._restore_credit_limit_selection(credit_limit_id)
+        self.status_label.setText("Limitli hesap durumu güncellendi.")
+
+    def open_credit_limit_usage_dialog(self) -> None:
+        self._open_credit_limit_transaction_dialog(mode=CreditLimitTransactionDialog.MODE_USAGE)
+
+    def open_credit_limit_payment_dialog(self) -> None:
+        self._open_credit_limit_transaction_dialog(mode=CreditLimitTransactionDialog.MODE_PAYMENT)
+
+    def open_credit_limit_period_report_dialog(self) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+
+        if credit_limit_id is None:
+            QMessageBox.warning(
+                self,
+                "Limit Seçilmedi",
+                "Dönem raporu almak için listeden bir kredili / limitli hesap seçmelisin.",
+            )
+            return
+
+        dialog = CreditLimitPeriodReportDialog(
+            current_user=self.current_user,
+            credit_limit_id=credit_limit_id,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _open_credit_limit_transaction_dialog(self, *, mode: str) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+        is_active = self._selected_credit_limit_is_active()
+
+        if credit_limit_id is None:
+            QMessageBox.warning(
+                self,
+                "Limit Seçilmedi",
+                "İşlem yapmak için listeden bir kredili / limitli hesap seçmelisin.",
+            )
+            return
+
+        if is_active is not True:
+            QMessageBox.warning(
+                self,
+                "Limit Pasif",
+                "Pasif kredili / limitli hesap için kullanım veya ödeme hareketi girilemez.",
+            )
+            return
+
+        dialog = CreditLimitTransactionDialog(
+            current_user=self.current_user,
+            credit_limit_id=credit_limit_id,
+            mode=mode,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self._restore_credit_limit_selection(credit_limit_id)
+
+            if mode == CreditLimitTransactionDialog.MODE_USAGE:
+                self.status_label.setText("Limit kullanım hareketi kaydedildi.")
+            else:
+                self.status_label.setText("Limit ödeme hareketi kaydedildi.")
+
+    def cancel_selected_credit_limit_transaction(self) -> None:
+        transaction_id = self._selected_credit_limit_transaction_id()
+        transaction_status = self._selected_credit_limit_transaction_status()
+        credit_limit_id = self._selected_credit_limit_id()
+
+        if transaction_id is None:
+            QMessageBox.warning(
+                self,
+                "Hareket Seçilmedi",
+                "İptal etmek için listeden bir limit hareketi seçmelisin.",
+            )
+            return
+
+        if transaction_status == "CANCELLED":
+            QMessageBox.information(
+                self,
+                "Hareket Zaten İptal",
+                "Seçili limit hareketi zaten iptal edilmiş.",
+            )
+            return
+
+        cancel_reason, accepted = QInputDialog.getText(
+            self,
+            "Limit Hareketi İptal Nedeni",
+            "İptal nedeni:",
+        )
+
+        if not accepted:
+            return
+
+        if not str(cancel_reason or "").strip():
+            QMessageBox.warning(
+                self,
+                "Eksik Bilgi",
+                "Limit hareketi iptali için açıklama girmelisin.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Limit Hareketi İptal",
+            "Seçili limit hareketi ve varsa bağlı banka hareketi iptal edilecek. Devam etmek istiyor musun?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                cancel_credit_limit_transaction(
+                    session,
+                    transaction_id=transaction_id,
+                    cancel_reason=str(cancel_reason),
+                    cancelled_by_user_id=self._current_user_id(),
+                )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Limit Hareketi İptal Edilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Limit hareketi iptal edilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        self.refresh_data()
+
+        if credit_limit_id is not None:
+            self._restore_credit_limit_selection(credit_limit_id)
+
+        self.status_label.setText("Limit hareketi iptal edildi.")
 
     def toggle_selected_credit_card_active_state(self) -> None:
         credit_card_id = self._selected_credit_card_id()
@@ -974,14 +1305,37 @@ class CreditFacilitiesPage(QWidget):
                     card_row_display_names.append(display_name)
                     card_row_remaining_debt.append(remaining_debt)
 
-                limit_rows = []
+                limit_rows: list[list[Any]] = []
+                credit_limit_row_ids: list[int | None] = []
+                credit_limit_row_active: list[bool | None] = []
+                credit_limit_row_display_names: list[str | None] = []
+                credit_limit_row_total_debt: list[Decimal | None] = []
                 active_limit_count = 0
                 credit_limit_total = Decimal("0.00")
+                credit_limit_debt_total = Decimal("0.00")
+                credit_limit_available_total = Decimal("0.00")
 
                 for credit_limit in credit_limits:
+                    credit_limit_id = int(credit_limit.id)
+                    debt_summary = get_credit_limit_debt_summary(
+                        session,
+                        credit_limit_id=credit_limit_id,
+                    )
+
+                    limit_amount = Decimal(debt_summary["limit_amount"] or Decimal("0.00"))
+                    principal_debt = Decimal(debt_summary["principal_debt"] or Decimal("0.00"))
+                    interest_fee_total = Decimal(debt_summary["interest_total"] or Decimal("0.00")) + Decimal(
+                        debt_summary["fee_total"] or Decimal("0.00")
+                    )
+                    total_debt = Decimal(debt_summary["total_debt"] or Decimal("0.00"))
+                    booked_total_debt = Decimal(debt_summary["booked_total_debt"] or Decimal("0.00"))
+                    available_limit = Decimal(debt_summary["available_limit"] or Decimal("0.00"))
+
                     if credit_limit.is_active:
                         active_limit_count += 1
-                        credit_limit_total += Decimal(credit_limit.limit_amount or 0)
+                        credit_limit_total += limit_amount
+                        credit_limit_debt_total += booked_total_debt
+                        credit_limit_available_total += available_limit
 
                     account_name = "-"
                     bank_account = getattr(credit_limit, "bank_account", None)
@@ -991,26 +1345,38 @@ class CreditFacilitiesPage(QWidget):
                             bank_name = bank_account.bank.name or "-"
                         account_name = f"{bank_name} / {bank_account.account_name}"
 
+                    display_name = f"{account_name} / {credit_limit.limit_name}"
+                    currency_code = str(debt_summary.get("currency_code") or credit_limit.currency_code.value)
+
                     limit_rows.append(
                         [
                             account_name,
                             credit_limit.limit_name,
-                            credit_limit.limit_type.value,
-                            credit_limit.currency_code.value,
-                            self._format_decimal(credit_limit.limit_amount),
-                            self._format_decimal(credit_limit.manual_used_amount),
-                            credit_limit.usage_mode.value,
-                            self._format_decimal(credit_limit.interest_rate),
-                            credit_limit.interest_period.value,
+                            self._credit_limit_type_text(credit_limit.limit_type.value),
+                            currency_code,
+                            self._format_money(limit_amount, currency_code),
+                            self._format_money(principal_debt, currency_code),
+                            self._format_money(booked_total_debt, currency_code),
+                            self._format_money(interest_fee_total, currency_code),
+                            self._format_money(available_limit, currency_code),
+                            f"% {self._format_decimal(credit_limit.interest_rate)}",
                             self._format_day(credit_limit.interest_day),
                             "Aktif" if credit_limit.is_active else "Pasif",
                         ]
                     )
+                    credit_limit_row_ids.append(credit_limit_id)
+                    credit_limit_row_active.append(bool(credit_limit.is_active))
+                    credit_limit_row_display_names.append(display_name)
+                    credit_limit_row_total_debt.append(booked_total_debt)
 
             self._credit_card_row_ids = card_row_ids
             self._credit_card_row_active = card_row_active
             self._credit_card_row_display_names = card_row_display_names
             self._credit_card_row_remaining_debt = card_row_remaining_debt
+            self._credit_limit_row_ids = credit_limit_row_ids
+            self._credit_limit_row_active = credit_limit_row_active
+            self._credit_limit_row_display_names = credit_limit_row_display_names
+            self._credit_limit_row_total_debt = credit_limit_row_total_debt
 
             self._fill_table(
                 table=self.credit_cards_table,
@@ -1029,11 +1395,15 @@ class CreditFacilitiesPage(QWidget):
             self.card_remaining_value_label.setText(self._format_tl(card_available_limit_total))
             self.limit_count_value_label.setText(str(active_limit_count))
             self.limit_total_value_label.setText(self._format_decimal(credit_limit_total))
+            self.limit_debt_value_label.setText(self._format_decimal(credit_limit_debt_total))
+            self.limit_available_value_label.setText(self._format_decimal(credit_limit_available_total))
 
             self.status_label.setText("Kredili Hesaplar / Kartlar verileri yenilendi.")
             self._update_credit_card_actions()
+            self._update_credit_limit_actions()
             self.refresh_transactions_for_selected_card()
             self.refresh_payments_for_selected_card()
+            self.refresh_credit_limit_transactions_for_selected_limit()
 
         except Exception as exc:
             QMessageBox.warning(
@@ -1188,6 +1558,79 @@ class CreditFacilitiesPage(QWidget):
                 f"Ödeme kayıtları yüklenirken hata oluştu:\n\n{exc}",
             )
 
+    def refresh_credit_limit_transactions_for_selected_limit(self) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+
+        if credit_limit_id is None:
+            self._credit_limit_transaction_row_ids = []
+            self._credit_limit_transaction_row_status = []
+            self.credit_limit_transaction_title_label.setText("Limit Hareketleri")
+            self._fill_table(
+                table=self.credit_limit_transactions_table,
+                rows=[],
+                empty_message="Hareket görmek için önce bir kredili / limitli hesap seç.",
+            )
+            self._update_credit_limit_transaction_actions()
+            return
+
+        selected_limit_name = self._selected_credit_limit_display_name() or "Seçili Limit"
+
+        try:
+            with session_scope() as session:
+                transactions = list_credit_limit_transactions(
+                    session,
+                    credit_limit_id=credit_limit_id,
+                    include_cancelled=True,
+                )
+
+                rows: list[list[Any]] = []
+                row_ids: list[int | None] = []
+                row_statuses: list[str | None] = []
+
+                for transaction in transactions:
+                    currency_code = str(
+                        getattr(transaction.currency_code, "value", transaction.currency_code) or ""
+                    )
+                    transaction_type = str(
+                        getattr(transaction.transaction_type, "value", transaction.transaction_type) or ""
+                    )
+                    transaction_status = str(
+                        getattr(transaction.status, "value", transaction.status) or ""
+                    )
+
+                    rows.append(
+                        [
+                            selected_limit_name,
+                            self._format_date(transaction.transaction_date),
+                            self._format_date(transaction.effective_date),
+                            self._credit_limit_transaction_type_text(transaction_type),
+                            self._format_money(transaction.amount, currency_code),
+                            self._credit_limit_transaction_status_text(transaction_status),
+                            transaction.reference_no or "-",
+                            transaction.description or "-",
+                        ]
+                    )
+                    row_ids.append(int(transaction.id))
+                    row_statuses.append(transaction_status)
+
+            self._credit_limit_transaction_row_ids = row_ids
+            self._credit_limit_transaction_row_status = row_statuses
+
+            self.credit_limit_transaction_title_label.setText(f"Limit Hareketleri - {selected_limit_name}")
+            self._fill_table(
+                table=self.credit_limit_transactions_table,
+                rows=rows,
+                empty_message=f"{selected_limit_name} için henüz limit hareketi yok.",
+            )
+            self._update_credit_limit_transaction_actions()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Limit Hareketleri",
+                f"Limit hareketleri yüklenirken hata oluştu:\n\n{exc}",
+            )
+
     def _fill_table(
         self,
         *,
@@ -1229,6 +1672,7 @@ class CreditFacilitiesPage(QWidget):
                 if text_value in {
                     "AKTIF",
                     "KAYITLI",
+                    "AKTİF",
                     "ÖDENDI",
                     "ÖDENDİ",
                     "TAVSIYE EDILEN",
@@ -1263,6 +1707,82 @@ class CreditFacilitiesPage(QWidget):
         self._update_credit_card_actions()
         self.refresh_transactions_for_selected_card()
         self.refresh_payments_for_selected_card()
+
+    def _on_credit_limit_selection_changed(self) -> None:
+        self._update_credit_limit_actions()
+        self.refresh_credit_limit_transactions_for_selected_limit()
+
+    def _restore_credit_limit_selection(self, credit_limit_id: int) -> None:
+        for row_index, row_credit_limit_id in enumerate(self._credit_limit_row_ids):
+            if row_credit_limit_id == credit_limit_id:
+                self.credit_limits_table.selectRow(row_index)
+                return
+
+    def _selected_credit_limit_id(self) -> int | None:
+        row_index = self.credit_limits_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_row_ids):
+            return None
+
+        return self._credit_limit_row_ids[row_index]
+
+    def _selected_credit_limit_is_active(self) -> bool | None:
+        row_index = self.credit_limits_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_row_active):
+            return None
+
+        return self._credit_limit_row_active[row_index]
+
+    def _selected_credit_limit_display_name(self) -> str | None:
+        row_index = self.credit_limits_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_row_display_names):
+            return None
+
+        return self._credit_limit_row_display_names[row_index]
+
+    def _selected_credit_limit_total_debt(self) -> Decimal | None:
+        row_index = self.credit_limits_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_row_total_debt):
+            return None
+
+        return self._credit_limit_row_total_debt[row_index]
+
+    def _selected_credit_limit_transaction_id(self) -> int | None:
+        row_index = self.credit_limit_transactions_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_transaction_row_ids):
+            return None
+
+        return self._credit_limit_transaction_row_ids[row_index]
+
+    def _selected_credit_limit_transaction_status(self) -> str | None:
+        row_index = self.credit_limit_transactions_table.currentRow()
+
+        if row_index < 0:
+            return None
+
+        if row_index >= len(self._credit_limit_transaction_row_status):
+            return None
+
+        return self._credit_limit_transaction_row_status[row_index]
 
     def _restore_credit_card_selection(self, credit_card_id: int) -> None:
         for row_index, row_card_id in enumerate(self._credit_card_row_ids):
@@ -1392,6 +1912,50 @@ class CreditFacilitiesPage(QWidget):
 
         if self.statement_credit_card_button is not None:
             self.statement_credit_card_button.setEnabled(has_selection)
+
+    def _update_credit_limit_actions(self) -> None:
+        selected_credit_limit_id = self._selected_credit_limit_id()
+        selected_is_active = self._selected_credit_limit_is_active()
+        selected_total_debt = self._selected_credit_limit_total_debt()
+        has_selection = selected_credit_limit_id is not None
+        has_payable_debt = selected_total_debt is not None and selected_total_debt > Decimal("0.00")
+
+        if self.edit_credit_limit_button is not None:
+            self.edit_credit_limit_button.setEnabled(has_selection)
+
+        if self.toggle_credit_limit_button is not None:
+            self.toggle_credit_limit_button.setEnabled(has_selection)
+
+            if selected_is_active is False:
+                self.toggle_credit_limit_button.setText("Aktifleştir")
+                self.toggle_credit_limit_button.setObjectName("CreditFacilitiesPrimaryButton")
+            else:
+                self.toggle_credit_limit_button.setText("Pasife Al")
+                self.toggle_credit_limit_button.setObjectName("CreditFacilitiesWarningButton")
+
+            self.toggle_credit_limit_button.style().unpolish(self.toggle_credit_limit_button)
+            self.toggle_credit_limit_button.style().polish(self.toggle_credit_limit_button)
+            self.toggle_credit_limit_button.update()
+
+        if self.use_credit_limit_button is not None:
+            self.use_credit_limit_button.setEnabled(has_selection and selected_is_active is True)
+
+        if self.pay_credit_limit_button is not None:
+            self.pay_credit_limit_button.setEnabled(
+                has_selection and selected_is_active is True and has_payable_debt
+            )
+
+        if self.period_report_credit_limit_button is not None:
+            self.period_report_credit_limit_button.setEnabled(has_selection)
+
+    def _update_credit_limit_transaction_actions(self) -> None:
+        transaction_id = self._selected_credit_limit_transaction_id()
+        transaction_status = self._selected_credit_limit_transaction_status()
+
+        if self.cancel_credit_limit_transaction_button is not None:
+            self.cancel_credit_limit_transaction_button.setEnabled(
+                transaction_id is not None and transaction_status not in {"CANCELLED"}
+            )
 
     def _update_transaction_actions(self) -> None:
         transaction_id = self._selected_transaction_id()
@@ -1523,6 +2087,43 @@ class CreditFacilitiesPage(QWidget):
         }
 
         return status_map.get(str(status or "").strip().upper(), str(status or "-"))
+
+    def _credit_limit_transaction_type_text(self, value: Any) -> str:
+        type_map = {
+            "USAGE": "Limit Kullanımı",
+            "PAYMENT": "Limit Ödemesi",
+            "INTEREST": "Faiz",
+            "FEE": "Masraf",
+            "ADJUSTMENT": "Düzeltme",
+        }
+
+        return type_map.get(str(value or "").strip().upper(), str(value or "-"))
+
+    def _credit_limit_transaction_status_text(self, value: Any) -> str:
+        status_map = {
+            "ACTIVE": "Aktif",
+            "CANCELLED": "İptal",
+        }
+
+        return status_map.get(str(value or "").strip().upper(), str(value or "-"))
+
+    def _credit_limit_type_text(self, value: Any) -> str:
+        type_map = {
+            "KMH": "KMH",
+            "LIMITED_DEPOSIT": "Limitli Mevduat",
+            "ROTATIVE_LIMIT": "Rotatif Limit",
+            "OTHER": "Diğer",
+        }
+
+        return type_map.get(str(value or "").strip().upper(), str(value or "-"))
+
+    def _format_money(self, value: Any, currency_code: Any) -> str:
+        clean_currency_code = str(currency_code or "").strip().upper()
+
+        if not clean_currency_code:
+            return self._format_decimal(value)
+
+        return f"{self._format_decimal(value)} {clean_currency_code}"
 
     def _format_decimal(self, value: Any) -> str:
         try:

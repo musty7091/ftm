@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -508,6 +508,99 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
             "Mevcut ekstre ödemelerini korur, kredi kartı bağlantısını statement kaydından taşır ve banka hareketi bağlantısı için alan açar."
         ),
     ),
+    DatabaseMigration(
+        migration_id="20260512_0006_credit_limit_transactions",
+        name="Credit limit transaction table",
+        target_version=6,
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS bank_account_credit_limit_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                credit_limit_id INTEGER NOT NULL,
+                transaction_type VARCHAR(30) NOT NULL,
+                transaction_date DATE NOT NULL,
+                effective_date DATE NOT NULL,
+                amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00,
+                currency_code VARCHAR(10) NOT NULL DEFAULT 'TRY',
+                bank_transaction_id INTEGER,
+                status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+                reference_no VARCHAR(100),
+                description TEXT,
+                notes TEXT,
+                created_by_user_id INTEGER,
+                cancelled_by_user_id INTEGER,
+                cancelled_at DATETIME,
+                cancel_reason TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_bank_account_credit_limit_transactions_bank_transaction_id
+                    UNIQUE (bank_transaction_id),
+                CONSTRAINT fk_bank_account_credit_limit_transactions_credit_limit_id
+                    FOREIGN KEY (credit_limit_id)
+                    REFERENCES bank_account_credit_limits (id)
+                    ON DELETE RESTRICT,
+                CONSTRAINT fk_bank_account_credit_limit_transactions_bank_transaction_id
+                    FOREIGN KEY (bank_transaction_id)
+                    REFERENCES bank_transactions (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_bank_account_credit_limit_transactions_created_by_user_id
+                    FOREIGN KEY (created_by_user_id)
+                    REFERENCES users (id)
+                    ON DELETE SET NULL,
+                CONSTRAINT fk_bank_account_credit_limit_transactions_cancelled_by_user_id
+                    FOREIGN KEY (cancelled_by_user_id)
+                    REFERENCES users (id)
+                    ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_credit_limit_id
+            ON bank_account_credit_limit_transactions (credit_limit_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_transaction_type
+            ON bank_account_credit_limit_transactions (transaction_type)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_transaction_date
+            ON bank_account_credit_limit_transactions (transaction_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_effective_date
+            ON bank_account_credit_limit_transactions (effective_date)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_currency_code
+            ON bank_account_credit_limit_transactions (currency_code)
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_bank_transaction_id
+            ON bank_account_credit_limit_transactions (bank_transaction_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_status
+            ON bank_account_credit_limit_transactions (status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_reference_no
+            ON bank_account_credit_limit_transactions (reference_no)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_created_by_user_id
+            ON bank_account_credit_limit_transactions (created_by_user_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_bank_account_credit_limit_transactions_cancelled_by_user_id
+            ON bank_account_credit_limit_transactions (cancelled_by_user_id)
+            """,
+        ),
+        description=(
+            "Kredili / limitli mevduat hareket altyapısını oluşturur. "
+            "Limit kullanımı, ödeme, faiz, masraf ve düzeltme hareketleri için işlem tarihi ile faize etki tarihini ayrı tutar. "
+            "Ödeme valörü T+1 mantığı servis katmanında bu tablo üzerinden uygulanacaktır."
+        ),
+    ),
+
 )
 
 

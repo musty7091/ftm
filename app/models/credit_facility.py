@@ -15,6 +15,8 @@ from app.models.enums import (
     CreditCardStatementStatus,
     CreditCardTransactionStatus,
     CreditCardType,
+    CreditLimitTransactionStatus,
+    CreditLimitTransactionType,
     CreditLimitType,
     CreditLimitUsageMode,
     CurrencyCode,
@@ -602,10 +604,142 @@ class BankAccountCreditLimit(Base):
 
     bank_account = relationship("BankAccount")
 
+    transactions: Mapped[List["BankAccountCreditLimitTransaction"]] = relationship(
+        "BankAccountCreditLimitTransaction",
+        back_populates="credit_limit",
+        cascade="save-update, merge",
+    )
+
     def __repr__(self) -> str:
         return (
             f"<BankAccountCreditLimit id={self.id} bank_account_id={self.bank_account_id} "
             f"limit_name={self.limit_name!r} limit_type={self.limit_type!r}>"
+        )
+
+
+class BankAccountCreditLimitTransaction(Base):
+    __tablename__ = "bank_account_credit_limit_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    credit_limit_id: Mapped[int] = mapped_column(
+        ForeignKey("bank_account_credit_limits.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    transaction_type: Mapped[CreditLimitTransactionType] = mapped_column(
+        Enum(
+            CreditLimitTransactionType,
+            native_enum=False,
+            validate_strings=True,
+            length=30,
+            name="credit_limit_transaction_type",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    transaction_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
+    currency_code: Mapped[CurrencyCode] = mapped_column(
+        Enum(
+            CurrencyCode,
+            native_enum=False,
+            validate_strings=True,
+            length=10,
+            name="credit_limit_transaction_currency_code",
+        ),
+        nullable=False,
+        default=CurrencyCode.TRY,
+        server_default=CurrencyCode.TRY.value,
+    )
+
+    bank_transaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("bank_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+
+    status: Mapped[CreditLimitTransactionStatus] = mapped_column(
+        Enum(
+            CreditLimitTransactionStatus,
+            native_enum=False,
+            validate_strings=True,
+            length=30,
+            name="credit_limit_transaction_status",
+        ),
+        nullable=False,
+        default=CreditLimitTransactionStatus.ACTIVE,
+        server_default=CreditLimitTransactionStatus.ACTIVE.value,
+        index=True,
+    )
+
+    reference_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    credit_limit: Mapped["BankAccountCreditLimit"] = relationship(
+        "BankAccountCreditLimit",
+        back_populates="transactions",
+    )
+
+    bank_transaction = relationship("BankTransaction")
+
+    created_by_user = relationship(
+        "User",
+        foreign_keys=[created_by_user_id],
+    )
+
+    cancelled_by_user = relationship(
+        "User",
+        foreign_keys=[cancelled_by_user_id],
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<BankAccountCreditLimitTransaction id={self.id} "
+            f"credit_limit_id={self.credit_limit_id} "
+            f"transaction_type={self.transaction_type!r} amount={self.amount} "
+            f"status={self.status!r}>"
         )
 
 
@@ -615,4 +749,5 @@ __all__ = [
     "CreditCardTransaction",
     "CreditCardPayment",
     "BankAccountCreditLimit",
+    "BankAccountCreditLimitTransaction",
 ]

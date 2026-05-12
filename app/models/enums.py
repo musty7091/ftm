@@ -49,6 +49,10 @@ class FinancialSourceType(StrEnum):
     RECEIVED_CHECK = "RECEIVED_CHECK"
     POS_SETTLEMENT = "POS_SETTLEMENT"
     CREDIT_CARD_PAYMENT = "CREDIT_CARD_PAYMENT"
+    CREDIT_LIMIT_USAGE = "CREDIT_LIMIT_USAGE"
+    CREDIT_LIMIT_PAYMENT = "CREDIT_LIMIT_PAYMENT"
+    CREDIT_LIMIT_INTEREST = "CREDIT_LIMIT_INTEREST"
+    CREDIT_LIMIT_FEE = "CREDIT_LIMIT_FEE"
     MANUAL_ADJUSTMENT = "MANUAL_ADJUSTMENT"
     OTHER = "OTHER"
 
@@ -156,6 +160,24 @@ class CreditLimitType(StrEnum):
 class CreditLimitUsageMode(StrEnum):
     AUTO_FROM_BANK_BALANCE = "AUTO_FROM_BANK_BALANCE"
     MANUAL = "MANUAL"
+    TRANSACTION_BASED = "TRANSACTION_BASED"
+
+
+class CreditLimitTransactionType(StrEnum):
+    USAGE = "USAGE"
+    PAYMENT = "PAYMENT"
+    INTEREST = "INTEREST"
+    FEE = "FEE"
+    ADJUSTMENT = "ADJUSTMENT"
+
+
+class CreditLimitTransactionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CANCELLED = "CANCELLED"
+
+
+class CreditLimitPeriodType(StrEnum):
+    MONTHLY = "MONTHLY"
 
 
 class InterestPeriod(StrEnum):
