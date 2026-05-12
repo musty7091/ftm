@@ -13,7 +13,18 @@ from app.core.config import settings
 from app.models.bank import Bank, BankAccount
 from app.models.business_partner import BusinessPartner
 from app.models.check import IssuedCheck, ReceivedCheck
+from app.models.credit_facility import (
+    BankAccountCreditLimit,
+    BankAccountCreditLimitTransaction,
+    CreditCard,
+    CreditCardPayment,
+    CreditCardTransaction,
+)
 from app.services.bank_transaction_service import get_bank_account_balance_summary
+from app.services.credit_facility_service import (
+    get_credit_card_debt_summary,
+    get_credit_limit_debt_summary,
+)
 from app.services.risk_service import get_all_bank_risk_summaries
 from app.services.transfer_recommendation_service import get_all_transfer_recommendations
 
@@ -80,6 +91,18 @@ def _to_excel_value(value: Any) -> Any:
     return value
 
 
+def _enum_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    enum_value = getattr(value, "value", None)
+
+    if enum_value is not None:
+        return str(enum_value)
+
+    return str(value)
+
+
 def _format_money_text(value: object) -> str:
     decimal_value = _as_decimal(value)
 
@@ -140,11 +163,11 @@ def _apply_status_colors(ws, status_column: int, start_row: int = 2) -> None:
             cell.fill = PatternFill("solid", fgColor=COLOR_RED)
             cell.font = Font(color=COLOR_DARK_RED, bold=True)
 
-        elif status in {"TAKIP", "GIVEN", "PREPARED", "PORTFOLIO", "IN_COLLECTION", "GIVEN_TO_BANK"}:
+        elif status in {"TAKIP", "GIVEN", "PREPARED", "PORTFOLIO", "IN_COLLECTION", "GIVEN_TO_BANK", "PENDING", "IN_STATEMENT"}:
             cell.fill = PatternFill("solid", fgColor=COLOR_YELLOW)
             cell.font = Font(color="7F6000", bold=True)
 
-        elif status in {"OK", "PAID", "COLLECTED", "AKTIF", "REALIZED"}:
+        elif status in {"OK", "PAID", "COLLECTED", "AKTIF", "REALIZED", "RECORDED", "ACTIVE"}:
             cell.fill = PatternFill("solid", fgColor=COLOR_GREEN)
             cell.font = Font(color=COLOR_DARK_GREEN, bold=True)
 
@@ -697,6 +720,362 @@ def _create_received_checks_sheet(wb: Workbook, session: Session) -> None:
     )
 
 
+def _create_credit_card_summary_sheet(wb: Workbook, session: Session) -> None:
+    ws = wb.create_sheet(_safe_sheet_title("Kredi Kartı Özeti"))
+
+    rows = []
+
+    statement = (
+        select(CreditCard, Bank)
+        .join(Bank, CreditCard.bank_id == Bank.id)
+        .order_by(Bank.name, CreditCard.card_name)
+    )
+
+    for credit_card, bank in session.execute(statement).all():
+        summary = get_credit_card_debt_summary(
+            session,
+            credit_card_id=int(credit_card.id),
+        )
+
+        rows.append(
+            [
+                bank.name,
+                credit_card.card_name,
+                _enum_value(credit_card.card_type),
+                _enum_value(credit_card.card_network),
+                credit_card.last_four_digits or "",
+                _enum_value(credit_card.currency_code),
+                summary["credit_limit"],
+                summary["purchase_total"],
+                summary["payment_total"],
+                summary["remaining_debt"],
+                summary["available_limit"],
+                credit_card.statement_cut_day,
+                credit_card.payment_due_day,
+                "AKTIF" if credit_card.is_active else "PASIF",
+                credit_card.notes,
+            ]
+        )
+
+    _write_table(
+        ws,
+        [
+            "Banka",
+            "Kart Adı",
+            "Kart Türü",
+            "Kart Ağı",
+            "Son 4 Hane",
+            "Para Birimi",
+            "Kart Limiti",
+            "Toplam Harcama",
+            "Toplam Ödeme",
+            "Kalan Borç",
+            "Kullanılabilir Limit",
+            "Hesap Kesim Günü",
+            "Son Ödeme Günü",
+            "Durum",
+            "Not",
+        ],
+        rows,
+        money_columns=[7, 8, 9, 10, 11],
+        status_column=14,
+    )
+
+
+def _create_credit_card_transactions_sheet(wb: Workbook, session: Session) -> None:
+    ws = wb.create_sheet(_safe_sheet_title("Kredi Kartı Harcamaları"))
+
+    rows = []
+
+    statement = (
+        select(CreditCardTransaction, CreditCard, Bank)
+        .join(CreditCard, CreditCardTransaction.credit_card_id == CreditCard.id)
+        .join(Bank, CreditCard.bank_id == Bank.id)
+        .order_by(
+            CreditCardTransaction.transaction_date.desc(),
+            CreditCardTransaction.id.desc(),
+        )
+    )
+
+    for transaction, credit_card, bank in session.execute(statement).all():
+        cancelled_at = getattr(transaction, "cancelled_at", None)
+
+        rows.append(
+            [
+                transaction.id,
+                bank.name,
+                credit_card.card_name,
+                transaction.transaction_date,
+                transaction.merchant_name,
+                transaction.description,
+                transaction.amount,
+                _enum_value(transaction.currency_code),
+                transaction.installment_count,
+                transaction.installment_no,
+                _enum_value(transaction.status),
+                getattr(transaction, "created_by_user_id", None),
+                getattr(transaction, "cancelled_by_user_id", None),
+                cancelled_at,
+                getattr(transaction, "cancel_reason", None),
+                transaction.reference_no,
+                transaction.notes,
+            ]
+        )
+
+    _write_table(
+        ws,
+        [
+            "ID",
+            "Banka",
+            "Kart Adı",
+            "İşlem Tarihi",
+            "İşyeri / Açıklama",
+            "Detay Açıklama",
+            "Tutar",
+            "Para Birimi",
+            "Taksit Sayısı",
+            "Taksit No",
+            "Durum",
+            "Oluşturan Kullanıcı ID",
+            "İptal Eden Kullanıcı ID",
+            "İptal Zamanı",
+            "İptal Nedeni",
+            "Referans No",
+            "Not",
+        ],
+        rows,
+        money_columns=[7],
+        date_columns=[4, 14],
+        status_column=11,
+    )
+
+
+def _create_credit_card_payments_sheet(wb: Workbook, session: Session) -> None:
+    ws = wb.create_sheet(_safe_sheet_title("Kredi Kartı Ödemeleri"))
+
+    payment_account_alias = aliased(BankAccount)
+    payment_bank_alias = aliased(Bank)
+
+    rows = []
+
+    statement = (
+        select(CreditCardPayment, CreditCard, payment_account_alias, payment_bank_alias)
+        .outerjoin(CreditCard, CreditCardPayment.credit_card_id == CreditCard.id)
+        .outerjoin(
+            payment_account_alias,
+            CreditCardPayment.payment_bank_account_id == payment_account_alias.id,
+        )
+        .outerjoin(payment_bank_alias, payment_account_alias.bank_id == payment_bank_alias.id)
+        .order_by(
+            CreditCardPayment.payment_date.desc(),
+            CreditCardPayment.id.desc(),
+        )
+    )
+
+    for payment, credit_card, payment_account, payment_bank in session.execute(statement).all():
+        rows.append(
+            [
+                payment.id,
+                credit_card.card_name if credit_card else "",
+                payment_bank.name if payment_bank else "",
+                payment_account.account_name if payment_account else "",
+                payment.payment_date,
+                payment.amount,
+                _enum_value(payment.status),
+                payment.bank_transaction_id,
+                payment.created_by_user_id,
+                payment.cancelled_by_user_id,
+                payment.cancelled_at,
+                payment.cancel_reason,
+                payment.reference_no,
+                payment.notes,
+            ]
+        )
+
+    _write_table(
+        ws,
+        [
+            "ID",
+            "Kart Adı",
+            "Ödeme Bankası",
+            "Ödeme Hesabı",
+            "Ödeme Tarihi",
+            "Tutar",
+            "Durum",
+            "Banka Hareket ID",
+            "Oluşturan Kullanıcı ID",
+            "İptal Eden Kullanıcı ID",
+            "İptal Zamanı",
+            "İptal Nedeni",
+            "Referans No",
+            "Not",
+        ],
+        rows,
+        money_columns=[6],
+        date_columns=[5, 11],
+        status_column=7,
+    )
+
+
+def _create_credit_limit_summary_sheet(wb: Workbook, session: Session) -> None:
+    ws = wb.create_sheet(_safe_sheet_title("Limitli Hesap Özeti"))
+
+    rows = []
+
+    statement = (
+        select(BankAccountCreditLimit, BankAccount, Bank)
+        .join(BankAccount, BankAccountCreditLimit.bank_account_id == BankAccount.id)
+        .join(Bank, BankAccount.bank_id == Bank.id)
+        .order_by(Bank.name, BankAccount.account_name, BankAccountCreditLimit.limit_name)
+    )
+
+    for credit_limit, bank_account, bank in session.execute(statement).all():
+        summary = get_credit_limit_debt_summary(
+            session,
+            credit_limit_id=int(credit_limit.id),
+        )
+
+        rows.append(
+            [
+                bank.name,
+                bank_account.account_name,
+                credit_limit.limit_name,
+                _enum_value(credit_limit.limit_type),
+                _enum_value(credit_limit.usage_mode),
+                _enum_value(credit_limit.currency_code),
+                summary["limit_amount"],
+                summary["principal_debt"],
+                summary["interest_debt"],
+                summary["fee_debt"],
+                summary["total_debt"],
+                summary["available_limit"],
+                summary["booked_principal_debt"],
+                summary["booked_interest_debt"],
+                summary["booked_fee_debt"],
+                summary["booked_total_debt"],
+                summary["booked_available_limit"],
+                summary["transaction_count"],
+                summary["effective_transaction_count"],
+                "AKTIF" if credit_limit.is_active else "PASIF",
+                credit_limit.contract_start_date,
+                credit_limit.contract_end_date,
+                credit_limit.notes,
+            ]
+        )
+
+    _write_table(
+        ws,
+        [
+            "Banka",
+            "Hesap",
+            "Limit Adı",
+            "Limit Tipi",
+            "Kullanım Takibi",
+            "Para Birimi",
+            "Limit Tutarı",
+            "Ana Para Borcu",
+            "Faiz Borcu",
+            "Masraf Borcu",
+            "Toplam Borç",
+            "Kullanılabilir Limit",
+            "Kayıtlı Ana Para Borcu",
+            "Kayıtlı Faiz Borcu",
+            "Kayıtlı Masraf Borcu",
+            "Kayıtlı Toplam Borç",
+            "Kayıtlı Kullanılabilir Limit",
+            "Hareket Sayısı",
+            "Etkin Hareket Sayısı",
+            "Durum",
+            "Sözleşme Başlangıç",
+            "Sözleşme Bitiş",
+            "Not",
+        ],
+        rows,
+        money_columns=[7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+        date_columns=[21, 22],
+        status_column=20,
+    )
+
+
+def _create_credit_limit_transactions_sheet(wb: Workbook, session: Session) -> None:
+    ws = wb.create_sheet(_safe_sheet_title("Limitli Hesap Hareketleri"))
+
+    rows = []
+
+    statement = (
+        select(BankAccountCreditLimitTransaction, BankAccountCreditLimit, BankAccount, Bank)
+        .join(
+            BankAccountCreditLimit,
+            BankAccountCreditLimitTransaction.credit_limit_id == BankAccountCreditLimit.id,
+        )
+        .join(BankAccount, BankAccountCreditLimit.bank_account_id == BankAccount.id)
+        .join(Bank, BankAccount.bank_id == Bank.id)
+        .order_by(
+            BankAccountCreditLimitTransaction.transaction_date.desc(),
+            BankAccountCreditLimitTransaction.id.desc(),
+        )
+    )
+
+    for transaction, credit_limit, bank_account, bank in session.execute(statement).all():
+        rows.append(
+            [
+                transaction.id,
+                bank.name,
+                bank_account.account_name,
+                credit_limit.limit_name,
+                _enum_value(transaction.transaction_type),
+                transaction.transaction_date,
+                transaction.effective_date,
+                transaction.amount,
+                transaction.principal_amount,
+                transaction.interest_amount,
+                transaction.fee_amount,
+                _enum_value(transaction.currency_code),
+                _enum_value(transaction.status),
+                transaction.bank_transaction_id,
+                transaction.created_by_user_id,
+                transaction.cancelled_by_user_id,
+                transaction.cancelled_at,
+                transaction.cancel_reason,
+                transaction.reference_no,
+                transaction.description,
+                transaction.notes,
+            ]
+        )
+
+    _write_table(
+        ws,
+        [
+            "ID",
+            "Banka",
+            "Hesap",
+            "Limit Adı",
+            "Hareket Tipi",
+            "İşlem Tarihi",
+            "Faize Etki Tarihi",
+            "Tutar",
+            "Ana Para",
+            "Faiz",
+            "Masraf",
+            "Para Birimi",
+            "Durum",
+            "Banka Hareket ID",
+            "Oluşturan Kullanıcı ID",
+            "İptal Eden Kullanıcı ID",
+            "İptal Zamanı",
+            "İptal Nedeni",
+            "Referans No",
+            "Açıklama",
+            "Not",
+        ],
+        rows,
+        money_columns=[8, 9, 10, 11],
+        date_columns=[6, 7, 17],
+        status_column=13,
+    )
+
+
+
 def export_financial_reports_to_excel(session: Session, *, as_of_date: date | None = None) -> Path:
     report_date = as_of_date or date.today()
 
@@ -714,6 +1093,11 @@ def export_financial_reports_to_excel(session: Session, *, as_of_date: date | No
     _create_bank_balances_sheet(wb, session)
     _create_risk_sheets(wb, session, report_date)
     _create_transfer_recommendations_sheet(wb, session, report_date)
+    _create_credit_card_summary_sheet(wb, session)
+    _create_credit_card_transactions_sheet(wb, session)
+    _create_credit_card_payments_sheet(wb, session)
+    _create_credit_limit_summary_sheet(wb, session)
+    _create_credit_limit_transactions_sheet(wb, session)
     _create_issued_checks_sheet(wb, session)
     _create_received_checks_sheet(wb, session)
 
