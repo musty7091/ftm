@@ -775,6 +775,7 @@ def create_credit_card_transaction(
         status=CreditCardTransactionStatus.PENDING,
         reference_no=clean_reference_no,
         notes=clean_notes,
+        created_by_user_id=created_by_user_id,
     )
 
     session.add(transaction)
@@ -802,6 +803,7 @@ def cancel_credit_card_transaction(
     *,
     transaction_id: int,
     updated_by_user_id: Optional[int],
+    cancel_reason: Optional[str] = None,
 ) -> CreditCardTransaction:
     clean_transaction_id = _clean_positive_int(transaction_id, "Harcama ID")
     transaction = session.get(CreditCardTransaction, clean_transaction_id)
@@ -818,6 +820,8 @@ def cancel_credit_card_transaction(
 
     if transaction.status == CreditCardTransactionStatus.CANCELLED:
         return transaction
+
+    clean_cancel_reason = _clean_optional_text(cancel_reason) or "Kullanıcı tarafından iptal edildi."
 
     active_transactions = list_credit_card_transactions(
         session,
@@ -864,6 +868,9 @@ def cancel_credit_card_transaction(
 
     old_values = _serialize_credit_card_transaction(transaction)
     transaction.status = CreditCardTransactionStatus.CANCELLED
+    transaction.cancelled_by_user_id = updated_by_user_id
+    transaction.cancelled_at = datetime.now()
+    transaction.cancel_reason = clean_cancel_reason
 
     session.flush()
 

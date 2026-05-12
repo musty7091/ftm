@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -636,6 +636,42 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
         description=(
             "Kredili / limitli mevduat hareketlerine ödeme dağılım alanları ekler. "
             "Limit kullanımı ana para, faiz tahakkuku faiz, masraf hareketi masraf ve eski ödeme hareketleri ana para dağılımı olarak geriye dönük doldurulur."
+        ),
+    ),
+
+    DatabaseMigration(
+        migration_id="20260513_0008_credit_card_transaction_audit_fields",
+        name="Credit card transaction audit fields",
+        target_version=8,
+        statements=(
+            """
+            ALTER TABLE credit_card_transactions
+            ADD COLUMN created_by_user_id INTEGER
+            """,
+            """
+            ALTER TABLE credit_card_transactions
+            ADD COLUMN cancelled_by_user_id INTEGER
+            """,
+            """
+            ALTER TABLE credit_card_transactions
+            ADD COLUMN cancelled_at DATETIME
+            """,
+            """
+            ALTER TABLE credit_card_transactions
+            ADD COLUMN cancel_reason TEXT
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_created_by_user_id
+            ON credit_card_transactions (created_by_user_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_credit_card_transactions_cancelled_by_user_id
+            ON credit_card_transactions (cancelled_by_user_id)
+            """,
+        ),
+        description=(
+            "Kredi kartı harcama kayıtlarına oluşturan kullanıcı ve iptal bilgileri ekler. "
+            "Kredi kartı ödemeleri ve kredili/limitli mevduat hareketleriyle audit tutarlılığını sağlar."
         ),
     ),
 

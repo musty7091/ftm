@@ -336,6 +336,21 @@ class CreditCardTransaction(Base):
     reference_no: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -357,6 +372,16 @@ class CreditCardTransaction(Base):
     statement: Mapped[Optional["CreditCardStatement"]] = relationship(
         "CreditCardStatement",
         back_populates="transactions",
+    )
+
+    created_by_user = relationship(
+        "User",
+        foreign_keys=[created_by_user_id],
+    )
+
+    cancelled_by_user = relationship(
+        "User",
+        foreign_keys=[cancelled_by_user_id],
     )
 
     def __repr__(self) -> str:
