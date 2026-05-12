@@ -6,12 +6,12 @@ from datetime import datetime
 
 APP_CODE = "FTM"
 APP_NAME = "FTM Finans Takip Merkezi"
-APP_VERSION = "0.8.4"
+APP_VERSION = "0.8.5"
 APP_RELEASE_STAGE = "P2"
 APP_RELEASE_CHANNEL = "local-desktop"
 APP_BUILD_DATE = "2026-05-12"
 
-DATABASE_SCHEMA_VERSION = 6
+DATABASE_SCHEMA_VERSION = 7
 MIN_SUPPORTED_DATABASE_SCHEMA_VERSION = 1
 
 RELEASE_NOTES = (
@@ -24,6 +24,7 @@ RELEASE_NOTES = (
     "P2 Kredi kartları modülü tek para birimi TRY/TL olacak şekilde DB schema v4 seviyesine alındı.",
     "P2 Kredi kartı doğrudan ödeme altyapısı için DB schema v5 hazırlığı eklendi.",
     "P2 Kredili / limitli mevduat hareketleri için DB schema v6 altyapısı eklendi.",
+    "P2 Kredili / limitli mevduat ödeme dağılımı için DB schema v7 altyapısı eklendi.",
 )
 
 

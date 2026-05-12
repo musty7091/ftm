@@ -651,6 +651,27 @@ class BankAccountCreditLimitTransaction(Base):
         server_default="0.00",
     )
 
+    principal_amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
+    interest_amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
+    fee_amount: Mapped[Decimal] = mapped_column(
+        MONEY,
+        nullable=False,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+
     currency_code: Mapped[CurrencyCode] = mapped_column(
         Enum(
             CurrencyCode,

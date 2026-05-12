@@ -30,6 +30,7 @@ from app.models.credit_facility import BankAccountCreditLimit
 from app.services.credit_facility_service import (
     CreditFacilityServiceError,
     calculate_credit_limit_period_report,
+    create_credit_limit_period_interest_transaction,
 )
 from app.reports.credit_limit_period_pdf_report import (
     CreditLimitPeriodPdfReportError,
@@ -184,6 +185,19 @@ QPushButton#ExportButton:hover {
     background-color: #15803d;
 }
 
+QPushButton#InterestButton {
+    background-color: #7c3aed;
+    color: #ffffff;
+    border: 1px solid #a855f7;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-weight: 900;
+}
+
+QPushButton#InterestButton:hover {
+    background-color: #6d28d9;
+}
+
 QPushButton#SecondaryButton {
     background-color: #172033;
     color: #cbd5e1;
@@ -284,7 +298,7 @@ class CreditLimitPeriodReportDialog(QDialog):
 
         self.subtitle_label = QLabel(
             "Seçili limitli hesabın dönem içi kullanımlarını, ödemelerini, T+1 ödeme valörünü ve günlük faiz hesabını gösterir. "
-            "Bu ekran yalnızca rapor üretir; faiz kaydı oluşturmaz."
+            "Hesaplanan faiz istenirse tahakkuk hareketi olarak kaydedilebilir; bu işlem banka hesabından para düşmez."
         )
         self.subtitle_label.setObjectName("DialogSubtitle")
         self.subtitle_label.setWordWrap(True)
@@ -309,6 +323,10 @@ class CreditLimitPeriodReportDialog(QDialog):
         self.refresh_button = QPushButton("Raporu Hesapla")
         self.refresh_button.setObjectName("PrimaryButton")
         self.refresh_button.clicked.connect(self.refresh_report)
+
+        self.save_interest_button = QPushButton("Faizi Kaydet")
+        self.save_interest_button.setObjectName("InterestButton")
+        self.save_interest_button.clicked.connect(self.save_interest_accrual)
 
         self.export_pdf_button = QPushButton("PDF Oluştur")
         self.export_pdf_button.setObjectName("ExportButton")
@@ -364,6 +382,7 @@ class CreditLimitPeriodReportDialog(QDialog):
         controls_layout.addWidget(self._plain_label("Dönem Bitişi"))
         controls_layout.addWidget(self.period_end_input)
         controls_layout.addWidget(self.refresh_button)
+        controls_layout.addWidget(self.save_interest_button)
         controls_layout.addWidget(self.export_pdf_button)
         controls_layout.addStretch(1)
 
@@ -395,7 +414,8 @@ class CreditLimitPeriodReportDialog(QDialog):
 
         help_label = QLabel(
             "Not: Limit kullanımı aynı gün faize girer. Limit ödemesi bankaların valör uygulamasına uygun şekilde ertesi gün borçtan düşer. "
-            "Bu nedenle aynı gün kullanılıp kapatılan limit için en az 1 günlük faiz oluşabilir."
+            "Bu nedenle aynı gün kullanılıp kapatılan limit için en az 1 günlük faiz oluşabilir. "
+            "Faizi Kaydet işlemi yalnızca faiz tahakkuku oluşturur; banka hesabından otomatik para çıkışı yapmaz."
         )
         help_label.setObjectName("DialogHelp")
         help_label.setWordWrap(True)
@@ -517,6 +537,110 @@ class CreditLimitPeriodReportDialog(QDialog):
             )
             self.reject()
 
+    def save_interest_accrual(self) -> None:
+        period_start = self._selected_date(self.period_start_input)
+        period_end = self._selected_date(self.period_end_input)
+
+        if period_end < period_start:
+            QMessageBox.warning(
+                self,
+                "Geçersiz Dönem",
+                "Dönem bitiş tarihi başlangıç tarihinden eski olamaz.",
+            )
+            return
+
+        try:
+            with session_scope() as session:
+                report = calculate_credit_limit_period_report(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                calculated_interest = self._to_decimal(report.get("calculated_interest_total"))
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Faiz Hesaplanamadı",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Faiz tahakkuku ön kontrolü yapılırken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        if calculated_interest <= Decimal("0.00"):
+            QMessageBox.information(
+                self,
+                "Kaydedilecek Faiz Yok",
+                "Seçili dönem için kaydedilecek faiz tutarı oluşmamış.",
+            )
+            return
+
+        period_text = f"{self._format_date(period_start)} - {self._format_date(period_end)}"
+        question = (
+            f"Seçili dönem için {self._format_money(calculated_interest)} faiz tahakkuku oluşturulacak.\n\n"
+            f"Dönem: {period_text}\n\n"
+            "Bu işlem banka hesabından para düşmez. Sadece kredili / limitli hesap üzerinde faiz borcu oluşturur.\n\n"
+            "Devam etmek istiyor musun?"
+        )
+
+        answer = QMessageBox.question(
+            self,
+            "Faizi Kaydet",
+            question,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                transaction = create_credit_limit_period_interest_transaction(
+                    session,
+                    credit_limit_id=self.credit_limit_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                    transaction_date=period_end,
+                    notes=None,
+                    created_by_user_id=self._current_user_id(),
+                )
+
+        except CreditFacilityServiceError as exc:
+            QMessageBox.warning(
+                self,
+                "Faiz Kaydedilemedi",
+                str(exc),
+            )
+            return
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Beklenmeyen Hata",
+                f"Faiz tahakkuku kaydedilirken beklenmeyen hata oluştu:\n\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Faiz Kaydedildi",
+            (
+                "Dönem faizi tahakkuk hareketi olarak kaydedildi.\n\n"
+                f"Tutar: {self._format_money(transaction.amount)}\n"
+                "Not: Bu işlem banka hesabından para düşmedi. Ödeme ayrıca Limit Öde işlemiyle yapılmalıdır."
+            ),
+        )
+        self.refresh_report()
+
     def create_pdf_report(self) -> None:
         period_start = self._selected_date(self.period_start_input)
         period_end = self._selected_date(self.period_end_input)
@@ -633,6 +757,20 @@ class CreditLimitPeriodReportDialog(QDialog):
             return f"Kullanıcı ID: {user_id}"
 
         return "FTM Kullanıcısı"
+
+    def _current_user_id(self) -> int | None:
+        if self.current_user is None:
+            return None
+
+        user_id = getattr(self.current_user, "id", None)
+
+        if user_id is None:
+            return None
+
+        try:
+            return int(user_id)
+        except (TypeError, ValueError):
+            return None
 
     def refresh_report(self) -> None:
         period_start = self._selected_date(self.period_start_input)

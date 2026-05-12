@@ -17,7 +17,7 @@ class DatabaseMigrationServiceError(RuntimeError):
 
 
 MIGRATION_TRACKING_TABLE = "schema_migrations"
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -598,6 +598,44 @@ MIGRATIONS: tuple[DatabaseMigration, ...] = (
             "Kredili / limitli mevduat hareket altyapısını oluşturur. "
             "Limit kullanımı, ödeme, faiz, masraf ve düzeltme hareketleri için işlem tarihi ile faize etki tarihini ayrı tutar. "
             "Ödeme valörü T+1 mantığı servis katmanında bu tablo üzerinden uygulanacaktır."
+        ),
+    ),
+    DatabaseMigration(
+        migration_id="20260512_0007_credit_limit_payment_allocation",
+        name="Credit limit payment allocation fields",
+        target_version=7,
+        statements=(
+            """
+            ALTER TABLE bank_account_credit_limit_transactions
+            ADD COLUMN principal_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00
+            """,
+            """
+            ALTER TABLE bank_account_credit_limit_transactions
+            ADD COLUMN interest_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00
+            """,
+            """
+            ALTER TABLE bank_account_credit_limit_transactions
+            ADD COLUMN fee_amount NUMERIC(18, 2) NOT NULL DEFAULT 0.00
+            """,
+            """
+            UPDATE bank_account_credit_limit_transactions
+            SET principal_amount = amount
+            WHERE transaction_type IN ('USAGE', 'PAYMENT', 'ADJUSTMENT')
+            """,
+            """
+            UPDATE bank_account_credit_limit_transactions
+            SET interest_amount = amount
+            WHERE transaction_type = 'INTEREST'
+            """,
+            """
+            UPDATE bank_account_credit_limit_transactions
+            SET fee_amount = amount
+            WHERE transaction_type = 'FEE'
+            """,
+        ),
+        description=(
+            "Kredili / limitli mevduat hareketlerine ödeme dağılım alanları ekler. "
+            "Limit kullanımı ana para, faiz tahakkuku faiz, masraf hareketi masraf ve eski ödeme hareketleri ana para dağılımı olarak geriye dönük doldurulur."
         ),
     ),
 

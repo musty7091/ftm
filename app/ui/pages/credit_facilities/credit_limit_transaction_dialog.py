@@ -274,8 +274,8 @@ class CreditLimitTransactionDialog(QDialog):
         self._summary: dict[str, Any] = {}
 
         self.setWindowTitle("Limit Kullan" if self.is_usage_mode else "Limit Öde")
-        self.resize(760, 640)
-        self.setMinimumSize(660, 540)
+        self.resize(720, 560)
+        self.setMinimumSize(620, 500)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(CREDIT_LIMIT_TRANSACTION_DIALOG_STYLE)
 
@@ -295,11 +295,32 @@ class CreditLimitTransactionDialog(QDialog):
         self.current_debt_input = QLineEdit()
         self.current_debt_input.setReadOnly(True)
 
-        self.payable_debt_input = QLineEdit()
-        self.payable_debt_input.setReadOnly(True)
+        self.payable_principal_debt_input = QLineEdit()
+        self.payable_principal_debt_input.setReadOnly(True)
+
+        self.interest_debt_input = QLineEdit()
+        self.interest_debt_input.setReadOnly(True)
+
+        self.fee_debt_input = QLineEdit()
+        self.fee_debt_input.setReadOnly(True)
+
+        self.total_payable_debt_input = QLineEdit()
+        self.total_payable_debt_input.setReadOnly(True)
 
         self.available_limit_input = QLineEdit()
         self.available_limit_input.setReadOnly(True)
+
+        self.fee_allocation_input = QLineEdit()
+        self.fee_allocation_input.setReadOnly(True)
+
+        self.interest_allocation_input = QLineEdit()
+        self.interest_allocation_input.setReadOnly(True)
+
+        self.principal_allocation_input = QLineEdit()
+        self.principal_allocation_input.setReadOnly(True)
+
+        self.allocation_summary_input = QLineEdit()
+        self.allocation_summary_input.setReadOnly(True)
 
         self.transaction_date_input = NoWheelDateEdit()
         self.transaction_date_input.setCalendarPopup(True)
@@ -319,6 +340,7 @@ class CreditLimitTransactionDialog(QDialog):
         self.amount_input.setMaximum(999999999999.99)
         self.amount_input.setSingleStep(1000.00)
         self.amount_input.setGroupSeparatorShown(True)
+        self.amount_input.valueChanged.connect(self._update_payment_allocation_preview)
 
         self.currency_input = QLineEdit()
         self.currency_input.setReadOnly(True)
@@ -374,11 +396,10 @@ class CreditLimitTransactionDialog(QDialog):
 
         self.subtitle_label.setText(
             "Seçili kredili / limitli hesap için ödeme kaydı oluşturur. "
-            "Banka uygulamalarındaki valör mantığı gereği ödeme, faiz hesabında ertesi gün borçtan düşer."
+            "Sistem ödemeyi otomatik olarak önce masraf, sonra faiz, en son ana para borcuna dağıtır."
         )
         self.warning_label.setText(
-            "Kural: Ödeme bugün kaydedilir; fakat faize etki tarihi ertesi gündür. "
-            "Ödeme tutarı, daha önce kaydedilmiş ödemeler düşüldükten sonra kalan ödenebilir borçla sınırlıdır."
+            "Bilgi: Ödeme banka hesabından işlem tarihinde çıkar. Ana paraya ayrılan bölüm faiz hesabında ertesi gün düşer."
         )
 
     def _build_ui(self) -> None:
@@ -411,27 +432,22 @@ class CreditLimitTransactionDialog(QDialog):
         form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         form_layout.addRow(self._label("Limit Hesabı"), self.limit_info_input)
-        form_layout.addRow(self._label("Limit Tutarı"), self.limit_amount_input)
-        form_layout.addRow(self._label("Faize Esas Borç"), self.current_debt_input)
-
-        if self.is_payment_mode:
-            form_layout.addRow(self._label("Ödenebilir Borç"), self.payable_debt_input)
-
-        form_layout.addRow(self._label("Kullanılabilir Limit"), self.available_limit_input)
-        form_layout.addRow(self._label("İşlem Tarihi"), self.transaction_date_input)
-        form_layout.addRow(self._label("Faize Etki Tarihi"), self.effective_date_input)
-
-        if self.is_payment_mode:
-            form_layout.addRow(self._label("Ödeme Hesabı"), self.payment_account_combo)
-
-        form_layout.addRow(
-            self._label("Kullanım Tutarı" if self.is_usage_mode else "Ödeme Tutarı"),
-            self.amount_input,
-        )
-        form_layout.addRow(self._label("Para Birimi"), self.currency_input)
 
         if self.is_usage_mode:
+            form_layout.addRow(self._label("Limit Tutarı"), self.limit_amount_input)
+            form_layout.addRow(self._label("Kullanılabilir Limit"), self.available_limit_input)
+            form_layout.addRow(self._label("İşlem Tarihi"), self.transaction_date_input)
+            form_layout.addRow(self._label("Faize Etki Tarihi"), self.effective_date_input)
+            form_layout.addRow(self._label("Kullanım Tutarı"), self.amount_input)
+            form_layout.addRow(self._label("Para Birimi"), self.currency_input)
             form_layout.addRow(self._label("Banka Hareketi"), self.create_bank_entry_checkbox)
+        else:
+            form_layout.addRow(self._label("Toplam Ödenecek"), self.total_payable_debt_input)
+            form_layout.addRow(self._label("Ödeme Tutarı"), self.amount_input)
+            form_layout.addRow(self._label("Ödeme Hesabı"), self.payment_account_combo)
+            form_layout.addRow(self._label("İşlem Tarihi"), self.transaction_date_input)
+            form_layout.addRow(self._label("Para Birimi"), self.currency_input)
+            form_layout.addRow(self._label("Dağılım Özeti"), self.allocation_summary_input)
 
         form_layout.addRow(self._label("Referans No"), self.reference_no_input)
         form_layout.addRow(self._label("Açıklama"), self.description_input)
@@ -464,7 +480,7 @@ class CreditLimitTransactionDialog(QDialog):
     def _label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("FormLabel")
-        label.setMinimumWidth(148)
+        label.setMinimumWidth(168)
         return label
 
     def _load_reference_data(self) -> None:
@@ -550,12 +566,19 @@ class CreditLimitTransactionDialog(QDialog):
         self.limit_amount_input.setText(
             self._format_money(self._summary.get("limit_amount", Decimal("0.00")), currency_code)
         )
-        faize_esas_borc = Decimal(self._summary.get("total_debt", Decimal("0.00")) or Decimal("0.00"))
-        odenebilir_borc = Decimal(self._summary.get("booked_total_debt", Decimal("0.00")) or Decimal("0.00"))
-        kullanilabilir_limit = Decimal(self._summary.get("available_limit", Decimal("0.00")) or Decimal("0.00"))
+
+        faize_esas_borc = self._decimal_from_summary("principal_debt")
+        odenebilir_ana_para = self._decimal_from_summary("booked_principal_debt")
+        faiz_borcu = self._decimal_from_summary("booked_interest_debt")
+        masraf_borcu = self._decimal_from_summary("booked_fee_debt")
+        toplam_odenecek_borc = self._decimal_from_summary("booked_total_debt")
+        kullanilabilir_limit = self._decimal_from_summary("available_limit")
 
         self.current_debt_input.setText(self._format_money(faize_esas_borc, currency_code))
-        self.payable_debt_input.setText(self._format_money(odenebilir_borc, currency_code))
+        self.payable_principal_debt_input.setText(self._format_money(odenebilir_ana_para, currency_code))
+        self.interest_debt_input.setText(self._format_money(faiz_borcu, currency_code))
+        self.fee_debt_input.setText(self._format_money(masraf_borcu, currency_code))
+        self.total_payable_debt_input.setText(self._format_money(toplam_odenecek_borc, currency_code))
         self.available_limit_input.setText(self._format_money(kullanilabilir_limit, currency_code))
         self.currency_input.setText(currency_code)
 
@@ -563,13 +586,12 @@ class CreditLimitTransactionDialog(QDialog):
         if self.is_usage_mode:
             maximum_amount = kullanilabilir_limit
         else:
-            maximum_amount = odenebilir_borc
+            maximum_amount = toplam_odenecek_borc
             self._populate_payment_account_combo()
 
-        if self.is_payment_mode and faize_esas_borc != odenebilir_borc and maximum_amount > Decimal("0.00"):
+        if self.is_payment_mode and maximum_amount > Decimal("0.00"):
             self.warning_label.setText(
-                "Bilgi: Faize esas borç, bankanın valör mantığı nedeniyle bugün daha yüksek görünebilir. "
-                "Bu ekranda ödeme tutarı daha önce kaydedilmiş ödemeler düşüldükten sonra kalan ödenebilir borçla sınırlıdır."
+                "Bilgi: Ödeme otomatik dağıtılır. Önce masraf, sonra faiz, kalan varsa ana para kapanır."
             )
 
         if maximum_amount <= Decimal("0.00"):
@@ -588,6 +610,8 @@ class CreditLimitTransactionDialog(QDialog):
             self.amount_input.setMaximum(float(maximum_amount))
             self.amount_input.setValue(float(maximum_amount))
             self.save_button.setEnabled(True)
+
+        self._update_payment_allocation_preview()
 
         if self.is_payment_mode and self.payment_account_combo.count() <= 0:
             self.save_button.setEnabled(False)
@@ -616,6 +640,63 @@ class CreditLimitTransactionDialog(QDialog):
                 preferred_index = index
 
         self.payment_account_combo.setCurrentIndex(preferred_index)
+
+    def _decimal_from_summary(self, key: str) -> Decimal:
+        try:
+            return Decimal(str(self._summary.get(key, Decimal("0.00")) or Decimal("0.00")))
+        except Exception:
+            return Decimal("0.00")
+
+    def _calculate_payment_allocation_preview(self, payment_amount: Decimal) -> dict[str, Decimal]:
+        remaining_amount = max(payment_amount, Decimal("0.00"))
+        fee_debt = self._decimal_from_summary("booked_fee_debt")
+        interest_debt = self._decimal_from_summary("booked_interest_debt")
+        principal_debt = self._decimal_from_summary("booked_principal_debt")
+
+        fee_amount = min(remaining_amount, fee_debt)
+        remaining_amount = max(remaining_amount - fee_amount, Decimal("0.00"))
+
+        interest_amount = min(remaining_amount, interest_debt)
+        remaining_amount = max(remaining_amount - interest_amount, Decimal("0.00"))
+
+        principal_amount = min(remaining_amount, principal_debt)
+
+        return {
+            "fee_amount": fee_amount,
+            "interest_amount": interest_amount,
+            "principal_amount": principal_amount,
+        }
+
+    def _update_payment_allocation_preview(self) -> None:
+        if not self.is_payment_mode:
+            return
+
+        currency_code = str(self._credit_limit_data.get("currency_code") or "-")
+        amount = Decimal(str(self.amount_input.value()))
+        allocation = self._calculate_payment_allocation_preview(amount)
+
+        self.fee_allocation_input.setText(
+            self._format_money(allocation["fee_amount"], currency_code)
+        )
+        self.interest_allocation_input.setText(
+            self._format_money(allocation["interest_amount"], currency_code)
+        )
+        self.principal_allocation_input.setText(
+            self._format_money(allocation["principal_amount"], currency_code)
+        )
+
+        parts = []
+        if allocation["fee_amount"] > Decimal("0.00"):
+            parts.append(f"Masraf: {self._format_money(allocation['fee_amount'], currency_code)}")
+        if allocation["interest_amount"] > Decimal("0.00"):
+            parts.append(f"Faiz: {self._format_money(allocation['interest_amount'], currency_code)}")
+        if allocation["principal_amount"] > Decimal("0.00"):
+            parts.append(f"Ana para: {self._format_money(allocation['principal_amount'], currency_code)}")
+
+        if not parts:
+            self.allocation_summary_input.setText("Ödenecek tutar yok")
+        else:
+            self.allocation_summary_input.setText(" | ".join(parts))
 
     def _selected_payment_account_id(self) -> int | None:
         if not self.is_payment_mode:

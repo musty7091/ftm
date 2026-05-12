@@ -288,8 +288,10 @@ class CreditFacilitiesPage(QWidget):
                 "Para",
                 "Limit",
                 "Faize Esas Borç",
-                "Ödenebilir Borç",
-                "Faiz / Masraf",
+                "Ödenebilir Ana Para",
+                "Faiz Borcu",
+                "Masraf Borcu",
+                "Toplam Ödenecek",
                 "Kullanılabilir",
                 "Faiz Oranı",
                 "Gün",
@@ -305,6 +307,9 @@ class CreditFacilitiesPage(QWidget):
                 "Faize Etki Tarihi",
                 "Tür",
                 "Tutar",
+                "Ana Para",
+                "Faiz",
+                "Masraf",
                 "Durum",
                 "Referans",
                 "Açıklama",
@@ -391,11 +396,11 @@ class CreditFacilitiesPage(QWidget):
                 first_value_label=self.limit_count_value_label,
                 second_label="Toplam limit",
                 second_value_label=self.limit_total_value_label,
-                third_label="Ödenebilir borç",
+                third_label="Toplam ödenecek",
                 third_value_label=self.limit_debt_value_label,
                 fourth_label="Kullanılabilir",
                 fourth_value_label=self.limit_available_value_label,
-                hint="Ödenebilir borç kayıtlı gerçek borçtur; faize esas borç ve kullanılabilir limit valör tarihine göre hesaplanır.",
+                hint="Faize esas borç valör tarihine göre, toplam ödenecek borç ise ana para + faiz + masraf toplamına göre hesaplanır.",
             )
         )
 
@@ -1324,10 +1329,11 @@ class CreditFacilitiesPage(QWidget):
 
                     limit_amount = Decimal(debt_summary["limit_amount"] or Decimal("0.00"))
                     principal_debt = Decimal(debt_summary["principal_debt"] or Decimal("0.00"))
-                    interest_fee_total = Decimal(debt_summary["interest_total"] or Decimal("0.00")) + Decimal(
-                        debt_summary["fee_total"] or Decimal("0.00")
+                    booked_principal_debt = Decimal(
+                        debt_summary.get("booked_principal_debt") or Decimal("0.00")
                     )
-                    total_debt = Decimal(debt_summary["total_debt"] or Decimal("0.00"))
+                    interest_debt = Decimal(debt_summary.get("booked_interest_debt") or debt_summary.get("interest_debt") or Decimal("0.00"))
+                    fee_debt = Decimal(debt_summary.get("booked_fee_debt") or debt_summary.get("fee_debt") or Decimal("0.00"))
                     booked_total_debt = Decimal(debt_summary["booked_total_debt"] or Decimal("0.00"))
                     available_limit = Decimal(debt_summary["available_limit"] or Decimal("0.00"))
 
@@ -1356,8 +1362,10 @@ class CreditFacilitiesPage(QWidget):
                             currency_code,
                             self._format_money(limit_amount, currency_code),
                             self._format_money(principal_debt, currency_code),
+                            self._format_money(booked_principal_debt, currency_code),
+                            self._format_money(interest_debt, currency_code),
+                            self._format_money(fee_debt, currency_code),
                             self._format_money(booked_total_debt, currency_code),
-                            self._format_money(interest_fee_total, currency_code),
                             self._format_money(available_limit, currency_code),
                             f"% {self._format_decimal(credit_limit.interest_rate)}",
                             self._format_day(credit_limit.interest_day),
@@ -1598,6 +1606,10 @@ class CreditFacilitiesPage(QWidget):
                         getattr(transaction.status, "value", transaction.status) or ""
                     )
 
+                    principal_amount = Decimal(getattr(transaction, "principal_amount", None) or Decimal("0.00"))
+                    interest_amount = Decimal(getattr(transaction, "interest_amount", None) or Decimal("0.00"))
+                    fee_amount = Decimal(getattr(transaction, "fee_amount", None) or Decimal("0.00"))
+
                     rows.append(
                         [
                             selected_limit_name,
@@ -1605,6 +1617,9 @@ class CreditFacilitiesPage(QWidget):
                             self._format_date(transaction.effective_date),
                             self._credit_limit_transaction_type_text(transaction_type),
                             self._format_money(transaction.amount, currency_code),
+                            self._format_money(principal_amount, currency_code),
+                            self._format_money(interest_amount, currency_code),
+                            self._format_money(fee_amount, currency_code),
                             self._credit_limit_transaction_status_text(transaction_status),
                             transaction.reference_no or "-",
                             transaction.description or "-",
