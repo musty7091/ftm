@@ -1647,6 +1647,73 @@ def _allocate_credit_limit_payment(
     }
 
 
+def _validate_credit_limit_transaction_can_be_cancelled(
+    session: Session,
+    transaction: BankAccountCreditLimitTransaction,
+) -> None:
+    """
+    Limit hareketi iptal edilmeden önce muhasebesel güvenlik kontrolü yapar.
+
+    Temel kural:
+    - Borç doğuran bir hareket, o borcun ödenmiş kısmını negatife düşürecekse iptal edilemez.
+    - Önce ilgili ödeme hareketleri iptal edilmelidir.
+    - Ödeme hareketi iptal edilebilir; böylece daha önce kapatılmış borç kalemleri tekrar açılır.
+    """
+    if transaction.status not in ACTIVE_CREDIT_LIMIT_TRANSACTION_STATUSES:
+        return
+
+    if transaction.transaction_type == CreditLimitTransactionType.PAYMENT:
+        return
+
+    components = _credit_limit_component_amounts(transaction)
+    transaction_principal_amount = components["principal_amount"]
+    transaction_interest_amount = components["interest_amount"]
+    transaction_fee_amount = components["fee_amount"]
+
+    summary = get_credit_limit_debt_summary(
+        session,
+        credit_limit_id=int(transaction.credit_limit_id),
+        apply_value_dates=False,
+    )
+
+    booked_principal_debt = money(
+        summary.get("booked_principal_debt") or Decimal("0.00"),
+        field_name="Kayıtlı ana para borcu",
+    )
+    booked_interest_debt = money(
+        summary.get("booked_interest_debt") or Decimal("0.00"),
+        field_name="Kayıtlı faiz borcu",
+    )
+    booked_fee_debt = money(
+        summary.get("booked_fee_debt") or Decimal("0.00"),
+        field_name="Kayıtlı masraf borcu",
+    )
+
+    if transaction.transaction_type in {CreditLimitTransactionType.USAGE, CreditLimitTransactionType.ADJUSTMENT}:
+        if transaction_principal_amount > booked_principal_debt:
+            raise CreditFacilityServiceError(
+                "Bu limit kullanım/düzeltme hareketi iptal edilemez. "
+                "Bu harekete ait ana para borcunun bir kısmı ödenmiş görünüyor. "
+                "Önce ilgili limit ödeme hareketlerini iptal etmelisin."
+            )
+
+    elif transaction.transaction_type == CreditLimitTransactionType.INTEREST:
+        if transaction_interest_amount > booked_interest_debt:
+            raise CreditFacilityServiceError(
+                "Bu faiz tahakkuku iptal edilemez. "
+                "Bu faiz borcunun bir kısmı ödenmiş görünüyor. "
+                "Önce ilgili limit ödeme hareketlerini iptal etmelisin."
+            )
+
+    elif transaction.transaction_type == CreditLimitTransactionType.FEE:
+        if transaction_fee_amount > booked_fee_debt:
+            raise CreditFacilityServiceError(
+                "Bu masraf hareketi iptal edilemez. "
+                "Bu masraf borcunun bir kısmı ödenmiş görünüyor. "
+                "Önce ilgili limit ödeme hareketlerini iptal etmelisin."
+            )
+
+
 def _monthly_interest_rate_fraction(credit_limit: BankAccountCreditLimit) -> Decimal:
     clean_rate = rate(credit_limit.interest_rate or Decimal("0.000000"), field_name="Faiz oranı")
     return clean_rate / Decimal("100")
@@ -2415,6 +2482,8 @@ def cancel_credit_limit_transaction(
 
     if transaction.status == CreditLimitTransactionStatus.CANCELLED:
         return transaction
+
+    _validate_credit_limit_transaction_can_be_cancelled(session, transaction)
 
     old_values = _serialize_credit_limit_transaction(transaction)
 

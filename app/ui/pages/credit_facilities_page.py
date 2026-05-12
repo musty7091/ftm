@@ -46,6 +46,7 @@ from app.ui.pages.credit_facilities.credit_card_payment_dialog import CreditCard
 from app.ui.pages.credit_facilities.credit_card_statement_dialog import CreditCardStatementDialog
 from app.ui.pages.credit_facilities.credit_card_transaction_dialog import CreditCardTransactionDialog
 from app.ui.pages.credit_facilities.credit_limit_dialog import CreditLimitDialog
+from app.ui.pages.credit_facilities.credit_limit_fee_dialog import CreditLimitFeeDialog
 from app.ui.pages.credit_facilities.credit_limit_period_report_dialog import CreditLimitPeriodReportDialog
 from app.ui.pages.credit_facilities.credit_limit_transaction_dialog import CreditLimitTransactionDialog
 
@@ -342,6 +343,7 @@ class CreditFacilitiesPage(QWidget):
         self.toggle_credit_limit_button: QPushButton | None = None
         self.use_credit_limit_button: QPushButton | None = None
         self.pay_credit_limit_button: QPushButton | None = None
+        self.fee_credit_limit_button: QPushButton | None = None
         self.period_report_credit_limit_button: QPushButton | None = None
         self.cancel_credit_limit_transaction_button: QPushButton | None = None
 
@@ -538,6 +540,12 @@ class CreditFacilitiesPage(QWidget):
         self.pay_credit_limit_button.setToolTip("Seçili limitli hesap için ödeme hareketi oluşturur. Ödeme faiz hesabında ertesi gün borçtan düşer.")
         self.pay_credit_limit_button.clicked.connect(self.open_credit_limit_payment_dialog)
 
+        self.fee_credit_limit_button = QPushButton("Masraf Kaydet")
+        self.fee_credit_limit_button.setObjectName("CreditFacilitiesSecondaryButton")
+        self.fee_credit_limit_button.setEnabled(False)
+        self.fee_credit_limit_button.setToolTip("Seçili limitli hesap için banka masrafı borcu oluşturur. Bu işlem banka hesabından para düşmez.")
+        self.fee_credit_limit_button.clicked.connect(self.open_credit_limit_fee_dialog)
+
         self.period_report_credit_limit_button = QPushButton("Dönem Raporu")
         self.period_report_credit_limit_button.setObjectName("CreditFacilitiesSecondaryButton")
         self.period_report_credit_limit_button.setEnabled(False)
@@ -549,12 +557,14 @@ class CreditFacilitiesPage(QWidget):
         actions.addWidget(self.toggle_credit_limit_button)
         actions.addWidget(self.use_credit_limit_button)
         actions.addWidget(self.pay_credit_limit_button)
+        actions.addWidget(self.fee_credit_limit_button)
         actions.addWidget(self.period_report_credit_limit_button)
         actions.addStretch(1)
 
         hint_label = QLabel(
             "Limit kullanımı aynı gün faize etki eder. Limit ödemesi banka valörü nedeniyle faiz hesabında "
-            "ertesi gün borçtan düşer. Hareket dökümünde işlem tarihi ve faize etki tarihi ayrı gösterilir."
+            "ertesi gün borçtan düşer. Banka masrafı ayrı borç kalemi olarak kaydedilir; ödeme yapılınca sistem önce masrafı, "
+            "sonra faizi, kalan tutar varsa ana parayı kapatır."
         )
         hint_label.setObjectName("CreditFacilitiesMuted")
         hint_label.setWordWrap(True)
@@ -562,9 +572,12 @@ class CreditFacilitiesPage(QWidget):
         movement_actions = QHBoxLayout()
         movement_actions.setSpacing(8)
 
-        self.cancel_credit_limit_transaction_button = QPushButton("Hareket İptal")
+        self.cancel_credit_limit_transaction_button = QPushButton("Hareket İptal Et")
         self.cancel_credit_limit_transaction_button.setObjectName("CreditFacilitiesDangerButton")
         self.cancel_credit_limit_transaction_button.setEnabled(False)
+        self.cancel_credit_limit_transaction_button.setToolTip(
+            "Seçili limit hareketini iptal eder. Ödenmiş kullanım, faiz veya masraf kayıtlarında önce ilgili ödeme iptal edilmelidir."
+        )
         self.cancel_credit_limit_transaction_button.clicked.connect(self.cancel_selected_credit_limit_transaction)
 
         movement_actions.addWidget(self.credit_limit_transaction_title_label)
@@ -902,6 +915,37 @@ class CreditFacilitiesPage(QWidget):
     def open_credit_limit_payment_dialog(self) -> None:
         self._open_credit_limit_transaction_dialog(mode=CreditLimitTransactionDialog.MODE_PAYMENT)
 
+    def open_credit_limit_fee_dialog(self) -> None:
+        credit_limit_id = self._selected_credit_limit_id()
+        is_active = self._selected_credit_limit_is_active()
+
+        if credit_limit_id is None:
+            QMessageBox.warning(
+                self,
+                "Limit Seçilmedi",
+                "Masraf kaydetmek için listeden bir kredili / limitli hesap seçmelisin.",
+            )
+            return
+
+        if is_active is not True:
+            QMessageBox.warning(
+                self,
+                "Limit Pasif",
+                "Pasif kredili / limitli hesap için masraf kaydı girilemez.",
+            )
+            return
+
+        dialog = CreditLimitFeeDialog(
+            current_user=self.current_user,
+            credit_limit_id=credit_limit_id,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh_data()
+            self._restore_credit_limit_selection(credit_limit_id)
+            self.status_label.setText("Limitli hesap masraf kaydı oluşturuldu.")
+
     def open_credit_limit_period_report_dialog(self) -> None:
         credit_limit_id = self._selected_credit_limit_id()
 
@@ -977,6 +1021,34 @@ class CreditFacilitiesPage(QWidget):
             )
             return
 
+        movement_summary = self._selected_credit_limit_transaction_display_summary()
+        movement_type = movement_summary.get("type", "Limit hareketi")
+        movement_amount = movement_summary.get("amount", "-")
+        movement_transaction_date = movement_summary.get("transaction_date", "-")
+        movement_effective_date = movement_summary.get("effective_date", "-")
+        movement_distribution = movement_summary.get("distribution", "-")
+
+        guidance_text = self._credit_limit_cancel_guidance_text(movement_type)
+
+        confirmation = QMessageBox(self)
+        confirmation.setIcon(QMessageBox.Warning)
+        confirmation.setWindowTitle("Limit Hareketi İptal")
+        confirmation.setText("Seçili limit hareketini iptal etmek üzeresin.")
+        confirmation.setInformativeText(
+            f"Hareket: {movement_type}\n"
+            f"İşlem Tarihi: {movement_transaction_date}\n"
+            f"Faize Etki Tarihi: {movement_effective_date}\n"
+            f"Tutar: {movement_amount}\n"
+            f"Dağılım: {movement_distribution}\n\n"
+            f"{guidance_text}\n\n"
+            "Devam etmek istiyor musun?"
+        )
+        confirmation.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        confirmation.setDefaultButton(QMessageBox.No)
+
+        if confirmation.exec() != QMessageBox.Yes:
+            return
+
         cancel_reason, accepted = QInputDialog.getText(
             self,
             "Limit Hareketi İptal Nedeni",
@@ -986,7 +1058,9 @@ class CreditFacilitiesPage(QWidget):
         if not accepted:
             return
 
-        if not str(cancel_reason or "").strip():
+        clean_cancel_reason = str(cancel_reason or "").strip()
+
+        if not clean_cancel_reason:
             QMessageBox.warning(
                 self,
                 "Eksik Bilgi",
@@ -994,23 +1068,12 @@ class CreditFacilitiesPage(QWidget):
             )
             return
 
-        answer = QMessageBox.question(
-            self,
-            "Limit Hareketi İptal",
-            "Seçili limit hareketi ve varsa bağlı banka hareketi iptal edilecek. Devam etmek istiyor musun?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if answer != QMessageBox.Yes:
-            return
-
         try:
             with session_scope() as session:
                 cancel_credit_limit_transaction(
                     session,
                     transaction_id=transaction_id,
-                    cancel_reason=str(cancel_reason),
+                    cancel_reason=clean_cancel_reason,
                     cancelled_by_user_id=self._current_user_id(),
                 )
 
@@ -1035,7 +1098,84 @@ class CreditFacilitiesPage(QWidget):
         if credit_limit_id is not None:
             self._restore_credit_limit_selection(credit_limit_id)
 
-        self.status_label.setText("Limit hareketi iptal edildi.")
+        self.status_label.setText(f"Limit hareketi iptal edildi: {movement_type} / {movement_amount}")
+
+    def _selected_credit_limit_transaction_display_summary(self) -> dict[str, str]:
+        row_index = self.credit_limit_transactions_table.currentRow()
+
+        if row_index < 0:
+            return {}
+
+        def value_at(column_index: int) -> str:
+            item = self.credit_limit_transactions_table.item(row_index, column_index)
+
+            if item is None:
+                return "-"
+
+            text = item.text().strip()
+
+            if not text:
+                return "-"
+
+            return text
+
+        principal_amount = value_at(5)
+        interest_amount = value_at(6)
+        fee_amount = value_at(7)
+        distribution_parts = []
+
+        if principal_amount not in {"-", "0,00", "0,00 TRY", "0,00 TL"}:
+            distribution_parts.append(f"Ana para: {principal_amount}")
+
+        if interest_amount not in {"-", "0,00", "0,00 TRY", "0,00 TL"}:
+            distribution_parts.append(f"Faiz: {interest_amount}")
+
+        if fee_amount not in {"-", "0,00", "0,00 TRY", "0,00 TL"}:
+            distribution_parts.append(f"Masraf: {fee_amount}")
+
+        return {
+            "limit_name": value_at(0),
+            "transaction_date": value_at(1),
+            "effective_date": value_at(2),
+            "type": value_at(3),
+            "amount": value_at(4),
+            "distribution": " | ".join(distribution_parts) if distribution_parts else "-",
+            "status": value_at(8),
+            "reference_no": value_at(9),
+            "description": value_at(10),
+        }
+
+    def _credit_limit_cancel_guidance_text(self, movement_type: str) -> str:
+        movement_type_upper = str(movement_type or "").upper()
+
+        if "ÖDEME" in movement_type_upper:
+            return (
+                "Bu ödeme iptal edilirse ödemenin kapattığı masraf, faiz veya ana para borcu yeniden açık borç olarak görünebilir. "
+                "Bağlı banka hareketi varsa servis tarafından birlikte iptal edilir."
+            )
+
+        if "FAİZ" in movement_type_upper or "FAIZ" in movement_type_upper:
+            return (
+                "Bu faiz tahakkuku daha önce ödenmişse iptal edilemez. "
+                "Önce ilgili ödeme hareketini iptal etmelisin."
+            )
+
+        if "MASRAF" in movement_type_upper:
+            return (
+                "Bu masraf hareketi daha önce ödenmişse iptal edilemez. "
+                "Önce ilgili ödeme hareketini iptal etmelisin."
+            )
+
+        if "KULLAN" in movement_type_upper:
+            return (
+                "Bu kullanım hareketi daha önce ödeme ile kapatılmışsa iptal edilemez. "
+                "Önce ilgili ödeme hareketini iptal etmelisin."
+            )
+
+        return (
+            "Bu işlem limit borcu, ödeme dağılımı ve varsa bağlı banka hareketi üzerinde etkili olabilir. "
+            "Emin değilsen önce dönem raporunu kontrol et."
+        )
 
     def toggle_selected_credit_card_active_state(self) -> None:
         credit_card_id = self._selected_credit_card_id()
@@ -1959,6 +2099,9 @@ class CreditFacilitiesPage(QWidget):
             self.pay_credit_limit_button.setEnabled(
                 has_selection and selected_is_active is True and has_payable_debt
             )
+
+        if self.fee_credit_limit_button is not None:
+            self.fee_credit_limit_button.setEnabled(has_selection and selected_is_active is True)
 
         if self.period_report_credit_limit_button is not None:
             self.period_report_credit_limit_button.setEnabled(has_selection)
