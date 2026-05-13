@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEventLoop, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -632,22 +633,37 @@ class LoginDialog(QDialog):
 
         self.setWindowTitle("FTM Giriş")
         self.setModal(True)
-        self.setFixedSize(520, 520)
+        self.setFixedSize(560, 710)
+        self.setStyleSheet(self._login_dialog_stylesheet())
+
+        self.startup_step_messages = [
+            "[•] Veritabanı kontrol ediliyor...",
+            "[•] SQLite quick_check çalıştırılıyor...",
+            "[•] Veritabanı güncel. Uygulama hazırlanıyor...",
+            "[✓] Kontroller tamamlandı. Giriş ekranı hazır.",
+        ]
+        self.startup_step_index = 0
+        self.startup_status_message_label = QLabel()
+        self.startup_status_message_label.setWordWrap(True)
+        self.startup_status_message_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.startup_status_counter_label = QLabel()
+        self.startup_status_dots_label = QLabel()
+        self.startup_status_timer = QTimer(self)
+        self.startup_status_timer.setInterval(850)
+        self.startup_status_timer.timeout.connect(self._advance_startup_status_message)
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(28, 28, 28, 28)
+        root_layout.setContentsMargins(20, 20, 20, 20)
         root_layout.setSpacing(0)
 
         card = QFrame()
         card.setObjectName("LoginOuterCard")
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(34, 32, 34, 32)
-        card_layout.setSpacing(18)
+        card_layout.setContentsMargins(36, 30, 36, 24)
+        card_layout.setSpacing(14)
 
-        logo = QLabel("FTM")
-        logo.setObjectName("LoginLogo")
-        logo.setAlignment(Qt.AlignCenter)
+        logo = self._build_login_logo_widget()
 
         title = QLabel("Finans Takip Merkezi")
         title.setObjectName("LoginTitle")
@@ -660,12 +676,12 @@ class LoginDialog(QDialog):
 
         self.identifier_input = QLineEdit()
         self.identifier_input.setPlaceholderText("Kullanıcı adı veya e-posta")
-        self.identifier_input.setMinimumHeight(46)
+        self.identifier_input.setMinimumHeight(48)
 
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Şifre")
         self.password_input.setEchoMode(QLineEdit.Password)
-        self.password_input.setMinimumHeight(46)
+        self.password_input.setMinimumHeight(48)
         self.password_input.returnPressed.connect(self.try_login)
 
         identifier_label = QLabel("Kullanıcı")
@@ -679,12 +695,14 @@ class LoginDialog(QDialog):
 
         cancel_button = QPushButton("Çıkış")
         cancel_button.setObjectName("CancelButton")
+        cancel_button.setMinimumHeight(46)
         cancel_button.setAutoDefault(False)
         cancel_button.setDefault(False)
         cancel_button.clicked.connect(self.cancel_login)
 
         login_button = QPushButton("Giriş Yap")
         login_button.setObjectName("LoginButton")
+        login_button.setMinimumHeight(46)
         login_button.setAutoDefault(False)
         login_button.setDefault(False)
         login_button.clicked.connect(self.try_login)
@@ -692,27 +710,318 @@ class LoginDialog(QDialog):
         button_row.addWidget(cancel_button)
         button_row.addWidget(login_button)
 
+        startup_status_panel = self._build_startup_status_panel()
+
         footer = QLabel("Rol ve yetki sistemi aktif. İşlemler audit log ile izlenir.")
         footer.setObjectName("LoginFooter")
         footer.setAlignment(Qt.AlignCenter)
         footer.setWordWrap(True)
 
-        card_layout.addWidget(logo)
+        card_layout.addWidget(logo, 0, Qt.AlignCenter)
+        card_layout.addSpacing(4)
         card_layout.addWidget(title)
         card_layout.addWidget(subtitle)
-        card_layout.addSpacing(10)
+        card_layout.addSpacing(12)
         card_layout.addWidget(identifier_label)
         card_layout.addWidget(self.identifier_input)
+        card_layout.addSpacing(6)
         card_layout.addWidget(password_label)
         card_layout.addWidget(self.password_input)
-        card_layout.addSpacing(8)
+        card_layout.addSpacing(10)
         card_layout.addLayout(button_row)
+        card_layout.addSpacing(4)
+        card_layout.addWidget(startup_status_panel)
         card_layout.addStretch()
         card_layout.addWidget(footer)
 
         root_layout.addWidget(card)
 
+        self._reset_startup_status_panel()
         self.identifier_input.setFocus()
+
+    def _login_dialog_stylesheet(self) -> str:
+        return """
+        QDialog {
+            background-color: #070d1a;
+        }
+
+        QFrame#LoginOuterCard {
+            background-color: qlineargradient(
+                x1: 0, y1: 0,
+                x2: 0, y2: 1,
+                stop: 0 #121c2f,
+                stop: 1 #0d1628
+            );
+            border: 1px solid #243550;
+            border-radius: 24px;
+        }
+
+        QLabel#LoginImageLogo {
+            background-color: transparent;
+            border: none;
+        }
+
+        QLabel#LoginLogo {
+            background-color: #0f172a;
+            color: #e0f2fe;
+            border: 1px solid #38bdf8;
+            border-radius: 46px;
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: 2px;
+        }
+
+        QLabel#LoginTitle {
+            color: #f8fafc;
+            font-size: 22px;
+            font-weight: 900;
+        }
+
+        QLabel#LoginSubtitle {
+            color: #a8bdd7;
+            font-size: 12px;
+        }
+
+        QLabel#LoginLabel {
+            color: #dbeafe;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        QLabel#LoginFooter {
+            color: #8ea3bf;
+            font-size: 11px;
+        }
+
+        QLineEdit {
+            background-color: #0c1424;
+            color: #f8fafc;
+            border: 1px solid #283a57;
+            border-radius: 13px;
+            padding-left: 14px;
+            padding-right: 14px;
+            selection-background-color: #2563eb;
+            selection-color: #ffffff;
+            font-size: 12px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid #38bdf8;
+            background-color: #0f1b31;
+        }
+
+        QPushButton {
+            border-radius: 13px;
+            font-size: 13px;
+            font-weight: 900;
+            padding: 8px 14px;
+        }
+
+        QPushButton#LoginButton {
+            background-color: qlineargradient(
+                x1: 0, y1: 0,
+                x2: 1, y2: 1,
+                stop: 0 #2563eb,
+                stop: 1 #0ea5e9
+            );
+            color: #ffffff;
+            border: 1px solid #38bdf8;
+        }
+
+        QPushButton#LoginButton:hover {
+            background-color: #1d4ed8;
+            border: 1px solid #7dd3fc;
+        }
+
+        QPushButton#CancelButton {
+            background-color: #111b2d;
+            color: #dbeafe;
+            border: 1px solid #293b58;
+        }
+
+        QPushButton#CancelButton:hover {
+            background-color: #17243a;
+            border: 1px solid #3b587c;
+        }
+
+        QFrame#StartupStatusPanel {
+            background-color: qlineargradient(
+                x1: 0, y1: 0,
+                x2: 1, y2: 1,
+                stop: 0 #07111f,
+                stop: 1 #0b1c31
+            );
+            border: 1px solid #1b3b5a;
+            border-radius: 16px;
+        }
+
+        QLabel#StartupStatusTitle {
+            color: #bfdbfe;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        QLabel#StartupStatusBadge {
+            color: #67e8f9;
+            font-size: 11px;
+            font-weight: 900;
+            padding: 2px 8px;
+            border: 1px solid #164e63;
+            border-radius: 9px;
+            background-color: #082f49;
+        }
+
+        QLabel#StartupStatusMessage {
+            color: #f8fafc;
+            font-size: 12px;
+            font-weight: 750;
+        }
+
+        QLabel#StartupStatusDots {
+            color: #22d3ee;
+            font-size: 13px;
+            font-weight: 900;
+            letter-spacing: 5px;
+        }
+        """
+
+    def _build_startup_status_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("StartupStatusPanel")
+        panel.setMinimumHeight(92)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(7)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+
+        title = QLabel("Güvenli açılış")
+        title.setObjectName("StartupStatusTitle")
+
+        self.startup_status_counter_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.startup_status_counter_label.setObjectName("StartupStatusBadge")
+
+        header_row.addWidget(title, 1)
+        header_row.addWidget(self.startup_status_counter_label, 0)
+
+        self.startup_status_message_label.setObjectName("StartupStatusMessage")
+
+        self.startup_status_dots_label.setAlignment(Qt.AlignCenter)
+        self.startup_status_dots_label.setObjectName("StartupStatusDots")
+
+        layout.addLayout(header_row)
+        layout.addWidget(self.startup_status_message_label)
+        layout.addWidget(self.startup_status_dots_label)
+
+        return panel
+
+    def _build_login_logo_widget(self) -> QLabel:
+        logo = QLabel("FTM")
+        logo.setObjectName("LoginLogo")
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setFixedSize(92, 92)
+
+        logo_path = _find_login_logo_path()
+        if logo_path is not None:
+            pixmap = QPixmap(str(logo_path))
+            if not pixmap.isNull():
+                logo.setPixmap(
+                    pixmap.scaled(
+                        82,
+                        82,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+                logo.setObjectName("LoginImageLogo")
+                return logo
+
+        logo.setStyleSheet(
+            """
+            QLabel {
+                background-color: #0f172a;
+                color: #e0f2fe;
+                border: 2px solid #38bdf8;
+                border-radius: 54px;
+                font-size: 31px;
+                font-weight: 900;
+                letter-spacing: 2px;
+            }
+            """
+        )
+        return logo
+
+    def _reset_startup_status_panel(self) -> None:
+        self.startup_status_timer.stop()
+        self.startup_step_index = 0
+        self.startup_status_counter_label.setText("Hazır")
+        self.startup_status_message_label.setText(
+            "Giriş yaptığınızda güvenli açılış kontrolü gösterilir."
+        )
+        self.startup_status_dots_label.setText("○ ○ ○ ○")
+
+    def _start_login_status_simulation(self) -> None:
+        self.startup_step_index = 0
+        self._render_startup_status_message()
+        self.startup_status_timer.start()
+
+    def _play_login_status_sequence(self) -> None:
+        self.startup_status_timer.stop()
+
+        for step_index in range(len(self.startup_step_messages)):
+            self.startup_step_index = step_index
+            self._render_startup_status_message()
+            QApplication.processEvents()
+            self._wait_with_ui(milliseconds=620)
+
+    def _wait_with_ui(self, *, milliseconds: int) -> None:
+        wait_loop = QEventLoop(self)
+        QTimer.singleShot(max(1, int(milliseconds)), wait_loop.quit)
+        wait_loop.exec()
+
+    def _finish_login_status_simulation(self, *, success: bool, message: str | None = None) -> None:
+        self.startup_status_timer.stop()
+
+        if success:
+            self.startup_status_counter_label.setText("Tamam")
+            self.startup_status_message_label.setText(
+                message or "[✓] Kontroller tamamlandı. Güvenli giriş başlatılıyor."
+            )
+            self.startup_status_dots_label.setText("● ● ● ●")
+            return
+
+        self.startup_status_counter_label.setText("Dikkat")
+        self.startup_status_message_label.setText(
+            message or "[!] Giriş tamamlanamadı. Bilgileri kontrol edip tekrar deneyin."
+        )
+        self.startup_status_dots_label.setText("● ○ ○ ○")
+
+    def _render_startup_status_message(self) -> None:
+        total_steps = len(self.startup_step_messages)
+        current_number = self.startup_step_index + 1
+        current_message = self.startup_step_messages[self.startup_step_index]
+
+        active_dot_index = self.startup_step_index % total_steps
+        dots = " ".join(
+            "●" if index == active_dot_index else "○"
+            for index in range(total_steps)
+        )
+
+        self.startup_status_counter_label.setText(
+            f"{current_number:02d} / {total_steps:02d}"
+        )
+        self.startup_status_message_label.setText(current_message)
+        self.startup_status_dots_label.setText(dots)
+
+    def _advance_startup_status_message(self) -> None:
+        self.startup_step_index += 1
+
+        if self.startup_step_index >= len(self.startup_step_messages):
+            self.startup_step_index = 0
+
+        self._render_startup_status_message()
 
     def accept(self) -> None:
         if self.authenticated_user is None:
@@ -724,13 +1033,10 @@ class LoginDialog(QDialog):
         super().accept()
 
     def reject(self) -> None:
-        if not self._allow_dialog_close:
-            return
-
+        self._allow_dialog_close = True
         super().reject()
 
     def cancel_login(self) -> None:
-        self._allow_dialog_close = True
         self.reject()
 
     def try_login(self) -> None:
@@ -755,6 +1061,8 @@ class LoginDialog(QDialog):
             self.password_input.setFocus()
             return
 
+        self._play_login_status_sequence()
+
         try:
             with session_scope() as session:
                 authenticated_user = authenticate_user(
@@ -775,6 +1083,10 @@ class LoginDialog(QDialog):
                 password_change_dialog = ForcedPasswordChangeDialog(authenticated_user)
 
                 if password_change_dialog.exec() != QDialog.Accepted:
+                    self._finish_login_status_simulation(
+                        success=False,
+                        message="[!] Şifre değişikliği tamamlanmadı. Giriş güvenli şekilde durduruldu.",
+                    )
                     QMessageBox.warning(
                         self,
                         "Şifre Değişikliği Gerekli",
@@ -785,6 +1097,9 @@ class LoginDialog(QDialog):
                     return
 
             self.authenticated_user = authenticated_user
+            self._finish_login_status_simulation(success=True)
+            QApplication.processEvents()
+            self._wait_with_ui(milliseconds=700)
             self.accept()
 
         except AuthServiceError as exc:
@@ -801,6 +1116,10 @@ class LoginDialog(QDialog):
     def _show_login_failed_message(self, message: str) -> None:
         self.authenticated_user = None
         self._allow_dialog_close = False
+        self._finish_login_status_simulation(
+            success=False,
+            message="[!] Giriş tamamlanamadı. Bilgileri kontrol edip tekrar deneyin.",
+        )
 
         QMessageBox.warning(
             self,
@@ -813,6 +1132,50 @@ class LoginDialog(QDialog):
         self.show()
         self.raise_()
         self.activateWindow()
+
+
+def _find_login_logo_path() -> Path | None:
+    candidates: list[Path] = []
+
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "ftm_branding_assets" / "icon.png")
+
+    try:
+        project_root = Path(__file__).resolve().parents[2]
+        candidates.extend(
+            [
+                project_root / "ftm_branding_assets" / "icon.png",
+                project_root / "app" / "assets" / "branding" / "ftm_app_icon.png",
+                project_root / "app" / "assets" / "branding" / "ftm_app_icon.ico",
+            ]
+        )
+    except Exception:
+        pass
+
+    candidates.extend(
+        [
+            Path.cwd() / "ftm_branding_assets" / "icon.png",
+            Path(r"C:\ftm\ftm_branding_assets\icon.png"),
+        ]
+    )
+
+    seen_paths: set[str] = set()
+
+    for candidate in candidates:
+        try:
+            normalized_path = str(candidate.expanduser().resolve())
+        except OSError:
+            normalized_path = str(candidate)
+
+        if normalized_path in seen_paths:
+            continue
+
+        seen_paths.add(normalized_path)
+
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    return None
 
 
 def _run_initial_setup_if_needed() -> bool:
