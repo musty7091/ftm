@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.runtime_paths import ensure_runtime_folders
 from app.models.enums import UserRole
 from app.models.user import User
 
@@ -109,18 +112,41 @@ def _get_sqlite_database_path() -> Path:
     if sqlite_path.is_absolute():
         return sqlite_path
 
-    return _get_project_root() / sqlite_path
+    runtime_paths = ensure_runtime_folders()
+
+    return runtime_paths.root_folder / sqlite_path
 
 
-def _get_folder_from_env(name: str, default_value: str) -> Path:
-    project_root = _get_project_root()
-    folder_value = _env_text(name, default_value) or default_value
-    folder_path = Path(folder_value)
+def _get_backup_folder() -> Path:
+    try:
+        from app.services.app_settings_service import get_backup_folder_path
 
-    if not folder_path.is_absolute():
-        folder_path = project_root / folder_path
+        backup_folder = get_backup_folder_path()
+        backup_folder.mkdir(parents=True, exist_ok=True)
 
-    return folder_path
+        return backup_folder
+
+    except Exception:
+        runtime_paths = ensure_runtime_folders()
+        runtime_paths.backups_folder.mkdir(parents=True, exist_ok=True)
+
+        return runtime_paths.backups_folder
+
+
+def _get_log_folder() -> Path:
+    try:
+        from app.services.app_settings_service import get_log_folder_path
+
+        log_folder = get_log_folder_path()
+        log_folder.mkdir(parents=True, exist_ok=True)
+
+        return log_folder
+
+    except Exception:
+        runtime_paths = ensure_runtime_folders()
+        runtime_paths.logs_folder.mkdir(parents=True, exist_ok=True)
+
+        return runtime_paths.logs_folder
 
 
 def _add_item(items: list[HealthCheckItem], name: str, status: str, message: str) -> None:
@@ -208,7 +234,7 @@ def _format_file_size(size_bytes: int) -> str:
 
 def _count_active_users_by_role(session: Session, role: UserRole) -> int:
     statement = select(func.count(User.id)).where(
-        User.role == role,
+        User.role == role.value,
         User.is_active.is_(True),
     )
 
@@ -336,15 +362,6 @@ def _check_users(session: Session, items: list[HealthCheckItem]) -> None:
                 )
                 continue
 
-            if role == UserRole.FINANCE:
-                _add_item(
-                    items,
-                    label,
-                    "WARN",
-                    "Aktif FINANCE kullanıcı bulunamadı. Finans işlemleri için en az bir FINANCE kullanıcı önerilir.",
-                )
-                continue
-
             _add_item(
                 items,
                 label,
@@ -365,14 +382,24 @@ def _check_users(session: Session, items: list[HealthCheckItem]) -> None:
 
 
 def _check_backup_folder(items: list[HealthCheckItem]) -> None:
-    backup_folder = _get_folder_from_env("BACKUP_FOLDER", "backups")
+    try:
+        backup_folder = _get_backup_folder()
+
+    except Exception as exc:
+        _add_item(
+            items,
+            "Yedek klasörü",
+            "FAIL",
+            f"Yedek klasörü hazırlanamadı: {exc}",
+        )
+        return
 
     if not backup_folder.exists():
         _add_item(
             items,
             "Yedek klasörü",
-            "WARN",
-            f"Yedek klasörü henüz bulunamadı: {backup_folder}",
+            "FAIL",
+            f"Yedek klasörü oluşturulamadı: {backup_folder}",
         )
         return
 
@@ -391,10 +418,10 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
         _add_item(
             items,
             "Son yedek dosyası",
-            "WARN",
+            "OK",
             (
                 "SQLite yedek dosyası henüz bulunamadı. "
-                f"Bu, yeni kurulumda normaldir. Klasör: {backup_folder}"
+                f"Bu, yeni kurulumda normaldir. Klasör hazır: {backup_folder}"
             ),
         )
         return
@@ -411,15 +438,35 @@ def _check_backup_folder(items: list[HealthCheckItem]) -> None:
 
 
 def _check_logs(items: list[HealthCheckItem]) -> None:
-    log_folder = _get_folder_from_env("LOG_FOLDER", "logs")
+    try:
+        log_folder = _get_log_folder()
+
+    except Exception as exc:
+        _add_item(
+            items,
+            "Log klasörü",
+            "FAIL",
+            f"Log klasörü hazırlanamadı: {exc}",
+        )
+        return
+
     security_summary_mail_enabled = _env_bool("SECURITY_SUMMARY_MAIL_ENABLED", False)
 
     if not log_folder.exists():
         _add_item(
             items,
             "Log klasörü",
-            "WARN",
-            f"Log klasörü henüz bulunamadı: {log_folder}",
+            "FAIL",
+            f"Log klasörü oluşturulamadı: {log_folder}",
+        )
+        return
+
+    if not log_folder.is_dir():
+        _add_item(
+            items,
+            "Log klasörü",
+            "FAIL",
+            f"Log yolu klasör değil: {log_folder}",
         )
         return
 
@@ -436,8 +483,8 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
         _add_item(
             items,
             "Yedekleme logu",
-            "WARN",
-            "backup_log.txt bulunamadı veya boş.",
+            "OK",
+            "backup_log.txt henüz oluşmadı. Bu, yeni kurulumda normaldir.",
         )
 
     restore_log_line = _read_last_non_empty_line(log_folder / "restore_test_log.txt")
@@ -453,8 +500,8 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
         _add_item(
             items,
             "Restore test logu",
-            "WARN",
-            "restore_test_log.txt bulunamadı veya boş.",
+            "OK",
+            "restore_test_log.txt henüz oluşmadı. Bu, yeni kurulumda normaldir.",
         )
 
     if not security_summary_mail_enabled:
@@ -481,59 +528,100 @@ def _check_logs(items: list[HealthCheckItem]) -> None:
         _add_item(
             items,
             "Güvenlik mail logu",
-            "WARN",
-            "Güvenlik özet maili aktif ama scheduled_security_summary_mail_output.txt bulunamadı veya boş.",
+            "OK",
+            "Güvenlik özet maili aktif ancak henüz log üretmemiş. Bu, yeni kurulumda veya görev henüz çalışmadığında normaldir.",
         )
 
 
 def _central_mail_settings_are_ready() -> tuple[bool, list[str], dict[str, Any]]:
-    mail_server = _env_text("MAIL_SERVER", settings.mail_server)
-    mail_port = _env_int("MAIL_PORT", settings.mail_port)
-    mail_username = _env_text("MAIL_USERNAME", settings.mail_username)
-    mail_password = _env_text("MAIL_PASSWORD", settings.mail_password)
-    mail_from = _env_text("MAIL_FROM", settings.mail_from or mail_username)
-    mail_use_tls = _env_bool("MAIL_USE_TLS", settings.mail_use_tls)
+    try:
+        from app.services.backup_mail_settings_service import describe_central_mail_sender_settings_status
 
-    missing_fields: list[str] = []
+        central_status = describe_central_mail_sender_settings_status()
 
-    if not mail_server:
-        missing_fields.append("MAIL_SERVER")
+        missing_fields = [
+            str(item)
+            for item in central_status.get("missing_fields", [])
+            if str(item).strip()
+        ]
 
-    if mail_port <= 0:
-        missing_fields.append("MAIL_PORT")
+        details = {
+            "enabled": bool(central_status.get("enabled")),
+            "ready": bool(central_status.get("ready")),
+            "mail_server": str(central_status.get("server") or ""),
+            "mail_port": int(central_status.get("port") or 0),
+            "mail_username": str(central_status.get("username") or ""),
+            "mail_from": str(central_status.get("mail_from") or ""),
+            "mail_use_tls": bool(central_status.get("use_tls")),
+            "source_file": str(central_status.get("source_file") or ""),
+        }
 
-    if not mail_username:
-        missing_fields.append("MAIL_USERNAME")
+        return bool(central_status.get("ready")), missing_fields, details
 
-    if not mail_password:
-        missing_fields.append("MAIL_PASSWORD")
+    except Exception:
+        mail_server = _env_text("MAIL_SERVER", settings.mail_server)
+        mail_port = _env_int("MAIL_PORT", settings.mail_port)
+        mail_username = _env_text("MAIL_USERNAME", settings.mail_username)
+        mail_password = _env_text("MAIL_PASSWORD", settings.mail_password)
+        mail_from = _env_text("MAIL_FROM", settings.mail_from or mail_username)
+        mail_use_tls = _env_bool("MAIL_USE_TLS", settings.mail_use_tls)
 
-    if not mail_from:
-        missing_fields.append("MAIL_FROM")
+        missing_fields: list[str] = []
 
-    details = {
-        "mail_server": mail_server,
-        "mail_port": mail_port,
-        "mail_username": mail_username,
-        "mail_from": mail_from,
-        "mail_use_tls": mail_use_tls,
-    }
+        if not mail_server:
+            missing_fields.append("MAIL_SERVER")
 
-    return len(missing_fields) == 0, missing_fields, details
+        if mail_port <= 0:
+            missing_fields.append("MAIL_PORT")
+
+        if not mail_username:
+            missing_fields.append("MAIL_USERNAME")
+
+        if not mail_password:
+            missing_fields.append("MAIL_PASSWORD")
+
+        if not mail_from:
+            missing_fields.append("MAIL_FROM")
+
+        details = {
+            "enabled": _env_bool("MAIL_ENABLED", settings.mail_enabled),
+            "ready": len(missing_fields) == 0,
+            "mail_server": mail_server,
+            "mail_port": mail_port,
+            "mail_username": mail_username,
+            "mail_from": mail_from,
+            "mail_use_tls": mail_use_tls,
+            "source_file": str(_get_project_root() / ".env"),
+        }
+
+        return len(missing_fields) == 0, missing_fields, details
+
+
+def _load_backup_mail_runtime_status() -> tuple[bool, str]:
+    try:
+        from app.services.backup_mail_settings_service import load_backup_mail_settings
+
+        backup_mail_settings = load_backup_mail_settings()
+
+        return bool(backup_mail_settings.enabled), str(backup_mail_settings.recipient_email or "").strip()
+
+    except Exception:
+        backup_mail_enabled = _env_bool("BACKUP_MAIL_ENABLED", False)
+        backup_mail_to = (
+            _env_text("BACKUP_MAIL_TO")
+            or _env_text("MAIL_TO", settings.mail_to)
+        )
+
+        return backup_mail_enabled, backup_mail_to
 
 
 def _check_mail_settings(items: list[HealthCheckItem]) -> None:
-    mail_enabled = _env_bool("MAIL_ENABLED", settings.mail_enabled)
-    backup_mail_enabled = _env_bool("BACKUP_MAIL_ENABLED", False)
-    security_summary_mail_enabled = _env_bool("SECURITY_SUMMARY_MAIL_ENABLED", False)
-
-    backup_mail_to = (
-        _env_text("BACKUP_MAIL_TO")
-        or _env_text("MAIL_TO", settings.mail_to)
-    )
-    security_summary_mail_to = _env_text("SECURITY_SUMMARY_MAIL_TO")
-
     central_mail_ready, missing_fields, mail_details = _central_mail_settings_are_ready()
+    mail_enabled = bool(mail_details.get("enabled"))
+
+    backup_mail_enabled, backup_mail_to = _load_backup_mail_runtime_status()
+    security_summary_mail_enabled = _env_bool("SECURITY_SUMMARY_MAIL_ENABLED", False)
+    security_summary_mail_to = _env_text("SECURITY_SUMMARY_MAIL_TO")
 
     if not mail_enabled:
         _add_item(
@@ -543,6 +631,8 @@ def _check_mail_settings(items: list[HealthCheckItem]) -> None:
             "Mail gönderimi kapalı. Bu opsiyonel özellik temel çalışmayı etkilemez.",
         )
     elif central_mail_ready:
+        source_file = str(mail_details.get("source_file") or "-")
+
         _add_item(
             items,
             "Merkezi FTM mail gönderici",
@@ -552,7 +642,8 @@ def _check_mail_settings(items: list[HealthCheckItem]) -> None:
                 f"Sunucu: {mail_details['mail_server']}:{mail_details['mail_port']} | "
                 f"TLS: {'açık' if mail_details['mail_use_tls'] else 'kapalı'} | "
                 f"Gönderen: {mail_details['mail_from']} | "
-                f"Kullanıcı: {mail_details['mail_username']}"
+                f"Kullanıcı: {mail_details['mail_username']} | "
+                f"Ayar: {source_file}"
             ),
         )
     else:
@@ -573,7 +664,7 @@ def _check_mail_settings(items: list[HealthCheckItem]) -> None:
             "OK",
             (
                 "Yedekleri mail ile gönderme özelliği kapalı. "
-                "Müşteri alıcı maili daha sonra Ayarlar > Yedekleme Maili ekranından tanımlanacak."
+                "Müşteri alıcı maili daha sonra Ayarlar > Yedekleme Maili ekranından tanımlanabilir."
             ),
         )
     elif not mail_enabled:
@@ -658,8 +749,8 @@ def _check_audit_logs(session: Session, items: list[HealthCheckItem]) -> None:
             _add_item(
                 items,
                 "Audit log kayıtları",
-                "WARN",
-                "Audit log tablosunda kayıt bulunamadı.",
+                "OK",
+                "Audit log tablosunda henüz kayıt yok. Bu, yeni kurulumda normaldir.",
             )
 
         if permission_denied_count > 0:
@@ -688,6 +779,7 @@ def _check_audit_logs(session: Session, items: list[HealthCheckItem]) -> None:
 
 def run_system_health_check(session: Session) -> SystemHealthReport:
     _load_environment()
+    ensure_runtime_folders()
 
     items: list[HealthCheckItem] = []
 
@@ -732,3 +824,11 @@ def build_system_health_report_text(report: SystemHealthReport) -> str:
     lines.append("FAIL : Müdahale edilmeli")
 
     return "\n".join(lines)
+
+
+__all__ = [
+    "HealthCheckItem",
+    "SystemHealthReport",
+    "run_system_health_check",
+    "build_system_health_report_text",
+]
