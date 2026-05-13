@@ -10,7 +10,9 @@ Amaç, projeyi sadece “çalışıyor” seviyesinde bırakmak değil; güvenli
 
 İlk kalite baz çizgisi:
 
+```text
 13 Mayıs 2026
+```
 
 Bu tarih itibarıyla proje çalışır durumdadır; ancak satış öncesi kalite, güvenlik, kurulum, lisanslama, yedekleme, restore, paketleme ve kullanıcı deneyimi açısından güçlendirme çalışmaları devam etmektedir.
 
@@ -31,7 +33,30 @@ Bu tarih itibarıyla proje çalışır durumdadır; ancak satış öncesi kalite
 
 ---
 
-## 3. Skorların Anlamı
+## 3. Güncel Skorlar
+
+Son güncelleme:
+
+```text
+13 Mayıs 2026 - ADIM 2.5
+```
+
+| Başlık | Başlangıç | Güncel | Değişim |
+|---|---:|---:|---:|
+| Teknik temel | 76 / 100 | 76 / 100 | 0 |
+| Finansal doğruluk | 78 / 100 | 78 / 100 | 0 |
+| Güvenlik | 68 / 100 | 76 / 100 | +8 |
+| Kullanıcı deneyimi | 65 / 100 | 65 / 100 | 0 |
+| Raporlama | 72 / 100 | 72 / 100 | 0 |
+| Lisanslama / ticari kontrol | 74 / 100 | 83 / 100 | +9 |
+| Paketleme / dağıtım | 58 / 100 | 65 / 100 | +7 |
+| Genel satışa hazır olma | 63 / 100 | 68 / 100 | +5 |
+
+Bu güncelleme, lisans private key güvenliği ve müşteri release paketi güvenlik kontrolü tarafında tamamlanan kanıtlı işler nedeniyle yapılmıştır.
+
+---
+
+## 4. Skorların Anlamı
 
 | Puan Aralığı | Anlam |
 |---:|---|
@@ -44,7 +69,7 @@ Bu tarih itibarıyla proje çalışır durumdadır; ancak satış öncesi kalite
 
 ---
 
-## 4. Genel Değerlendirme
+## 5. Genel Değerlendirme
 
 FTM, mevcut durumda güçlü bir teknik temele sahiptir.
 
@@ -58,26 +83,36 @@ Olumlu taraflar:
 - DB schema v8 seviyesine ulaşmıştır.
 - Kredi kartı ve limitli hesap modülleri gelişmiştir.
 - Excel rapor altyapısı genişletilmiştir.
+- Lisans üretimi encrypted private key kullanımına geçirilmiştir.
+- Müşteri release paketi için hassas dosya sızıntı kontrol aracı eklenmiştir.
 
 Satış öncesi dikkat isteyen taraflar:
 
-- Private key güvenliği kesin kurala bağlanmalıdır.
+- Şifresiz eski private key günlük kullanımdan kesin olarak kaldırılmalıdır.
 - Fresh install testi standart hale getirilmelidir.
 - Backup / restore roundtrip testi kanıtlanmalıdır.
-- Release paketinin hassas dosya sızdırmadığı doğrulanmalıdır.
+- Release paketinin gerçek build çıktısı üzerinde güvenlik kontrolü yapılmalıdır.
 - Build / EXE üretim standardı netleştirilmelidir.
 - Kredi kartı ve limitli hesap modülleri için kritik finans testleri artırılmalıdır.
 - Kullanıcı deneyimi ve hata mesajları pilot müşteri seviyesine yükseltilmelidir.
 
 ---
 
-## 5. Kategori Bazlı Kalite Kriterleri
+## 6. Kategori Bazlı Kalite Kriterleri
 
-### 5.1 Teknik Temel
+### 6.1 Teknik Temel
 
 Başlangıç puanı:
 
+```text
 76 / 100
+```
+
+Güncel puan:
+
+```text
+76 / 100
+```
 
 Puanı artıracak kriterler:
 
@@ -92,15 +127,25 @@ Puanı artıracak kriterler:
 
 Hedef:
 
+```text
 85 / 100
+```
 
 ---
 
-### 5.2 Finansal Doğruluk
+### 6.2 Finansal Doğruluk
 
 Başlangıç puanı:
 
+```text
 78 / 100
+```
+
+Güncel puan:
+
+```text
+78 / 100
+```
 
 Puanı artıracak kriterler:
 
@@ -116,40 +161,68 @@ Puanı artıracak kriterler:
 
 Hedef:
 
+```text
 88 / 100
+```
 
 ---
 
-### 5.3 Güvenlik
+### 6.3 Güvenlik
 
 Başlangıç puanı:
 
+```text
 68 / 100
+```
 
-Puanı artıracak kriterler:
+Güncel puan:
 
-- Private key repo dışında tutulmalı.
-- Private key release paketine girmemeli.
-- Lisans üretici araç müşteri paketinden ayrılmalı.
+```text
+76 / 100
+```
+
+Puan artışının nedeni:
+
+- Lisans güvenlik politikası yazıldı.
+- Lisans üretimi Mustafa'nın kişisel bilgisayarı merkezli operasyon modeline bağlandı.
+- Private key'in müşteri bilgisayarında çalıştırılmaması kuralı netleşti.
+- Şifresiz Ed25519 private key için encrypted PEM üretim aracı eklendi.
+- Encrypted private key başarıyla oluşturuldu.
+- Encrypted private key parola ile doğrulandı.
+- Licence Maker encrypted private key kullanacak şekilde güncellendi.
+- Licence Maker private key parolası olmadan lisans üretmeyecek hale getirildi.
+- Müşteri release paketi için hassas dosya sızıntı kontrol aracı eklendi.
+- Temiz ve riskli test paketleriyle safety checker davranışı doğrulandı.
+
+Devam eden güvenlik işleri:
+
+- Şifresiz eski private key dosyası günlük kullanımdan kaldırılmalı.
 - Secret scanning yapılmalı.
-- Şifre politikası test edilmeli.
-- Login lockout testi yapılmalı.
-- Audit log kapsamı genişletilmeli.
-- Restore işlemi kötü dosyaya karşı korunmalı.
-- Runtime dosyalarının yanlışlıkla silinmesi veya bozulması durumunda güvenli hata mesajları verilmeli.
-- Saat geri alma kontrolü test edilmeli.
+- Backup / restore güvenlik testleri yapılmalı.
+- Audit log bütünlük kontrolü ileri fazda güçlendirilmeli.
+- Gerçek release klasörü üzerinde safety checker çalıştırılmalı.
 
 Hedef:
 
+```text
 82 / 100
+```
 
 ---
 
-### 5.4 Kullanıcı Deneyimi
+### 6.4 Kullanıcı Deneyimi
 
 Başlangıç puanı:
 
+```text
 65 / 100
+```
+
+Güncel puan:
+
+```text
+65 / 100
+```
 
 Puanı artıracak kriterler:
 
@@ -162,17 +235,31 @@ Puanı artıracak kriterler:
 - Kritik işlemlerde onay mesajları açık olmalı.
 - Günlük kullanım akışı muhasebeci mantığıyla sadeleşmeli.
 
+Not:
+
+Licence Maker arayüzünde encrypted key ve parola akışı iyileştirildi; ancak ana uygulama kullanıcı deneyimi henüz ayrı bir turda ölçülmediği için bu kategori puanı artırılmamıştır.
+
 Hedef:
 
+```text
 80 / 100
+```
 
 ---
 
-### 5.5 Raporlama
+### 6.5 Raporlama
 
 Başlangıç puanı:
 
+```text
 72 / 100
+```
+
+Güncel puan:
+
+```text
+72 / 100
+```
 
 Puanı artıracak kriterler:
 
@@ -187,97 +274,271 @@ Puanı artıracak kriterler:
 
 Hedef:
 
+```text
 84 / 100
+```
 
 ---
 
-### 5.6 Lisanslama / Ticari Kontrol
+### 6.6 Lisanslama / Ticari Kontrol
 
 Başlangıç puanı:
 
+```text
 74 / 100
+```
 
-Puanı artıracak kriterler:
+Güncel puan:
 
-- Ed25519 imzalı lisans akışı test edilmeli.
-- Sahte imzalı lisans reddedilmeli.
-- Farklı cihaz lisansı reddedilmeli.
-- Süresi dolmuş lisans veri girişini engellemeli.
-- Saat geri alma senaryosu test edilmeli.
-- Private key müşteri paketinden kesin ayrılmalı.
-- Licence Maker aracı ayrı ve güvenli süreçle yönetilmeli.
-- Lisans yükleme ekranı müşteri açısından sade olmalı.
+```text
+83 / 100
+```
+
+Puan artışının nedeni:
+
+- Lisans üretimi artık kişisel lisans bilgisayarı operasyonuna bağlandı.
+- Müşteri bilgisayarında Licence Maker çalıştırılmaması kuralı yazılı hale getirildi.
+- Private key müşteri paketinden ayrıldı.
+- Private key encrypted PEM formatına geçirildi.
+- Licence Maker encrypted key ve parola ile lisans üretir hale getirildi.
+- Eski aktif lisans dosyaları temizlendi.
+- Uygulama lisanssız durumda `missing | Lisans Yok | False | False` sonucunu verdi.
+- Yeni lisans encrypted private key ile üretildi.
+- Yeni lisans uygulamada başarıyla doğrulandı.
+- Lisans üretimi log dosyasına kayıt atacak hale getirildi.
+
+Devam eden lisanslama işleri:
+
+- Licence Maker'ın EXE paketlemesi ayrıca hazırlanmalı.
+- Lisans üretim logu gerçek müşteri senaryosunda kontrol edilmeli.
+- Key rotation planı ileride teknik olarak desteklenmeli.
+- Lisans yükleme ekranı ana uygulamada müşteri dostu şekilde tekrar gözden geçirilmeli.
 
 Hedef:
 
+```text
 88 / 100
+```
 
 ---
 
-### 5.7 Paketleme / Dağıtım
+### 6.7 Paketleme / Dağıtım
 
 Başlangıç puanı:
 
+```text
 58 / 100
+```
 
-Puanı artıracak kriterler:
+Güncel puan:
+
+```text
+65 / 100
+```
+
+Puan artışının nedeni:
+
+- Müşteri paketi ile lisans üretici paketinin ayrılması gerektiği yazılı hale getirildi.
+- Müşteri paketinde bulunmaması gereken dosyalar net tanımlandı.
+- `tools/check_release_package_safety.py` aracı eklendi.
+- Araç, temiz klasörde OK sonucu verecek şekilde test edildi.
+- Araç, private key içeren riskli klasörde FAIL sonucu verecek şekilde test edildi.
+- Olmayan klasör için ERROR vererek sessiz geçmemesi doğrulandı.
+
+Devam eden paketleme işleri:
 
 - Resmi build komutu netleşmeli.
-- Tekrarlanabilir PyInstaller build script oluşturulmalı.
-- Build sonrası hassas dosya kontrolü yapılmalı.
-- EXE başka bir bilgisayarda test edilmeli.
-- Runtime klasörleri müşteri bilgisayarında doğru oluşmalı.
-- Private key, DB, lisans, log, export ve yedek dosyaları pakete girmemeli.
-- Marka ikonları ve rapor logoları pakete doğru dahil edilmeli.
-- Kurulum / güncelleme / kaldırma akışı yazılı hale getirilmeli.
+- Gerçek PyInstaller build klasörü üzerinde safety checker çalıştırılmalı.
+- Müşteri kurulum USB şablonu oluşturulmalı.
+- Licence Maker müşteri paketinden kesin olarak ayrı tutulmalı.
+- Build sonrası checksum üretimi standart hale getirilmeli.
 
 Hedef:
 
+```text
 78 / 100
+```
 
 ---
 
-### 5.8 Genel Satışa Hazır Olma
+### 6.8 Genel Satışa Hazır Olma
 
 Başlangıç puanı:
 
+```text
 63 / 100
+```
 
-Puanı artıracak kriterler:
+Güncel puan:
 
-- P0 maddeleri tamamlanmalı.
-- Fresh install kanıtlanmalı.
-- Backup / restore kanıtlanmalı.
-- Lisans ve private key güvenliği netleşmeli.
-- Paketleme standardı oluşmalı.
-- Pilot müşteri kurulumu belgelenmeli.
-- README ve kalite dokümanları güncel olmalı.
-- Finansal kritik testler geçmeli.
+```text
+68 / 100
+```
+
+Puan artışının nedeni:
+
+- Lisans private key güvenliği ciddi şekilde güçlendirildi.
+- Lisans üretim operasyonu müşteri bilgisayarından ayrıldı.
+- Yeni encrypted key ile lisans üretimi başarıyla test edildi.
+- Uygulamanın eski lisanslardan temizlenip yeni lisansla doğrulandığı görüldü.
+- Müşteri release paketinde hassas dosya sızıntısını yakalayacak araç eklendi.
+
+Devam eden satış öncesi ana işler:
+
+- Fresh install testi
+- Backup / restore roundtrip testi
+- Migration v8 doğrulama
+- Resmi çalıştırma komutu
+- Resmi build komutu
+- Gerçek release paketi oluşturma ve safety checker testi
+- Kredi kartı kritik testleri
+- Limitli hesap kritik testleri
 
 Hedef:
 
+```text
 80 / 100
+```
 
 ---
 
-## 6. P0 - Satıştan Önce Mutlaka Çözülmesi Gerekenler
+## 7. ADIM 2 Kanıtları
+
+### 7.1 Encrypted Private Key Oluşturma
+
+Komut:
+
+```powershell
+python tools\encrypt_license_private_key.py --input "C:\FTM_PRIVATE_KEYS\ftm_license_ed25519_private.pem" --output "C:\FTM_LICENSE_ADMIN\keys\ftm_license_ed25519_private_encrypted.pem"
+```
+
+Başarılı çıktı özeti:
+
+```text
+OK - Encrypted private key başarıyla oluşturuldu.
+```
+
+Fingerprint:
+
+```text
+73D2C269-1E5816AF-F4FC3669-D5187EB2-13D88335-EFF9A505-C9AF07C7-F0AD3C7A
+```
+
+### 7.2 Encrypted Private Key Doğrulama
+
+Komut:
+
+```powershell
+python tools\encrypt_license_private_key.py --verify "C:\FTM_LICENSE_ADMIN\keys\ftm_license_ed25519_private_encrypted.pem"
+```
+
+Başarılı çıktı özeti:
+
+```text
+OK - Encrypted private key parola ile başarıyla açıldı.
+```
+
+Fingerprint:
+
+```text
+73D2C269-1E5816AF-F4FC3669-D5187EB2-13D88335-EFF9A505-C9AF07C7-F0AD3C7A
+```
+
+### 7.3 Eski Lisansları Temizleme
+
+`%LOCALAPPDATA%\FTM\config` içindeki eski aktif lisans dosyaları silindi.
+
+Korunması gereken dosya:
+
+```text
+license_clock_state.json
+```
+
+Doğrulama sonucu:
+
+```text
+missing | Lisans Yok | False | False | Lisans dosyası bulunamadı. Uygulama açılabilir ancak veri girişi için imzalı lisans gereklidir.
+```
+
+### 7.4 Yeni Lisans Üretimi ve Doğrulama
+
+Yeni lisans, encrypted private key ile üretildi.
+
+Durum:
+
+```text
+Başarılı
+```
+
+Not:
+
+7 günlük test lisansı kullanılırsa lisans durumu `expiring_soon` olabilir. Bu başarısızlık değildir; 30 günlük uyarı eşiği nedeniyle normaldir.
+
+### 7.5 Release Package Safety Checker
+
+Eklenen dosya:
+
+```text
+tools/check_release_package_safety.py
+```
+
+Temiz klasör testi:
+
+```powershell
+python tools\check_release_package_safety.py --path "C:\FTM_CUSTOMER_INSTALL"
+```
+
+Beklenen sonuç:
+
+```text
+SONUÇ: OK - Müşteri paketi güvenli görünüyor.
+```
+
+Riskli klasör testi:
+
+```powershell
+python tools\check_release_package_safety.py --path "C:\FTM_CUSTOMER_INSTALL_BAD"
+```
+
+Beklenen sonuç:
+
+```text
+SONUÇ: FAIL - Müşteri paketinde hassas veya yasaklı dosya bulundu.
+```
+
+Olmayan klasör testi:
+
+```text
+SONUÇ: ERROR
+Kontrol edilecek yol bulunamadı.
+```
+
+Bu davranış doğru kabul edilmiştir; araç olmayan klasörü sessizce geçmiş saymaz.
+
+---
+
+## 8. P0 - Satıştan Önce Mutlaka Çözülmesi Gerekenler
 
 | Durum | İş | Açıklama |
 |---|---|---|
-| Bekliyor | Private key güvenlik standardı | Private key repoda, build paketinde veya müşteri bilgisayarında bulunmamalı. |
+| Tamamlandı | README profesyonel taslak | Projenin güncel durumu için yeni README hazırlandı. |
+| Tamamlandı | Kalite skor defteri | Başlangıç skorları ve kalite hedefleri kayıt altına alındı. |
+| Tamamlandı | Lisans güvenlik politikası | Private key, müşteri paketi ve lisans üretim kuralları yazılı hale getirildi. |
+| Tamamlandı | Encrypted private key helper | Şifresiz private key'den encrypted PEM üreten araç eklendi ve test edildi. |
+| Tamamlandı | Licence Maker encrypted key geçişi | Licence Maker encrypted private key ve parola ile çalışacak hale getirildi. |
+| Tamamlandı | Release package safety checker | Müşteri paketinde hassas dosya sızıntısı aracı eklendi ve test edildi. |
+| Devam Ediyor | Şifresiz private key günlük kullanımdan kaldırma | Encrypted key çalışıyor; eski şifresiz key günlük kullanımdan kesin kaldırılmalı. |
 | Bekliyor | Fresh install testi | Temiz bilgisayarda ilk kurulum ve ilk açılış doğrulanmalı. |
 | Bekliyor | Backup / restore roundtrip testi | Yedek al, restore et, veritabanını doğrula. |
-| Bekliyor | Release paket hijyeni | DB, log, yedek, lisans ve private key paket dışı kalmalı. |
+| Bekliyor | Gerçek release paketi hijyeni | Gerçek build çıktısı üzerinde safety checker çalıştırılmalı. |
 | Bekliyor | Migration v8 doğrulama | Yeni ve eski veritabanı senaryolarında schema v8 doğrulanmalı. |
 | Bekliyor | Resmi çalıştırma komutu | Geliştirme ortamı için tek giriş komutu belirlenmeli. |
 | Bekliyor | Resmi build komutu | PyInstaller build süreci sabitlenmeli. |
 | Bekliyor | Secret scanning | Public repo geçmişi hassas bilgi açısından taranmalı. |
-| Tamamlandı | README profesyonel taslak | Projenin güncel durumu için yeni README hazırlandı. |
-| Tamamlandı | Kalite skor defteri | Başlangıç skorları ve kalite hedefleri kayıt altına alındı. |
 
 ---
 
-## 7. P1 - Pilot Müşteriden Önce Çözülmesi Gerekenler
+## 9. P1 - Pilot Müşteriden Önce Çözülmesi Gerekenler
 
 | Durum | İş | Açıklama |
 |---|---|---|
@@ -293,7 +554,7 @@ Hedef:
 
 ---
 
-## 8. P2 - Ürünü Güçlendiren İyileştirmeler
+## 10. P2 - Ürünü Güçlendiren İyileştirmeler
 
 | Durum | İş | Açıklama |
 |---|---|---|
@@ -306,7 +567,7 @@ Hedef:
 
 ---
 
-## 9. P3 - İleri Seviye / Gelecek Faz
+## 11. P3 - İleri Seviye / Gelecek Faz
 
 | Durum | İş | Açıklama |
 |---|---|---|
@@ -319,16 +580,21 @@ Hedef:
 
 ---
 
-## 10. Güncelleme Geçmişi
+## 12. Güncelleme Geçmişi
 
 | Tarih | Sürüm / Aşama | Değişiklik | Etki |
 |---|---|---|---|
 | 2026-05-13 | Başlangıç | İlk kalite skorları kayıt altına alındı. | Ölçülebilir satışa hazırlık takibi başladı. |
-| 2026-05-13 | ADIM 1 | docs/QUALITY_BASELINE.md oluşturuldu. | Kalite, güvenlik, paketleme ve satışa hazırlık hedefleri netleşti. |
+| 2026-05-13 | ADIM 1 | `docs/QUALITY_BASELINE.md` oluşturuldu. | Kalite, güvenlik, paketleme ve satışa hazırlık hedefleri netleşti. |
+| 2026-05-13 | ADIM 2.1 | `docs/LICENSE_SECURITY_POLICY.md` oluşturuldu. | Lisans üretim operasyonu yazılı güvenlik politikasına bağlandı. |
+| 2026-05-13 | ADIM 2.2 | `tools/encrypt_license_private_key.py` eklendi. | Şifresiz private key'den encrypted PEM üretimi sağlandı. |
+| 2026-05-13 | ADIM 2.3 | `tools/ftm_license_maker.py` encrypted key kullanacak şekilde güncellendi. | Licence Maker private key parolası olmadan lisans üretemez hale geldi. |
+| 2026-05-13 | ADIM 2.4 | `tools/check_release_package_safety.py` eklendi. | Müşteri paketinde hassas dosya sızıntısı kontrol edilebilir hale geldi. |
+| 2026-05-13 | ADIM 2.5 | Kalite skorları güncellendi. | Güvenlik, lisanslama, paketleme ve genel satışa hazırlık puanları kanıtlı şekilde artırıldı. |
 
 ---
 
-## 11. Skor Güncelleme Kuralları
+## 13. Skor Güncelleme Kuralları
 
 Skorlar rastgele artırılmaz.
 
@@ -344,46 +610,130 @@ Bir puanın artması için aşağıdaki şartlardan en az biri sağlanmalıdır:
 
 Skor artırımı yapılırken şu bilgiler yazılmalıdır:
 
-- Tarih
-- İlgili kategori
-- Eski puan
-- Yeni puan
-- Yapılan iş
-- Etkilenen dosyalar
-- Test
-- Sonuç
+```text
+Tarih:
+İlgili kategori:
+Eski puan:
+Yeni puan:
+Yapılan iş:
+Etkilenen dosyalar:
+Test:
+Sonuç:
+```
 
 ---
 
-## 12. Mevcut Hedef
+## 14. ADIM 2 Skor Güncelleme Kaydı
+
+Tarih:
+
+```text
+2026-05-13
+```
+
+İlgili kategoriler:
+
+```text
+Güvenlik
+Lisanslama / ticari kontrol
+Paketleme / dağıtım
+Genel satışa hazır olma
+```
+
+Eski puanlar:
+
+```text
+Güvenlik: 68
+Lisanslama / ticari kontrol: 74
+Paketleme / dağıtım: 58
+Genel satışa hazır olma: 63
+```
+
+Yeni puanlar:
+
+```text
+Güvenlik: 76
+Lisanslama / ticari kontrol: 83
+Paketleme / dağıtım: 65
+Genel satışa hazır olma: 68
+```
+
+Yapılan iş:
+
+```text
+Lisans üretim private key güvenliği encrypted PEM modeline geçirildi.
+Licence Maker encrypted private key ve parola ile çalışacak hale getirildi.
+Müşteri paketinde hassas dosya sızıntılarını yakalayan safety checker eklendi.
+Eski aktif lisanslar temizlenip yeni lisans encrypted private key ile üretildi ve doğrulandı.
+```
+
+Etkilenen dosyalar:
+
+```text
+docs/LICENSE_SECURITY_POLICY.md
+tools/encrypt_license_private_key.py
+tools/ftm_license_maker.py
+tools/check_release_package_safety.py
+docs/QUALITY_BASELINE.md
+```
+
+Test:
+
+```text
+Encrypted private key oluşturma testi
+Encrypted private key doğrulama testi
+Licence Maker ile yeni lisans üretimi
+Eski lisansların temizlenmesi sonrası missing lisans kontrolü
+Yeni lisansın check_license ile doğrulanması
+Release safety checker temiz klasör testi
+Release safety checker riskli klasör testi
+```
+
+Sonuç:
+
+```text
+Başarılı
+```
+
+---
+
+## 15. Mevcut Hedef
 
 Kısa vadeli hedef:
 
-Genel satışa hazır olma: 63 / 100 -> 75 / 100
+```text
+Genel satışa hazır olma: 68 / 100 -> 75 / 100
+```
 
 Bu hedefe ulaşmak için öncelikli işler:
 
-1. Private key güvenlik standardı
-2. Release paketi sızıntı kontrolü
-3. Fresh install testi
-4. Backup / restore roundtrip testi
-5. Migration v8 doğrulama
-6. Resmi çalıştırma ve build komutu
+1. Fresh install testi
+2. Backup / restore roundtrip testi
+3. Migration v8 doğrulama
+4. Resmi çalıştırma komutu
+5. Resmi build komutu
+6. Gerçek release paketi üzerinde safety checker testi
 7. Kredi kartı kritik testleri
 8. Limitli hesap kritik testleri
+9. Secret scanning
+10. Şifresiz eski private key'in günlük kullanımdan kesin kaldırılması
 
 Orta vadeli hedef:
 
+```text
 Genel satışa hazır olma: 80 / 100
+```
 
 Bu seviyeye ulaşıldığında FTM, kontrollü pilot müşteri kurulumuna daha güvenli şekilde hazırlanmış kabul edilir.
 
 ---
 
-## 13. Özet
+## 16. Özet
 
 Bu dosya FTM projesinin kalite defteridir.
 
 Buradaki puanlar, hedefler ve yapılacak işler düzenli olarak güncellenmelidir.
+
+ADIM 2 sonunda FTM'nin lisans güvenliği önemli ölçüde güçlenmiştir. Private key artık encrypted PEM formatına alınmış, Licence Maker parola ile çalışacak hale getirilmiş ve müşteri paketinde hassas dosya sızıntısını yakalayacak kontrol aracı eklenmiştir.
 
 Amaç; projeyi aceleyle satmak değil, güven veren, desteklenebilir, finansal olarak doğru çalışan ve ticari değeri olan bir masaüstü finans uygulamasına dönüştürmektir.
