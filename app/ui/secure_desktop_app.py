@@ -29,9 +29,11 @@ from app.services.auth_service import (
     authenticate_user,
     hash_password,
 )
-from app.services.database_migration_service import (
-    DatabaseMigrationServiceError,
-    run_database_migrations,
+from app.services.startup_update_service import (
+    STATUS_FIRST_INSTALL_REQUIRED,
+    STATUS_UPDATED,
+    run_startup_update_gate,
+    startup_update_result_to_text,
 )
 from app.services.version_compatibility_service import (
     DatabaseVersionCompatibilityError,
@@ -898,29 +900,29 @@ def _run_initial_setup_if_needed() -> bool:
 def _run_database_migration_gate_if_needed() -> bool:
     try:
         ensure_core_runtime_folders()
-        result = run_database_migrations(require_backup=True)
-
-    except DatabaseMigrationServiceError as exc:
-        QMessageBox.critical(
-            None,
-            "FTM Veritabanı Güncellemesi",
-            "Veritabanı güncellemesi tamamlanamadı. "
-            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
-            f"{exc}",
-        )
-        return False
+        result = run_startup_update_gate()
 
     except Exception as exc:
         QMessageBox.critical(
             None,
-            "FTM Veritabanı Güncellemesi",
-            "Veritabanı güncellemesi sırasında beklenmeyen bir hata oluştu. "
+            "FTM Otomatik Güncelleme Kontrolü",
+            "Otomatik güncelleme kontrolü sırasında beklenmeyen bir hata oluştu. "
             "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
             f"Hata: {exc}",
         )
         return False
 
-    if result.applied_migration_ids:
+    if not result.should_continue_to_app:
+        QMessageBox.critical(
+            None,
+            "FTM Otomatik Güncelleme Kontrolü",
+            "Veritabanı otomatik güncelleme kontrolü başarısız oldu. "
+            "Mevcut verilerinizin güvenliği için uygulama başlatılmadı.\n\n"
+            f"{startup_update_result_to_text(result)}",
+        )
+        return False
+
+    if result.status == STATUS_UPDATED:
         applied_migrations_text = "\n".join(
             f"- {migration_id}"
             for migration_id in result.applied_migration_ids
@@ -929,15 +931,19 @@ def _run_database_migration_gate_if_needed() -> bool:
 
         QMessageBox.information(
             None,
-            "FTM Veritabanı Güncellemesi",
-            "Veritabanı güncellemesi başarıyla tamamlandı.\n\n"
+            "FTM Otomatik Güncelleme Tamamlandı",
+            "Veritabanı yeni sürüm için otomatik olarak güncellendi.\n\n"
             f"Uygulanan güncelleme sayısı: {len(result.applied_migration_ids)}\n"
-            f"Şema sürümü: {result.current_user_version} / {result.expected_schema_version}\n\n"
+            f"Şema sürümü: {result.current_schema_version} / {result.expected_schema_version}\n"
+            f"SQLite quick_check: {result.quick_check_result or '-'}\n\n"
             "Uygulanan güncellemeler:\n"
             f"{applied_migrations_text}\n\n"
             "Güncelleme öncesi güvenli yedek:\n"
             f"{backup_file_text}",
         )
+
+    if result.status == STATUS_FIRST_INSTALL_REQUIRED:
+        return True
 
     return True
 
