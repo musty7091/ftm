@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +133,8 @@ def apply_sqlite_initial_setup(
                 session.rollback()
                 raise
 
+        _mark_fresh_sqlite_database_as_current_schema(engine=engine)
+
         inspector = inspect(engine)
         table_count = len(inspector.get_table_names())
 
@@ -183,6 +186,87 @@ def apply_sqlite_initial_setup(
         engine.dispose()
 
 
+def _mark_fresh_sqlite_database_as_current_schema(*, engine: Any) -> None:
+    """
+    Fresh install sırasında Base.metadata.create_all güncel modellerle temiz DB oluşturur.
+
+    Bu durumda migration SQL'lerini tekrar çalıştırmak doğru değildir; çünkü güncel
+    kolonlar zaten oluşmuştur. Bu yardımcı fonksiyon, yeni oluşturulan temiz DB'yi
+    migration sistemi açısından güncel kabul edilecek şekilde işaretler:
+
+    - schema_migrations tablosunu oluşturur.
+    - Mevcut bütün migration tanımlarını başarılı uygulanmış gibi kaydeder.
+    - PRAGMA user_version değerini CURRENT_SCHEMA_VERSION seviyesine getirir.
+    """
+
+    try:
+        from app.services.database_migration_service import (
+            CURRENT_SCHEMA_VERSION,
+            MIGRATIONS,
+            MIGRATION_TRACKING_TABLE,
+        )
+
+        applied_at = datetime.now().isoformat(timespec="seconds")
+
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys = ON")
+            connection.exec_driver_sql("PRAGMA busy_timeout = 10000")
+
+            connection.exec_driver_sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS {MIGRATION_TRACKING_TABLE} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    migration_id TEXT NOT NULL UNIQUE,
+                    migration_name TEXT NOT NULL,
+                    target_version INTEGER NOT NULL,
+                    checksum TEXT NOT NULL,
+                    applied_at TEXT NOT NULL,
+                    execution_time_ms INTEGER NOT NULL,
+                    success INTEGER NOT NULL,
+                    error_message TEXT
+                )
+                """
+            )
+
+            for migration in MIGRATIONS:
+                connection.exec_driver_sql(
+                    f"""
+                    INSERT OR REPLACE INTO {MIGRATION_TRACKING_TABLE} (
+                        migration_id,
+                        migration_name,
+                        target_version,
+                        checksum,
+                        applied_at,
+                        execution_time_ms,
+                        success,
+                        error_message
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        migration.migration_id,
+                        migration.name,
+                        migration.target_version,
+                        migration.checksum,
+                        applied_at,
+                        0,
+                        1,
+                        None,
+                    ),
+                )
+
+            connection.exec_driver_sql(
+                f"PRAGMA user_version = {int(CURRENT_SCHEMA_VERSION)}"
+            )
+
+    except Exception as exc:
+        raise SqliteSetupApplyServiceError(
+            "Fresh install veritabanı migration takip bilgisi işaretlenemedi. "
+            "Veritabanı oluşturuldu ancak schema versiyonu güncel olarak kaydedilemedi. "
+            f"Hata: {exc}"
+        ) from exc
+
+
 def _verify_sqlite_initial_setup(
     *,
     sqlite_path: Path,
@@ -212,6 +296,8 @@ def _verify_sqlite_initial_setup(
         raise SqliteSetupApplyServiceError(
             f"SQLite veritabanı dosyası boş görünüyor: {sqlite_path}"
         )
+
+    _verify_fresh_sqlite_database_schema_marker(sqlite_path=sqlite_path)
 
     current_setup_config_file = setup_config_file_path()
 
@@ -245,7 +331,7 @@ def _verify_sqlite_initial_setup(
 
     if resolved_config_sqlite_path != sqlite_path:
         raise SqliteSetupApplyServiceError(
-            "Kurulum ayar dosyasındaki SQLite yolu gerçek veritabanı dosyasıyla uyuşmuyor.\n\n"
+            "Kurulum ayar dosyasındaki SQLite yolu gerçek veritabanı dosyasıyla uyuşmüyor.\n\n"
             f"Beklenen: {sqlite_path}\n"
             f"Bulunan: {resolved_config_sqlite_path}"
         )
@@ -261,7 +347,7 @@ def _verify_sqlite_initial_setup(
 
     if app_settings.company_name != expected_company_name:
         raise SqliteSetupApplyServiceError(
-            "Uygulama ayar dosyasındaki firma adı beklenen değerle uyuşmuyor."
+            "Uygulama ayar dosyasındaki firma adı beklenen değerle uyuşmüyor."
         )
 
     if app_settings.company_address != expected_company_address:
@@ -271,12 +357,12 @@ def _verify_sqlite_initial_setup(
 
     if app_settings.company_phone != expected_company_phone:
         raise SqliteSetupApplyServiceError(
-            "Uygulama ayar dosyasındaki firma telefonu beklenen değerle uyuşmuyor."
+            "Uygulama ayar dosyasındaki firma telefonu beklenen değerle uyuşmüyor."
         )
 
     if app_settings.company_email != expected_company_email:
         raise SqliteSetupApplyServiceError(
-            "Uygulama ayar dosyasındaki firma e-posta adresi beklenen değerle uyuşmuyor."
+            "Uygulama ayar dosyasındaki firma e-posta adresi beklenen değerle uyuşmüyor."
         )
 
     with session_factory() as session:
@@ -291,17 +377,17 @@ def _verify_sqlite_initial_setup(
 
         if admin_user.username != expected_admin_username:
             raise SqliteSetupApplyServiceError(
-                "İlk ADMIN kullanıcı adı beklenen değerle uyuşmuyor."
+                "İlk ADMIN kullanıcı adı beklenen değerle uyuşmüyor."
             )
 
         if admin_user.full_name != expected_admin_full_name:
             raise SqliteSetupApplyServiceError(
-                "İlk ADMIN ad soyad bilgisi beklenen değerle uyuşmuyor."
+                "İlk ADMIN ad soyad bilgisi beklenen değerle uyuşmüyor."
             )
 
         if admin_user.email != (expected_admin_email or None):
             raise SqliteSetupApplyServiceError(
-                "İlk ADMIN e-posta bilgisi beklenen değerle uyuşmuyor."
+                "İlk ADMIN e-posta bilgisi beklenen değerle uyuşmüyor."
             )
 
         if admin_user.role != UserRole.ADMIN:
@@ -358,6 +444,77 @@ def _verify_sqlite_initial_setup(
             raise SqliteSetupApplyServiceError(
                 "ADMIN rolünün tüm yetkilere sahip olduğu doğrulanamadı."
             )
+
+
+def _verify_fresh_sqlite_database_schema_marker(*, sqlite_path: Path) -> None:
+    try:
+        from app.services.database_migration_service import (
+            CURRENT_SCHEMA_VERSION,
+            MIGRATIONS,
+            MIGRATION_TRACKING_TABLE,
+        )
+
+        engine = create_engine(
+            f"sqlite:///{sqlite_path.as_posix()}",
+            future=True,
+            connect_args={
+                "check_same_thread": False,
+            },
+        )
+
+        try:
+            with engine.connect() as connection:
+                table_exists = connection.exec_driver_sql(
+                    """
+                    SELECT COUNT(*)
+                    FROM sqlite_master
+                    WHERE type = 'table'
+                      AND name = ?
+                    """,
+                    (MIGRATION_TRACKING_TABLE,),
+                ).scalar_one()
+
+                if int(table_exists or 0) != 1:
+                    raise SqliteSetupApplyServiceError(
+                        f"{MIGRATION_TRACKING_TABLE} tablosu oluşturulamadı."
+                    )
+
+                user_version = connection.exec_driver_sql(
+                    "PRAGMA user_version"
+                ).scalar_one()
+
+                if int(user_version or 0) != int(CURRENT_SCHEMA_VERSION):
+                    raise SqliteSetupApplyServiceError(
+                        "SQLite user_version beklenen schema seviyesiyle uyuşmuyor.\n\n"
+                        f"Beklenen: {CURRENT_SCHEMA_VERSION}\n"
+                        f"Bulunan: {user_version}"
+                    )
+
+                migration_count = connection.exec_driver_sql(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {MIGRATION_TRACKING_TABLE}
+                    WHERE success = 1
+                    """
+                ).scalar_one()
+
+                if int(migration_count or 0) != len(MIGRATIONS):
+                    raise SqliteSetupApplyServiceError(
+                        "Fresh install migration takip kayıt sayısı beklenen değerle uyuşmuyor.\n\n"
+                        f"Beklenen: {len(MIGRATIONS)}\n"
+                        f"Bulunan: {migration_count}"
+                    )
+
+        finally:
+            engine.dispose()
+
+    except SqliteSetupApplyServiceError:
+        raise
+    except Exception as exc:
+        raise SqliteSetupApplyServiceError(
+            "Fresh install veritabanı schema marker doğrulaması yapılamadı. "
+            f"Hata: {exc}"
+        ) from exc
 
 
 def _ensure_default_role_permissions(session: Session) -> int:

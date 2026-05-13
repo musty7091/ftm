@@ -1,41 +1,51 @@
 ; FTM Finans Takip Merkezi - Inno Setup Installer Script
-; ADIM 4.2
+; ADIM 4.4B - Ev bilgisayarı installer hazırlığı
 ;
-; Bu script, PyInstaller ile üretilmiş FTM klasörünü tek EXE kurulum dosyasına dönüştürür.
+; Proje kökü:
+; D:\DEV\PROJECTS\FTM
 ;
 ; Beklenen klasör yapısı:
-; C:\ftm
+; D:\DEV\PROJECTS\FTM
 ; ├─ dist\FTM\FTM.exe
+; ├─ dist\FTM\_internal\config\central_mail_settings.json
 ; ├─ ftm_branding_assets\ikon.ico
-; └─ installer\ftm_setup.iss
+; ├─ installer\ftm_setup.iss
+; └─ release_packages\
 ;
 ; ÖNEMLİ:
 ; - Installer içine müşteri veritabanı koyma.
 ; - Installer içine lisans dosyası koyma.
-; - Installer içine Licence Maker koyma.
+; - Installer içine License Maker koyma.
 ; - Installer içine private key koyma.
-; - Build sonrası safety checker çalıştır.
+; - Installer içine .env koyma.
+; - central_mail_settings.json sadece EXE çalışma klasöründeki _internal\config altına dahil edilir.
+; - Build sonrası release package safety checker çalıştır.
+
+#define ProjectRoot "D:\DEV\PROJECTS\FTM"
 
 #define MyAppName "FTM Finans Takip Merkezi"
 #define MyAppShortName "FTM"
 #define MyAppVersion "0.8.0"
 #define MyAppPublisher "FTM Finans Takip Merkezi"
 #define MyAppExeName "FTM.exe"
-#define MyAppSourceDir "..\dist\FTM"
-#define MyAppExeFile MyAppSourceDir + "\" + MyAppExeName
-#define MyAppIconFile "..\ftm_branding_assets\ikon.ico"
-#define MyOutputDir "..\release_packages"
 
-#ifnexist MyAppSourceDir
-  #error "PyInstaller cikti klasoru bulunamadi: ..\dist\FTM"
-#endif
+#define MyAppSourceDir ProjectRoot + "\dist\FTM"
+#define MyAppExeFile MyAppSourceDir + "\" + MyAppExeName
+#define MyCentralMailSettingsFile MyAppSourceDir + "\_internal\config\central_mail_settings.json"
+
+#define MyAppIconFile ProjectRoot + "\ftm_branding_assets\ikon.ico"
+#define MyOutputDir ProjectRoot + "\release_packages"
 
 #ifnexist MyAppExeFile
-  #error "Ana uygulama EXE dosyasi bulunamadi: ..\dist\FTM\FTM.exe"
+  #error "Ana uygulama EXE dosyasi bulunamadi: D:\DEV\PROJECTS\FTM\dist\FTM\FTM.exe"
+#endif
+
+#ifnexist MyCentralMailSettingsFile
+  #error "Merkezi mail ayar dosyasi bulunamadi: D:\DEV\PROJECTS\FTM\dist\FTM\_internal\config\central_mail_settings.json"
 #endif
 
 #ifnexist MyAppIconFile
-  #error "Installer ikon dosyasi bulunamadi: ..\ftm_branding_assets\ikon.ico"
+  #error "Installer ikon dosyasi bulunamadi: D:\DEV\PROJECTS\FTM\ftm_branding_assets\ikon.ico"
 #endif
 
 [Setup]
@@ -76,9 +86,12 @@ Name: "desktopicon"; Description: "Masaüstüne FTM kısayolu oluştur"; GroupDe
 
 [Dirs]
 Name: "{app}"; Permissions: users-readexec
+Name: "{app}\_internal"; Permissions: users-readexec
+Name: "{app}\_internal\config"; Permissions: users-readexec
 
 [Files]
-Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.db,*.sqlite,*.sqlite3,*.pem,*.key,*.p12,*.pfx,*.ftmlic,.env,license.json,license.json.bak,license_clock_state.json,device_identity.json,app_settings.json,app_setup.json,backup_mail_settings.json,tools\*,keys\*,logs\*,backups\*,exports\*,source\*,sources\*,.git\*,.github\*,__pycache__\*,.pytest_cache\*,.mypy_cache\*,.ruff_cache\*,venv\*,.venv\*"
+Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.db,*.sqlite,*.sqlite3,*.pem,*.key,*.p12,*.pfx,*.ftmlic,.env,license.json,license.json.bak,license_clock_state.json,device_identity.json,app_settings.json,app_setup.json,backup_mail_settings.json,central_mail_settings.json,tools\*,keys\*,logs\*,backups\*,exports\*,source\*,sources\*,.git\*,.github\*,__pycache__\*,.pytest_cache\*,.mypy_cache\*,.ruff_cache\*,venv\*,.venv\*"
+Source: "{#MyCentralMailSettingsFile}"; DestDir: "{app}\_internal\config"; DestName: "central_mail_settings.json"; Flags: ignoreversion
 Source: "{#MyAppIconFile}"; DestDir: "{app}"; DestName: "ikon.ico"; Flags: ignoreversion
 
 [Icons]
@@ -103,5 +116,6 @@ begin
   if CurStep = ssPostInstall then
   begin
     Log('FTM kurulumu tamamlandi. Kullanici verileri Program Files altina yazilmaz. Runtime veriler LOCALAPPDATA\FTM altinda tutulur.');
+    Log('Merkezi mail ayari su konuma dahil edildi: ' + ExpandConstant('{app}\_internal\config\central_mail_settings.json'));
   end;
 end;
