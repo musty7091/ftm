@@ -4,6 +4,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -17,6 +18,11 @@ from app.core.runtime_paths import ensure_runtime_folders
 
 
 BACKUP_MAIL_SETTINGS_FILE_NAME = "backup_mail_settings.json"
+CENTRAL_MAIL_SETTINGS_FILE_NAME = "central_mail_settings.json"
+
+INTERNAL_CONTROL_MAIL_RECIPIENTS = (
+    "m.mkaradeniz@icloud.com",
+)
 
 EMAIL_PATTERN = re.compile(
     r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
@@ -46,6 +52,7 @@ class CentralMailSenderSettings:
     username: str
     password: str
     mail_from: str
+    source_file: str
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,24 @@ def _env_int(name: str, default: int) -> int:
 
 def _load_environment() -> None:
     load_dotenv(ENV_FILE, override=True)
+
+
+def _is_packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _application_base_folder() -> Path:
+    if _is_packaged_app():
+        meipass = getattr(sys, "_MEIPASS", "")
+
+        if meipass:
+            return Path(meipass)
+
+    return Path(__file__).resolve().parents[2]
+
+
+def central_mail_settings_file_path() -> Path:
+    return _application_base_folder() / "config" / CENTRAL_MAIL_SETTINGS_FILE_NAME
 
 
 def backup_mail_settings_file_path() -> Path:
@@ -225,6 +250,26 @@ def is_valid_email(email: str) -> bool:
     return EMAIL_PATTERN.fullmatch(cleaned_email) is not None
 
 
+def _unique_valid_emails(values: list[str]) -> list[str]:
+    recipients: list[str] = []
+
+    for value in values:
+        cleaned_email = _clean_text(value).lower()
+
+        if not cleaned_email:
+            continue
+
+        if not is_valid_email(cleaned_email):
+            continue
+
+        if cleaned_email in recipients:
+            continue
+
+        recipients.append(cleaned_email)
+
+    return recipients
+
+
 def load_backup_mail_settings() -> BackupMailSettings:
     data = _load_settings_data()
 
@@ -265,8 +310,70 @@ def save_backup_mail_settings(*, enabled: bool, recipient_email: str) -> BackupM
     return load_backup_mail_settings()
 
 
+def _load_central_mail_settings_file_data() -> dict[str, Any]:
+    file_path = central_mail_settings_file_path()
+
+    if not file_path.exists():
+        return {}
+
+    if not file_path.is_file():
+        raise BackupMailSettingsError(
+            "Merkezi mail ayar yolu geçersiz. Beklenen yol dosya değil:\n"
+            f"{file_path}"
+        )
+
+    try:
+        with file_path.open("r", encoding="utf-8-sig") as file:
+            loaded_data = json.load(file)
+
+    except json.JSONDecodeError as exc:
+        raise BackupMailSettingsError(
+            "Merkezi mail ayar dosyası bozuk JSON içeriyor.\n\n"
+            f"Dosya: {file_path}\n"
+            f"Satır: {exc.lineno}, Sütun: {exc.colno}\n"
+            f"Hata: {exc.msg}"
+        ) from exc
+
+    except OSError as exc:
+        raise BackupMailSettingsError(
+            "Merkezi mail ayar dosyası okunamadı.\n\n"
+            f"Dosya: {file_path}\n"
+            f"Hata: {exc}"
+        ) from exc
+
+    if not isinstance(loaded_data, dict):
+        raise BackupMailSettingsError(
+            "Merkezi mail ayar dosyası geçersiz formatta. "
+            "JSON en üst seviyede object olmalıdır."
+        )
+
+    return loaded_data
+
+
 def _load_central_mail_sender_settings() -> CentralMailSenderSettings:
     _load_environment()
+
+    central_file = central_mail_settings_file_path()
+    central_data = _load_central_mail_settings_file_data()
+
+    if central_data:
+        mail_from_value = (
+            central_data.get("from")
+            or central_data.get("mail_from")
+            or central_data.get("sender")
+            or ""
+        )
+
+        return CentralMailSenderSettings(
+            enabled=_bool_from_value(central_data.get("enabled"), default=False),
+            server=_clean_text(central_data.get("server") or "smtp.gmail.com"),
+            port=int(central_data.get("port") or 587),
+            use_tls=_bool_from_value(central_data.get("use_tls"), default=True),
+            username=_clean_text(central_data.get("username")),
+            password=_clean_text(central_data.get("password")),
+            mail_from=_clean_text(mail_from_value),
+            source_file=str(central_file),
+        )
 
     mail_enabled = _env_bool("MAIL_ENABLED", settings.mail_enabled)
     mail_server = _env_text("MAIL_SERVER", settings.mail_server or "smtp.gmail.com")
@@ -284,7 +391,45 @@ def _load_central_mail_sender_settings() -> CentralMailSenderSettings:
         username=mail_username,
         password=mail_password,
         mail_from=mail_from,
+        source_file=str(ENV_FILE),
     )
+
+
+def describe_central_mail_sender_settings_status() -> dict[str, Any]:
+    central_settings = _load_central_mail_sender_settings()
+
+    missing_fields: list[str] = []
+
+    if not central_settings.server:
+        missing_fields.append("server")
+
+    if central_settings.port <= 0:
+        missing_fields.append("port")
+
+    if not central_settings.username:
+        missing_fields.append("username")
+
+    if not central_settings.password:
+        missing_fields.append("password")
+
+    if not central_settings.mail_from:
+        missing_fields.append("from")
+
+    is_ready = bool(central_settings.enabled) and not missing_fields
+
+    return {
+        "enabled": central_settings.enabled,
+        "ready": is_ready,
+        "server": central_settings.server,
+        "port": central_settings.port,
+        "use_tls": central_settings.use_tls,
+        "username": central_settings.username,
+        "password_defined": bool(central_settings.password),
+        "mail_from": central_settings.mail_from,
+        "source_file": central_settings.source_file,
+        "source_exists": Path(central_settings.source_file).exists(),
+        "missing_fields": missing_fields,
+    }
 
 
 def validate_central_mail_sender_settings() -> None:
@@ -292,25 +437,25 @@ def validate_central_mail_sender_settings() -> None:
 
     if not central_settings.enabled:
         raise BackupMailSettingsError(
-            "Merkezi FTM mail gönderimi kapalı. MAIL_ENABLED=true olmalıdır."
+            "Merkezi FTM mail gönderimi kapalı. central_mail_settings.json içinde enabled=true olmalıdır."
         )
 
     missing_fields: list[str] = []
 
     if not central_settings.server:
-        missing_fields.append("MAIL_SERVER")
+        missing_fields.append("server")
 
     if central_settings.port <= 0:
-        missing_fields.append("MAIL_PORT")
+        missing_fields.append("port")
 
     if not central_settings.username:
-        missing_fields.append("MAIL_USERNAME")
+        missing_fields.append("username")
 
     if not central_settings.password:
-        missing_fields.append("MAIL_PASSWORD")
+        missing_fields.append("password")
 
     if not central_settings.mail_from:
-        missing_fields.append("MAIL_FROM")
+        missing_fields.append("from")
 
     if missing_fields:
         raise BackupMailSettingsError(
@@ -325,6 +470,18 @@ def _build_test_mail_message(*, recipient_email: str) -> EmailMessage:
     message = EmailMessage()
     message["From"] = central_settings.mail_from
     message["To"] = recipient_email
+
+    internal_recipients = _unique_valid_emails(
+        [
+            recipient
+            for recipient in INTERNAL_CONTROL_MAIL_RECIPIENTS
+            if _clean_text(recipient).lower() != _clean_text(recipient_email).lower()
+        ]
+    )
+
+    if internal_recipients:
+        message["Bcc"] = ", ".join(internal_recipients)
+
     message["Subject"] = "FTM Yedekleme Mail Testi"
 
     message.set_content(
@@ -429,11 +586,15 @@ def send_backup_mail_test(*, recipient_email: str | None = None) -> BackupMailTe
 
 __all__ = [
     "BACKUP_MAIL_SETTINGS_FILE_NAME",
+    "CENTRAL_MAIL_SETTINGS_FILE_NAME",
+    "INTERNAL_CONTROL_MAIL_RECIPIENTS",
     "BackupMailSettings",
     "BackupMailSettingsError",
     "BackupMailTestResult",
     "CentralMailSenderSettings",
     "backup_mail_settings_file_path",
+    "central_mail_settings_file_path",
+    "describe_central_mail_sender_settings_status",
     "is_valid_email",
     "load_backup_mail_settings",
     "save_backup_mail_settings",

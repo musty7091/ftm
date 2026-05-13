@@ -89,6 +89,7 @@ dist/
 # Runtime config files
 config/app_settings.json
 config/app_setup.json
+config/central_mail_settings.json
 
 # Local audit outputs
 audit_snapshot.txt

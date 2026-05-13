@@ -36,7 +36,10 @@ from app.services.app_settings_service import (
     update_app_settings,
 )
 from app.services.audit_service import write_audit_log
-from app.services.backup_mail_settings_service import load_backup_mail_settings
+from app.services.backup_mail_settings_service import (
+    describe_central_mail_sender_settings_status,
+    load_backup_mail_settings,
+)
 from app.services.permission_service import Permission
 from app.ui.pages.settings.backup_mail_settings_dialog import BackupMailSettingsDialog
 from app.ui.permission_ui import (
@@ -970,39 +973,77 @@ class SystemSettingsTab(QWidget):
         return rows
 
     def _env_mail_rows(self) -> list[tuple[str, str, str]]:
-        smtp_password_status = "Tanımlı (gizli)" if settings.mail_password else "-"
+        try:
+            central_mail_status = describe_central_mail_sender_settings_status()
+
+        except Exception as exc:
+            return [
+                (
+                    "SMTP Mail Ayarı",
+                    f"Merkezi mail ayarı okunamadı: {exc}",
+                    "WARN",
+                )
+            ]
+
+        enabled = bool(central_mail_status.get("enabled"))
+        ready = bool(central_mail_status.get("ready"))
+        missing_fields = central_mail_status.get("missing_fields") or []
+
+        source_file = str(central_mail_status.get("source_file") or "-")
+        source_exists = bool(central_mail_status.get("source_exists"))
+
+        if ready:
+            source_status = "OK"
+        elif source_exists:
+            source_status = "WARN"
+        else:
+            source_status = "WARN"
 
         rows = [
-            ("SMTP Mail Durumu", "Açık" if settings.mail_enabled else "Kapalı", "OK"),
+            (
+                "SMTP Mail Durumu",
+                "Açık" if enabled else "Kapalı",
+                "OK" if ready else "WARN",
+            ),
+            (
+                "SMTP Ayar Dosyası",
+                source_file,
+                source_status,
+            ),
+            (
+                "SMTP Eksik Alan",
+                ", ".join(str(item) for item in missing_fields) if missing_fields else "-",
+                "WARN" if missing_fields else "OK",
+            ),
             (
                 "SMTP Sunucu",
-                settings.mail_server or "-",
-                "OK" if (not settings.mail_enabled or settings.mail_server) else "WARN",
+                str(central_mail_status.get("server") or "-"),
+                "OK" if ready or central_mail_status.get("server") else "WARN",
             ),
             (
                 "SMTP Port",
-                str(settings.mail_port),
-                "OK" if (not settings.mail_enabled or settings.mail_port) else "WARN",
+                str(central_mail_status.get("port") or "-"),
+                "OK" if ready or central_mail_status.get("port") else "WARN",
             ),
             (
                 "SMTP TLS",
-                "Açık" if settings.mail_use_tls else "Kapalı",
+                "Açık" if central_mail_status.get("use_tls") else "Kapalı",
                 "OK",
             ),
             (
                 "SMTP Kullanıcı",
-                settings.mail_username or "-",
-                "OK" if (not settings.mail_enabled or settings.mail_username) else "WARN",
+                str(central_mail_status.get("username") or "-"),
+                "OK" if ready or central_mail_status.get("username") else "WARN",
             ),
             (
                 "SMTP Şifre",
-                smtp_password_status,
-                "OK" if (not settings.mail_enabled or settings.mail_password) else "WARN",
+                "Tanımlı (gizli)" if central_mail_status.get("password_defined") else "-",
+                "OK" if ready or central_mail_status.get("password_defined") else "WARN",
             ),
             (
                 "SMTP Gönderen",
-                settings.mail_from or "-",
-                "OK" if (not settings.mail_enabled or settings.mail_from) else "WARN",
+                str(central_mail_status.get("mail_from") or "-"),
+                "OK" if ready or central_mail_status.get("mail_from") else "WARN",
             ),
         ]
 
