@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 import json
 import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -14,6 +15,27 @@ ENV_FILE = BASE_DIR / ".env"
 SETUP_CONFIG_FILE = get_runtime_paths().config_folder / "app_setup.json"
 
 load_dotenv(ENV_FILE)
+
+
+def _is_packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+IS_PACKAGED_APP = _is_packaged_app()
+
+
+def _default_app_env() -> str:
+    if IS_PACKAGED_APP:
+        return "production"
+
+    return "development"
+
+
+def _default_app_debug() -> bool:
+    if IS_PACKAGED_APP:
+        return False
+
+    return True
 
 
 SUPPORTED_DATABASE_ENGINES = {
@@ -260,8 +282,8 @@ DATABASE_PASSWORD = ""
 
 settings = Settings(
     app_name=_get_env("APP_NAME", "FTM"),
-    app_env=_get_env("APP_ENV", "development"),
-    app_debug=_get_bool_env("APP_DEBUG", True),
+    app_env=_get_env("APP_ENV", _default_app_env()),
+    app_debug=_get_bool_env("APP_DEBUG", _default_app_debug()),
 
     database_engine=DATABASE_ENGINE,
 

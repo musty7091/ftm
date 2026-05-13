@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core.config import BASE_DIR, ENV_FILE, settings
+from app.core.config import BASE_DIR, ENV_FILE, IS_PACKAGED_APP, settings
 from app.db.session import check_database_connection, session_scope
 from app.services.app_settings_service import (
     AppSettingsServiceError,
@@ -859,12 +859,19 @@ class SystemSettingsTab(QWidget):
         return rows
 
     def _application_rows(self) -> list[tuple[str, str, str]]:
+        if IS_PACKAGED_APP:
+            env_file_value = "Paketli EXE modunda kullanılmıyor"
+            env_file_status = "OK"
+        else:
+            env_file_value = str(ENV_FILE)
+            env_file_status = "OK" if ENV_FILE.exists() else "WARN"
+
         return [
             ("Uygulama Adı", settings.app_name, "OK" if settings.app_name else "WARN"),
             ("Uygulama Ortamı", settings.app_env, "OK" if settings.app_env else "WARN"),
             ("Debug Modu", "Açık" if settings.app_debug else "Kapalı", "WARN" if settings.app_debug else "OK"),
             ("Proje Ana Klasörü", str(BASE_DIR), "OK" if BASE_DIR.exists() else "FAIL"),
-            (".env Dosyası", str(ENV_FILE), "OK" if ENV_FILE.exists() else "FAIL"),
+            (".env Dosyası", env_file_value, env_file_status),
             ("Uygulama Ayar Dosyası", str(app_settings_file_path()), "OK" if app_settings_file_path().exists() else "WARN"),
         ]
 

