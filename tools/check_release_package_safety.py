@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 FAIL_FILE_GLOBS = (
     "*.pem",
@@ -99,6 +99,56 @@ WARN_EXACT_FOLDER_NAMES = {
     "temp",
 }
 
+BINARY_CONTENT_SCAN_SKIP_EXTENSIONS = {
+    ".dll",
+    ".exe",
+    ".pyd",
+    ".so",
+    ".dylib",
+    ".bin",
+    ".dat",
+    ".pak",
+    ".rcc",
+    ".lib",
+    ".obj",
+    ".a",
+    ".msi",
+    ".cab",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".ico",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".cur",
+    ".ttf",
+    ".otf",
+    ".woff",
+    ".woff2",
+    ".eot",
+    ".pdf",
+    ".xlsx",
+    ".xls",
+    ".docx",
+    ".pptx",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+    ".wav",
+}
+
 DEFAULT_MAX_CONTENT_SCAN_BYTES = 25 * 1024 * 1024
 
 
@@ -151,6 +201,27 @@ def _contains_forbidden_name(file_name: str) -> str | None:
             return marker
 
     return None
+
+
+def _should_scan_file_content(path: Path) -> bool:
+    """
+    İçerik imza taraması sadece metin/config/script benzeri dosyalarda yapılmalıdır.
+
+    PySide6 / Qt DLL dosyaları gibi binary dosyaların içinde OpenSSL/TLS parser sabitleri
+    bulunabilir. Örneğin "-----BEGIN PRIVATE KEY-----" metni bir DLL içinde sadece
+    sertifika/private-key ayrıştırma sabiti olarak geçebilir. Bu gerçek private key
+    sızıntısı değildir ve false positive üretir.
+
+    Dosya adı, uzantı ve klasör bazlı hassas dosya kontrolleri tüm dosyalar için
+    zaten ayrıca çalışmaya devam eder.
+    """
+
+    suffix = _normalize_name(path.suffix)
+
+    if suffix in BINARY_CONTENT_SCAN_SKIP_EXTENSIONS:
+        return False
+
+    return True
 
 
 def _read_limited_bytes(path: Path, max_bytes: int) -> bytes:
@@ -267,7 +338,7 @@ def _scan_folder(
                 )
             )
 
-        if scan_content:
+        if scan_content and _should_scan_file_content(current_path):
             signature = _content_signature_match(current_path, max_content_scan_bytes)
 
             if signature is not None:
