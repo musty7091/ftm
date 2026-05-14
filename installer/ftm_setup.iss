@@ -1,27 +1,27 @@
-; FTM Finans Takip Merkezi - Inno Setup Installer Script
-; ADIM 4.4B - Ev bilgisayarı installer hazırlığı
+﻿; FTM Finans Takip Merkezi - Inno Setup Installer Script
+; ADIM 4.4B - Ev bilgisayarÄ± installer hazÄ±rlÄ±ÄŸÄ±
 ;
-; Proje kökü:
+; Proje kÃ¶kÃ¼:
 ; D:\DEV\PROJECTS\FTM
 ;
-; Beklenen klasör yapısı:
+; Beklenen klasÃ¶r yapÄ±sÄ±:
 ; D:\DEV\PROJECTS\FTM
-; ├─ dist\FTM\FTM.exe
-; ├─ dist\FTM\_internal\config\central_mail_settings.json
-; ├─ ftm_branding_assets\ikon.ico
-; ├─ installer\ftm_setup.iss
-; └─ release_packages\
+; â”œâ”€ dist\FTM\FTM.exe
+; â”œâ”€ dist\FTM\_internal\config\central_mail_settings.json
+; â”œâ”€ ftm_branding_assets\ikon.ico
+; â”œâ”€ installer\ftm_setup.iss
+; â””â”€ release_packages\
 ;
-; ÖNEMLİ:
-; - Installer içine müşteri veritabanı koyma.
-; - Installer içine lisans dosyası koyma.
-; - Installer içine License Maker koyma.
-; - Installer içine private key koyma.
-; - Installer içine .env koyma.
-; - central_mail_settings.json sadece EXE çalışma klasöründeki _internal\config altına dahil edilir.
-; - Build sonrası release package safety checker çalıştır.
+; Ã–NEMLÄ°:
+; - Installer iÃ§ine mÃ¼ÅŸteri veritabanÄ± koyma.
+; - Installer iÃ§ine lisans dosyasÄ± koyma.
+; - Installer iÃ§ine License Maker koyma.
+; - Installer iÃ§ine private key koyma.
+; - Installer iÃ§ine .env koyma.
+; - central_mail_settings.json sadece EXE Ã§alÄ±ÅŸma klasÃ¶rÃ¼ndeki _internal\config altÄ±na dahil edilir.
+; - Build sonrasÄ± release package safety checker Ã§alÄ±ÅŸtÄ±r.
 
-#define ProjectRoot "D:\DEV\PROJECTS\FTM"
+#define ProjectRoot "C:\ftm"
 
 #define MyAppName "FTM Finans Takip Merkezi"
 #define MyAppShortName "FTM"
@@ -74,7 +74,7 @@ SetupLogging=yes
 MinVersion=10.0
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
-VersionInfoDescription={#MyAppName} Kurulum Sihirbazı
+VersionInfoDescription={#MyAppName} Kurulum SihirbazÄ±
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 
@@ -82,7 +82,7 @@ VersionInfoProductVersion={#MyAppVersion}
 Name: "turkish"; MessagesFile: "compiler:Languages\Turkish.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Masaüstüne FTM kısayolu oluştur"; GroupDescription: "Ek kısayollar:"; Flags: checkedonce
+Name: "desktopicon"; Description: "MasaÃ¼stÃ¼ne FTM kÄ±sayolu oluÅŸtur"; GroupDescription: "Ek kÄ±sayollar:"; Flags: checkedonce
 
 [Dirs]
 Name: "{app}"; Permissions: users-readexec
@@ -100,7 +100,7 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"; 
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\ikon.ico"; Comment: "{#MyAppName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} uygulamasını başlat"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{#MyAppName} uygulamasÄ±nÄ± baÅŸlat"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: files; Name: "{app}\ikon.ico"
